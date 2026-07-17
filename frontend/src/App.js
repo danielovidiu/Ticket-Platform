@@ -4,7 +4,7 @@ import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider } from "./auth";
 import Layout from "./components/Layout";
-import Home from "./pages/Home";
+import DynamicPage from "./pages/DynamicPage";
 import Events from "./pages/Events";
 import EventDetail from "./pages/EventDetail";
 import Checkout from "./pages/Checkout";
@@ -14,22 +14,32 @@ import Artists from "./pages/Artists";
 import ArtistDetail from "./pages/ArtistDetail";
 import Archive from "./pages/Archive";
 import Gallery from "./pages/Gallery";
-import Mission from "./pages/Mission";
-import Contact from "./pages/Contact";
 import Admin from "./pages/Admin";
 import Scan from "./pages/Scan";
+import CMSEditor from "./pages/CMSEditor";
 import AuthCallback from "./pages/AuthCallback";
+import ThemeLoader from "./components/ThemeLoader";
 
 function AppRouter() {
   const loc = useLocation();
-  // Handle Emergent OAuth callback via URL fragment before regular routing
   if (loc.hash?.includes("session_id=")) {
     return <AuthCallback />;
+  }
+  // The CMS editor is a full-screen chrome, no Layout wrapper.
+  if (loc.pathname.startsWith("/cms")) {
+    return (
+      <Routes>
+        <Route path="/cms" element={<CMSEditor />} />
+      </Routes>
+    );
   }
   return (
     <Layout>
       <Routes>
-        <Route path="/" element={<Home />} />
+        <Route path="/" element={<DynamicPage slugOverride="home" />} />
+        <Route path="/mission" element={<DynamicPage slugOverride="mission" />} />
+        <Route path="/contact" element={<DynamicPage slugOverride="contact" />} />
+        <Route path="/p/:slug" element={<DynamicPage />} />
         <Route path="/events" element={<Events />} />
         <Route path="/events/:slug" element={<EventDetail />} />
         <Route path="/checkout/:reservationId" element={<Checkout />} />
@@ -40,8 +50,6 @@ function AppRouter() {
         <Route path="/artists/:slug" element={<ArtistDetail />} />
         <Route path="/archive" element={<Archive />} />
         <Route path="/gallery" element={<Gallery />} />
-        <Route path="/mission" element={<Mission />} />
-        <Route path="/contact" element={<Contact />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/scan" element={<Scan />} />
       </Routes>
@@ -54,6 +62,7 @@ export default function App() {
     <div className="App">
       <BrowserRouter>
         <AuthProvider>
+          <ThemeLoader />
           <Toaster theme="dark" position="top-right" toastOptions={{ style: { background: "#050505", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", borderRadius: 0 } }} />
           <AppRouter />
         </AuthProvider>

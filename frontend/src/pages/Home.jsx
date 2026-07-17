@@ -31,7 +31,7 @@ export default function Home() {
         </div>
         <div className="relative max-w-[1400px] mx-auto px-6 md:px-10 pt-24 md:pt-32 pb-24">
           <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-400 mb-6">
-            BUCHAREST · EST. 2019 · MUSIC · PERFORMANCE
+            BUCHAREST · EST. 2030 · MORE THAN MUSIC · PERFORMANCE
           </div>
           <h1 data-testid="hero-title" className="font-display text-[14vw] md:text-[9vw] leading-[0.85] uppercase tracking-tighter font-black max-w-6xl">
             A collective for<br/>the ones after<br/><span className="text-[color:var(--accent)]">midnight.</span>

@@ -93,10 +93,14 @@ async def get_current_user(
 
 
 async def require_admin(user=Depends(get_current_user)):
-    if user.get("role") not in ("admin", "door"):
+    if user.get("role") != "admin":
         raise HTTPException(403, "Admin access required")
-    if user.get("role") == "door":
-        raise HTTPException(403, "Admin access required")
+    return user
+
+
+async def require_admin_or_editor(user=Depends(get_current_user)):
+    if user.get("role") not in ("admin", "editor"):
+        raise HTTPException(403, "Editor access required")
     return user
 
 
@@ -983,7 +987,7 @@ async def admin_users(user=Depends(require_admin)):
 @api.patch("/admin/users/{user_id}/role")
 async def admin_set_role(user_id: str, body: dict, user=Depends(require_admin)):
     role = body.get("role")
-    if role not in ("user", "admin", "door"):
+    if role not in ("user", "admin", "door", "editor"):
         raise HTTPException(400, "Invalid role")
     await db.users.update_one({"user_id": user_id}, {"$set": {"role": role}})
     return {"ok": True}
@@ -1125,6 +1129,9 @@ async def seed_demo():
 
 
 # ---------- Register ----------
+
+from cms_routes import register_cms_routes  # noqa: E402
+register_cms_routes(api, db, require_admin, require_admin_or_editor)
 
 app.include_router(api)
 

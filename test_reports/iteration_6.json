@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 6: CMS feature drop tested end-to-end. Backend CMS test suite (15 tests) 100% pass — public read endpoints, seed idempotency, auth gating (401/403/200 for anon/user/editor/admin), page CRUD with publish→versions semantics (first publish creates NO version; second publish captures old blocks), revert, reorder, theme flow (draft→publish→public reflects), and nav filtering (in_nav=false excluded). Regression suites (backend_test.py + test_refactor_regression.py + test_daniel_admin_rbac.py) — 37/38 pass; the 1 failure is a pre-existing flaky race in test_reservation_decrements_correct_wave (fixture captures wave.available before parallel tests' expired-reservation cleanup mutates it), unrelated to CMS. Frontend: found and fixed a CRITICAL compile-blocking syntax error in Layout.jsx (duplicated <button> block, lines 54-55), which was preventing ALL routes from rendering — the browser was showing the webpack error overlay instead of any page. After fix, public routes /, /mission, /contact, /p/home, and /p/nonexistent-xyz all render correctly (last shows PAGE NOT FOUND). CMS editor at /cms with editor cookie: mounts cleanly, page selector shows all 3 seeded pages, block palette shows all 14 types, props/theme/versions tabs render, zero pageerrors. With user-role cookie: shows 'Access denied. CMS is for admin / editor roles.' as expected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/reservations (test_reservation_decrements_correct_wave)", "issue": "Pre-existing flaky test: fixture obsidian_event captures wave.available snapshot, but pytest-xdist runs test_discount_welcome10 in parallel, which triggers _cleanup_expired_reservations returning stock. When the wave-decrement test finally runs, the actual 'before' value differs from the captured fixture value. Not a CMS regression."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cms.py",
+    "/app/test_reports/pytest/iteration_6_cms.xml",
+    "/app/test_reports/pytest/iteration_6_regression.xml"
+  ],
+  "action_items": [
+    "Investigate flaky test_reservation_decrements_correct_wave — make fixture re-fetch state right before assertion, OR isolate seeded-inventory tests to a single xdist worker via @pytest.mark.serial. Low priority — clearly a test-only concern, not a production bug."
+  ],
+  "critical_code_review_comments": [
+    "FIXED (by testing agent): Layout.jsx lines 51-55 had a duplicated JSX block: an extra '{open ? <X /> : <Menu />}' and orphan '</button>' — caused SyntaxError and prevented webpack from compiling, showing the CRA error overlay on every route. Root cause: incomplete edit during CMS-nav wiring commit. Fix: removed the duplicate lines. Verified: 'Compiled successfully!' in /var/log/supervisor/frontend.*.log and all routes now render.",
+    "cms_routes.py:171 admin_reorder does not validate that the incoming page_ids exist — it silently update_one({page_id: pid}) with matched=0 and returns {ok:true}. Consider: return count of matched vs. total to help the client detect stale IDs. Not blocking.",
+    "cms_routes.py:129 first-publish version behavior is correct: only snapshots when p['published'] is already set (from a prior publish). Confirmed by test — first publish → versions=[], second → versions=[{blocks:first}].",
+    "cms_routes.py:113 admin_update_page uses model_dump() which by default emits None-defaults for Optional fields — the code filters with 'if v is not None' so this is safe, but it would be cleaner as model_dump(exclude_unset=True) to preserve intent (client-sent vs default).",
+    "DynamicPage.jsx correctly uses slugOverride prop to remap / → home, /mission → mission, /contact → contact. The 'Page not found' text on 404 fallback is CSS-uppercased at render time to 'PAGE NOT FOUND' — cosmetic only, but note that raw HTML source still contains 'Page not found' so any test checking innerHTML/textContent must be case-insensitive."
+  ],
+  "updated_files": [
+    "/app/frontend/src/components/Layout.jsx (removed duplicated <button> block causing SyntaxError)"
+  ],
+  "success_rate": {
+    "backend": "100% CMS suite (15/15). 97% overall regression (37/38 — 1 pre-existing xdist flaky race).",
+    "frontend": "100% after Layout.jsx fix (all 5 public routes + /cms editor + user-role access-denied all render; 0 pageerrors)."
+  },
+  "test_credentials": "Freshly minted via mongosh — ADMIN_TOKEN=test_admin_1784291588105648, EDITOR_TOKEN=test_editor_1784291588119548, USER_TOKEN=test_user_1784291588121843, DOOR_TOKEN=test_door_1784291588122699. These are appended into user_sessions + users; original daniel.ovidiu@gmail.com untouched.",
+  "seed_data_creation": "None new — POST /api/cms/seed had already been invoked by main agent (3 pages, 1 theme). Verified idempotent no-op response. Test-created pages (test-cms-*, hidden-*) are cleaned up in-test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 6 CMS ships correctly. Layout.jsx typo was fixed by testing agent. If further UI E2E is needed for CMS write-flows through the browser (add block → publish → view live), use the EDITOR_TOKEN cookie above (still valid for ~7 days). The 4 minted test tokens remain in test_database.user_sessions. The one flaky backend regression test is unrelated to CMS and predates this iteration.",
+  "rca_of_the_issue": "Compile-blocking bug in Layout.jsx: during the CMS nav integration, the mobile menu-toggle button was inadvertently duplicated. Lines 51-53 correctly rendered `<button …><X or Menu /></button>`, but lines 54-55 duplicated the JSX body '{open ? <X /> : <Menu />}</button>' outside any opening tag, producing a stray closing </button> and unmatched </div>. Babel raised SyntaxError. CRA overlays this over every route, so status=200 but page.body is empty. Fix: removed the two duplicate lines. Verified via supervisor frontend log ('Compiled successfully!') and by successful load of all 5 public routes, /cms editor mount, and user-role denial screen — with 0 pageerrors."
+}

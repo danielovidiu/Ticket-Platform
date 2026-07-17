@@ -296,7 +296,7 @@ function Users() {
           <div className="col-span-4 text-zinc-400 text-sm">{u.email}</div>
           <div className="col-span-2 font-mono-x text-xs uppercase">{u.role}</div>
           <div className="col-span-2 flex gap-1 justify-end">
-            {["user", "door", "admin"].map((r) => (
+            {["user", "editor", "door", "admin"].map((r) => (
               <button key={r} onClick={() => setRole(u.user_id, r)} className={`px-2 py-1 border text-[10px] uppercase tracking-[0.2em] ${u.role===r ? "bg-white text-black border-white" : "border-white/20"}`}>{r}</button>
             ))}
           </div>
