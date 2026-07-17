@@ -347,6 +347,7 @@ const FIELDS = {
     { k: "image_url", label: "Image URL" },
     { k: "caption", label: "Caption" },
     { k: "full_width", label: "Full width", type: "checkbox" },
+    { k: "aspect", label: "Aspect ratio", type: "select", options: ["natural", "1:1", "4:3", "3:4", "16:9", "21:9", "3:2", "16:10"] },
   ],
   gallery_grid: [
     { k: "heading", label: "Heading" },
@@ -357,12 +358,14 @@ const FIELDS = {
     { k: "heading", label: "Heading" },
     { k: "limit", label: "Max events", type: "number" },
     { k: "layout", label: "Layout", type: "select", options: ["grid-1", "grid-2", "grid-3"] },
+    { k: "card_aspect", label: "Card aspect", type: "select", options: ["1:1", "4:3", "16:9", "16:10", "3:2", "3:4"] },
   ],
   artists_grid: [
     { k: "eyebrow", label: "Eyebrow" },
     { k: "heading", label: "Heading" },
     { k: "limit", label: "Max artists", type: "number" },
     { k: "layout", label: "Layout", type: "select", options: ["grid-2", "grid-3", "grid-4"] },
+    { k: "card_aspect", label: "Card aspect", type: "select", options: ["1:1", "4:3", "3:4", "16:10"] },
   ],
   marquee: [{ k: "items", label: "Items (one per line)", type: "list" }],
   cta_banner: [
@@ -389,6 +392,7 @@ const FIELDS = {
   split: [
     { k: "direction", label: "Direction", type: "select", options: ["image-left", "image-right"] },
     { k: "image_url", label: "Image URL" },
+    { k: "aspect", label: "Image aspect", type: "select", options: ["1:1", "4:3", "3:4", "16:9", "16:10", "3:2"] },
     { k: "eyebrow", label: "Eyebrow" },
     { k: "heading", label: "Heading" },
     { k: "body", label: "Body", type: "textarea" },
@@ -451,7 +455,12 @@ function PageMetaEditor({ page, onChange }) {
 function ThemeEditor({ theme, onChange, onPublish }) {
   const setColor = (k, v) => onChange({ colors: { ...(theme.colors || {}), [k]: v } });
   const setFont = (k, v) => onChange({ fonts: { ...(theme.fonts || {}), [k]: v } });
-  const fontChoices = ["Clash Display", "Space Grotesk", "Inter", "Manrope", "Playfair Display", "IBM Plex Mono", "JetBrains Mono", "Archivo", "Bebas Neue", "Anton"];
+  const fontSuggestions = [
+    "Clash Display", "Space Grotesk", "Inter", "Manrope", "Playfair Display",
+    "IBM Plex Mono", "JetBrains Mono", "Archivo", "Bebas Neue", "Anton",
+    "Syne", "Fraunces", "Rubik", "DM Sans", "Instrument Serif",
+    "Big Shoulders Display", "Unbounded", "Cormorant Garamond", "Public Sans", "Geist"
+  ];
   return (
     <div className="space-y-4">
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">Colors</div>
@@ -466,12 +475,22 @@ function ThemeEditor({ theme, onChange, onPublish }) {
       ))}
 
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 pt-4">Fonts</div>
+      <div className="text-[10px] font-mono-x text-zinc-500">Type any Google Font name — it will load automatically.</div>
+      <datalist id="cms-font-suggestions">
+        {fontSuggestions.map((f) => <option key={f} value={f} />)}
+      </datalist>
       {[["display", "Display / headings"], ["body", "Body"], ["mono", "Mono / labels"]].map(([k, label]) => (
         <label key={k} className="block">
           <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">{label}</div>
-          <select value={theme.fonts?.[k] || ""} onChange={(e) => setFont(k, e.target.value)} className="input-x !py-2 !text-sm">
-            {fontChoices.map((f) => <option key={f} value={f}>{f}</option>)}
-          </select>
+          <input
+            value={theme.fonts?.[k] || ""}
+            onChange={(e) => setFont(k, e.target.value)}
+            list="cms-font-suggestions"
+            placeholder="e.g. Syne"
+            data-testid={`font-${k}-input`}
+            className="input-x !py-2 !text-sm"
+            style={{ fontFamily: theme.fonts?.[k] ? `"${theme.fonts[k]}"` : undefined }}
+          />
         </label>
       ))}
 

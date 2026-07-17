@@ -83,7 +83,8 @@ def test_public_unknown_slug_404():
 # ---------- Seed idempotency ----------
 
 def test_seed_idempotent():
-    r = requests.post(f"{API}/cms/seed", timeout=15)
+    # /api/cms/seed is now admin-gated (iteration 7 security hardening)
+    r = requests.post(f"{API}/cms/seed", headers=_b(ADMIN_TOKEN), timeout=15)
     assert r.status_code == 200
     d = r.json()
     # Should be no-op since seed was already invoked by main agent

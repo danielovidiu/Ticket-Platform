@@ -22,6 +22,31 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 from starlette.middleware.cors import CORSMiddleware
+# Simple in-memory sliding-window rate limiter. Enough for a single-node MVP.
+# For multi-node prod, swap for a Redis-backed limiter.
+from collections import defaultdict, deque
+from threading import Lock
+_rate_buckets: dict = defaultdict(lambda: defaultdict(deque))
+_rate_lock = Lock()
+
+def rate_limit(key: str, max_calls: int, window_seconds: int):
+    """Returns a FastAPI dependency that raises 429 when exceeded."""
+    async def _dep(request: Request):
+        ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
+        now = datetime.now(timezone.utc).timestamp()
+        with _rate_lock:
+            dq = _rate_buckets[key][ip]
+            while dq and dq[0] < now - window_seconds:
+                dq.popleft()
+            if len(dq) >= max_calls:
+                retry_after = int(window_seconds - (now - dq[0])) + 1
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Too many requests. Try again in {retry_after}s.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+            dq.append(now)
+    return _dep
 
 from emergentintegrations.payments.stripe.checkout import (
     StripeCheckout,
@@ -34,6 +59,7 @@ load_dotenv(ROOT_DIR / ".env")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "sk_test_emergent")
+INITIAL_ADMIN_EMAIL = os.environ.get("INITIAL_ADMIN_EMAIL", "").strip().lower()
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -193,7 +219,7 @@ class CheckoutIn(BaseModel):
 
 # ---------- Auth Endpoints ----------
 
-@api.post("/auth/session")
+@api.post("/auth/session", dependencies=[Depends(rate_limit("auth_session", 15, 60))])
 async def create_session(body: SessionBody, response: Response):
     """Exchange session_id from Emergent Auth for a session_token."""
     async with httpx.AsyncClient(timeout=15.0) as hc:
@@ -330,7 +356,7 @@ class ContactMsg(BaseModel):
     message: str
 
 
-@api.post("/contact")
+@api.post("/contact", dependencies=[Depends(rate_limit("contact", 5, 60))])
 async def contact(msg: ContactMsg):
     await db.contact_messages.insert_one({
         "id": new_id("msg"),
@@ -349,7 +375,7 @@ class NewsletterIn(BaseModel):
     source: Optional[str] = None  # optional label ("home hero", "footer", …)
 
 
-@api.post("/newsletter")
+@api.post("/newsletter", dependencies=[Depends(rate_limit("newsletter", 10, 60))])
 async def newsletter_subscribe(body: NewsletterIn):
     email = body.email.strip().lower()
     if "@" not in email or len(email) > 254:
@@ -411,7 +437,7 @@ async def _cleanup_expired_reservations(event_id: str):
         await db.reservations.update_one({"reservation_id": r["reservation_id"]}, {"$set": {"status": "expired"}})
 
 
-@api.post("/reservations")
+@api.post("/reservations", dependencies=[Depends(rate_limit("reservations", 20, 60))])
 async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     if body.quantity < 1:
         raise HTTPException(400, "Invalid quantity")
@@ -1069,7 +1095,7 @@ async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
 # ---------- Seed ----------
 
 @api.post("/seed")
-async def seed_demo():
+async def seed_demo(user=Depends(require_admin)):
     """Seed demo data if empty. Public for MVP convenience."""
     if await db.events.count_documents({}) > 0:
         return {"seeded": False, "reason": "already has data"}
@@ -1190,6 +1216,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def bootstrap_admin():
+    """Promote INITIAL_ADMIN_EMAIL (if set) to admin role on every startup.
+    Kills the 'first-user-becomes-admin' race that hit us when test users
+    were seeded before the real admin signed in."""
+    if not INITIAL_ADMIN_EMAIL:
+        return
+    result = await db.users.update_one(
+        {"email": INITIAL_ADMIN_EMAIL},
+        {"$set": {"role": "admin"}},
+    )
+    if result.matched_count:
+        logger.info("Bootstrapped %s to admin", INITIAL_ADMIN_EMAIL)
 
 
 @app.on_event("shutdown")

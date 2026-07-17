@@ -9,6 +9,10 @@ export function applyTheme(theme) {
   const c = theme.colors || {};
   const f = theme.fonts || {};
   const s = theme.spacing || {};
+  // Load any custom Google font families before applying them
+  if (f.display) ensureFontLoaded(f.display);
+  if (f.body) ensureFontLoaded(f.body);
+  if (f.mono) ensureFontLoaded(f.mono);
   if (c.bg) root.style.setProperty("--bg", c.bg);
   if (c.surface) root.style.setProperty("--surface", c.surface);
   if (c.text) root.style.setProperty("--text", c.text);
@@ -44,10 +48,10 @@ export const BLOCK_DEFAULTS = {
     height: "tall",
   }),
   rich_text: () => ({ content: "## New heading\n\nParagraph text with **bold** words and [links](#)." }),
-  image: () => ({ image_url: "", caption: "", full_width: false }),
+  image: () => ({ image_url: "", caption: "", full_width: false, aspect: "natural" }),
   gallery_grid: () => ({ heading: "Gallery", limit: 6 }),
-  events_grid: () => ({ heading: "Events", eyebrow: "Programme", limit: 4, layout: "grid-2" }),
-  artists_grid: () => ({ heading: "Artists", eyebrow: "Roster", limit: 6, layout: "grid-3" }),
+  events_grid: () => ({ heading: "Events", eyebrow: "Programme", limit: 4, layout: "grid-2", card_aspect: "16:10" }),
+  artists_grid: () => ({ heading: "Artists", eyebrow: "Roster", limit: 6, layout: "grid-3", card_aspect: "1:1" }),
   marquee: () => ({ items: ["ITEM ONE", "ITEM TWO", "ITEM THREE"] }),
   cta_banner: () => ({ heading: "Big statement here.", body: "Supporting line.", cta_label: "Do it", cta_href: "#" }),
   contact_form: () => ({ heading: "Say hello", success_message: "Sent." }),
@@ -55,7 +59,7 @@ export const BLOCK_DEFAULTS = {
   video: () => ({ url: "", caption: "" }),
   custom_html: () => ({ html: "<div class=\"p-8 text-center font-mono-x uppercase\">Custom HTML</div>" }),
   spacer: () => ({ height: "4rem" }),
-  split: () => ({ direction: "image-left", image_url: "", eyebrow: "", heading: "", body: "", cta_label: "", cta_href: "" }),
+  split: () => ({ direction: "image-left", image_url: "", eyebrow: "", heading: "", body: "", cta_label: "", cta_href: "", aspect: "1:1" }),
 };
 
 export const BLOCK_LABELS = {
@@ -78,3 +82,23 @@ export const BLOCK_LABELS = {
 export const BLOCK_TYPES = Object.keys(BLOCK_LABELS);
 
 export const newBlockId = () => `bk_new_${Math.random().toString(36).slice(2, 10)}`;
+
+/**
+ * Dynamically loads a Google Fonts family into the document if not already
+ * loaded. Safe to call repeatedly; each family is injected at most once.
+ * Family names can be spaces or Title Case, e.g. "Space Grotesk".
+ */
+const _loadedFonts = new Set();
+export function ensureFontLoaded(family) {
+  if (!family || typeof family !== "string") return;
+  const trimmed = family.trim();
+  if (!trimmed || _loadedFonts.has(trimmed)) return;
+  const id = `gf-${trimmed.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase()}`;
+  if (document.getElementById(id)) { _loadedFonts.add(trimmed); return; }
+  const link = document.createElement("link");
+  link.id = id;
+  link.rel = "stylesheet";
+  link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(trimmed).replace(/%20/g, "+")}:wght@300;400;500;600;700;800;900&display=swap`;
+  document.head.appendChild(link);
+  _loadedFonts.add(trimmed);
+}

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
+import DOMPurify from "dompurify";
 import { http } from "../../api";
 import { toast } from "sonner";
 
@@ -48,6 +49,18 @@ function renderInline(t) {
   return parts;
 }
 
+/** Tailwind-safe aspect utility from a friendly ratio label. */
+const ASPECTS = {
+  "1:1": "aspect-square",
+  "4:3": "aspect-[4/3]",
+  "3:4": "aspect-[3/4]",
+  "16:9": "aspect-video",
+  "21:9": "aspect-[21/9]",
+  "3:2": "aspect-[3/2]",
+  "16:10": "aspect-[16/10]",
+};
+const aspectClass = (v, fallback = "aspect-square") => ASPECTS[v] || fallback;
+
 function Container({ children, className = "" }) {
   return <div className={`max-w-[1400px] mx-auto px-6 md:px-10 ${className}`}>{children}</div>;
 }
@@ -87,10 +100,13 @@ function RichText({ props }) {
 function ImageBlock({ props }) {
   if (!props.image_url) return <div className="py-8 text-center text-zinc-500 font-mono-x text-xs uppercase">Image not set</div>;
   const cls = props.full_width ? "w-full" : "max-w-[1200px] mx-auto";
+  const aspect = props.aspect && props.aspect !== "natural" ? aspectClass(props.aspect, "") : "";
   return (
     <section className="py-10">
       <figure className={cls}>
-        <img src={props.image_url} alt={props.caption || ""} className="w-full block border border-white/10" />
+        <div className={`${aspect} overflow-hidden border border-white/10`}>
+          <img src={props.image_url} alt={props.caption || ""} className="w-full h-full object-cover block" />
+        </div>
         {props.caption && <figcaption className="p-3 font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">{props.caption}</figcaption>}
       </figure>
     </section>
@@ -159,7 +175,7 @@ function ArtistsGrid({ props }) {
       <div className={`grid grid-cols-2 ${cols} gap-4`}>
         {artists.map((a) => (
           <Link key={a.artist_id} to={`/artists/${a.slug}`} className="group block border border-white/10">
-            <div className="aspect-square overflow-hidden"><img src={a.image_url} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" /></div>
+            <div className={`${aspectClass(props.card_aspect, "aspect-square")} overflow-hidden`}><img src={a.image_url} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" /></div>
             <div className="p-4"><div className="font-display uppercase font-semibold">{a.name}</div></div>
           </Link>
         ))}
@@ -264,7 +280,15 @@ function VideoEmbed({ props }) {
 }
 
 function CustomHTML({ props }) {
-  return <section className="py-4"><Container><div dangerouslySetInnerHTML={{ __html: props.html || "" }} /></Container></section>;
+  // XSS guard: sanitize any HTML entered via the CMS. Strips <script>,
+  // event handlers, and javascript: URIs. Runs on both editors' preview
+  // and public visitors.
+  const safe = DOMPurify.sanitize(props.html || "", {
+    USE_PROFILES: { html: true, svg: true },
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
+    FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover", "onfocus", "onblur", "formaction"],
+  });
+  return <section className="py-4"><Container><div dangerouslySetInnerHTML={{ __html: safe }} /></Container></section>;
 }
 
 function Spacer({ props }) { return <div style={{ height: props.height || "4rem" }} />; }
@@ -274,7 +298,7 @@ function Split({ props }) {
   return (
     <section className="py-16"><Container>
       <div className={`grid md:grid-cols-2 gap-10 items-center ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}>
-        <div className="aspect-square overflow-hidden border border-white/10">
+        <div className={`${aspectClass(props.aspect, "aspect-square")} overflow-hidden border border-white/10`}>
           {props.image_url ? <img src={props.image_url} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-zinc-600 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>}
         </div>
         <div>

@@ -234,8 +234,8 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
     # ---------- Seed ----------
 
     @api.post("/cms/seed")
-    async def cms_seed():
-        """Seed demo CMS pages + theme. Idempotent."""
+    async def cms_seed(user=Depends(require_admin)):
+        """Seed demo CMS pages + theme. Idempotent. Admin only."""
         existing = await db.cms_pages.count_documents({})
         if existing > 0:
             return {"seeded": False, "reason": "already has data"}
