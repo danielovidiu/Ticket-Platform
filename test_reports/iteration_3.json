@@ -1,0 +1,31 @@
+{
+  "summary": "Regression test for daniel.ovidiu@gmail.com admin-access fix. All 7 pytest cases pass: (1) DB sanity — Daniel role=admin, sole non-test real user; (2) GET /api/auth/me with Daniel's Bearer -> 200 role=admin; (3) GET /api/admin/stats -> 200 with expected shape {revenue_ron,total_orders,total_tickets,scanned,events}; (4) GET /api/admin/events -> 200 list; (5) no-auth -> 401; (6) role=user -> 403; (7) role=door -> 403 (require_admin denies door). Daniel document was not modified; all ephemeral test users and sessions created during the run were deleted at teardown.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_daniel_admin_rbac.py",
+    "/app/test_reports/pytest/iteration_3.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "require_admin (server.py ~L95) still has the redundant double-check for the door role (already flagged in iteration_2). It works, but simplify to `if user.get('role') != 'admin': raise HTTPException(403, ...)`.",
+    "Consider adding a startup log or one-time admin bootstrap command instead of relying on the 'first user auto-admin' rule — this exact bug (Daniel not first, defaulted to 'user') was caused by test users being inserted before the real first user."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_daniel_admin_rbac.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Daniel's Bearer minted inside test fixture (test_daniel_reg_<uuid>) and cleaned up at teardown. Real user document untouched.",
+  "seed_data_creation": "None. Test does not seed. It looks up Daniel's user_id from Mongo, inserts a session for him, and creates ephemeral @umbra.test users only for the 403 sanity checks — all removed at teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: `cd /app && pytest /app/backend/tests/test_daniel_admin_rbac.py -v`. The suite is self-contained (fetches Daniel from DB, mints its own sessions, cleans up). It NEVER deletes user_id='user_fae07ade1e48' (Daniel). If Daniel's role ever regresses to 'user' or the user is removed, test_daniel_is_admin_and_only_real_user will fail immediately.",
+  "rca_of_the_issue": "Root cause was ordering: during earlier automated testing, ~20 @umbra.test users were inserted BEFORE Daniel signed in via Google OAuth, so the 'first user auto-admin' branch in the signup flow did not fire for him and his role defaulted to 'user'. Fix applied by main agent (manual `db.users.updateOne({email:'daniel...'},{$set:{role:'admin'}})` + deletion of stale test users/sessions) is verified working. Mitigation for future: (a) gate the first-user-admin promotion on a filter that ignores emails ending in @umbra.test / @u.t, or (b) provide an explicit admin bootstrap env var / CLI command."
+}
