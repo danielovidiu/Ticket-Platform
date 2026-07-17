@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { http } from "./api";
+import { http } from "../api";
 
 /**
  * Offline scan queue. Stores QR codes in localStorage while offline and
