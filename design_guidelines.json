@@ -1,0 +1,143 @@
+{
+  "theme": "dark",
+  "project_context": {
+    "app_type": "hybrid_fullstack",
+    "vibe": "Boiler Room, Berghain, RA.co, contemporary arts gallery. Brutalist dark mode, anti-polish, highly functional editorial arts brand.",
+    "emotional_tone": "Exclusive, raw, underground, disciplined, mysterious, confident."
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Clash Display, sans-serif",
+      "body": "Manrope, sans-serif",
+      "mono_accent": "IBM Plex Mono, monospace"
+    },
+    "rules": {
+      "h1": "text-5xl md:text-7xl font-black uppercase tracking-tighter leading-none",
+      "h2": "text-4xl md:text-5xl font-bold uppercase tracking-tight",
+      "h3": "text-2xl md:text-3xl font-semibold uppercase tracking-tight",
+      "body": "text-base font-normal tracking-normal leading-relaxed text-zinc-300",
+      "meta_data": "font-mono text-xs uppercase tracking-[0.2em] text-zinc-400",
+      "alignment": "Strictly left-aligned or justified. Avoid center alignment to maintain an editorial, structural feel."
+    },
+    "installation": "Ensure Clash Display, Manrope, and IBM Plex Mono are imported via Google Fonts or Fontshare."
+  },
+  "colors": {
+    "backgrounds": {
+      "page_base": "#050505",
+      "surface_default": "#0F0F0F",
+      "surface_elevated": "#1A1A1A",
+      "overlay": "rgba(5, 5, 5, 0.85)"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "muted": "#52525B",
+      "inverse": "#050505"
+    },
+    "accents": {
+      "primary": "#FF3333",
+      "primary_hover": "#CC2929",
+      "success": "#E1FF00",
+      "warning": "#FF9900",
+      "border_subtle": "rgba(255, 255, 255, 0.1)",
+      "border_focus": "#FFFFFF"
+    },
+    "rules": {
+      "gradients": "FORBIDDEN. Use stark flat colors, monochromatic fills, or subtle grain noise overlays.",
+      "contrast": "Maintain brutalist high contrast. Ensure all text meets WCAG AA at minimum."
+    }
+  },
+  "surfaces_and_borders": {
+    "style": "brutalist_grid",
+    "border_radius": "rounded-none (0px radius everywhere - buttons, inputs, cards, dialogs).",
+    "borders": "Expose the structural grid. Use 1px borders (border-white/10) heavily on containers to create a wireframe, architectural feel.",
+    "shadows": "No soft shadows. Use hard offset shadows (e.g., 4px 4px 0px #FF3333) for active/hover states, or keep it entirely flat.",
+    "headers": "Solid background (#050505) with a harsh 1px border-b. NO transparent headers over content to preserve readability."
+  },
+  "spacing_and_layout": {
+    "public_site": {
+      "grid": "Bento 'Tetris' Grid. Extreme asymmetry. Use wide gaps (gap-8 md:gap-12). Overlap text elements slightly over images for an editorial spread look.",
+      "padding": "Generous. Use p-8 to p-16 inside large containers."
+    },
+    "admin_dashboard": {
+      "grid": "High-Density Data Grid. Tight gaps (gap-4). Extremely functional and scanning-optimized.",
+      "padding": "Dense. Use p-4 to p-6."
+    },
+    "scanner_pwa": {
+      "layout": "Viewport-locked (h-screen). Massive typography for immediate state recognition (VALID / INVALID). Camera feed dominates the screen."
+    }
+  },
+  "components_strategy": {
+    "buttons": "Rectangular, sharp edges (rounded-none). Bold uppercase text. Default: border border-white/20 bg-transparent text-white hover:bg-white hover:text-black transition-colors.",
+    "inputs": "bg-transparent border border-white/20 text-white p-4 rounded-none focus:border-white focus:ring-1 focus:ring-white focus:outline-none placeholder:text-zinc-600.",
+    "cards": "border border-white/10 bg-[#0F0F0F] rounded-none p-6. No drop shadow.",
+    "dialogs": "Use Shadcn Dialog logic, but strip Vercel styling. Make them stark rectangular boxes with a hard 1px border and solid #050505 background.",
+    "testing": "All interactive elements MUST include a data-testid attribute in kebab-case."
+  },
+  "imagery_and_media": {
+    "style": "High contrast, dark, flash-photography style, moody.",
+    "overlays": "Never use opaque blankets over hero images. Use max bg-black/40 or directional black gradients to ensure text readability while preserving the photo.",
+    "image_urls": {
+      "hero_upcoming_events": [
+        {
+          "url": "https://images.unsplash.com/photo-1545128485-c400e7702796?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwyfHx1bmRlcmdyb3VuZCUyMGNsdWIlMjBjcm93ZCUyMGRhcmt8ZW58MHx8fHwxNzg0Mjc5NDc1fDA&ixlib=rb-4.1.0&q=85",
+          "description": "people partying inside room - use for Hero / Upcoming Events"
+        }
+      ],
+      "past_projects_arts": [
+        {
+          "url": "https://images.unsplash.com/photo-1593408995262-1d8933c37afc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzOTB8MHwxfHNlYXJjaHwyfHxjb250ZW1wb3JhcnklMjBkYW5jZSUyMHBlcmZvcm1hbmNlJTIwZGFyayUyMHN0YWdlfGVufDB8fHx8MTc4NDI3OTQ3NXww&ixlib=rb-4.1.0&q=85",
+          "description": "woman in white dress dancing on stage - use for Past Projects / Mission"
+        }
+      ],
+      "artist_profiles": [
+        {
+          "url": "https://images.unsplash.com/photo-1762289581607-fc292299dc87?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzl8MHwxfHNlYXJjaHw0fHxlbGVjdHJvbmljJTIwbXVzaWMlMjBhcnRpc3QlMjBwb3J0cmFpdCUyMGRhcmt8ZW58MHx8fHwxNzg0Mjc5NDc1fDA&ixlib=rb-4.1.0&q=85",
+          "description": "Man wearing headphones, sunglasses, and leather jacket - use for Artist Profile cards"
+        }
+      ],
+      "gallery_and_abstract": [
+        {
+          "url": "https://images.unsplash.com/photo-1687511844598-165c1fc387cc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwzfHx1bmRlcmdyb3VuZCUyMGNsdWIlMjBjcm93ZCUyMGRhcmt8ZW58MHx8fHwxNzg0Mjc5NDc1fDA&ixlib=rb-4.1.0&q=85",
+          "description": "a crowd of people at a concert with their hands in the air - use for Gallery"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1618601208267-baa5b780b70e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwzfHxhYnN0cmFjdCUyMGxpZ2h0JTIwYXJ0JTIwaW5zdGFsbGF0aW9ufGVufDB8fHx8MTc4NDI3OTQ3NXww&ixlib=rb-4.1.0&q=85",
+          "description": "blue and white light streaks - use for Ticket QR code modal background or scanner styling"
+        }
+      ]
+    }
+  },
+  "motion_and_interactions": {
+    "philosophy": "Abrupt, snappy, and mechanical. Avoid bouncy or slow fluid transitions. Feel like an industrial machine or a camera shutter.",
+    "hover_states": "Invert colors instantly (e.g., black text on white background) or use a hard offset translation.",
+    "entrance": "Staggered fade-ins with no Y-axis translation, or harsh block-reveals.",
+    "marquee": "Use react-fast-marquee for artist lineups or 'UPCOMING EVENTS' scrolling text. Use mono font, large tracking, and slow smooth drift."
+  },
+  "libraries": {
+    "icons": "lucide-react (sharp, unstyled implementation)",
+    "motion": "framer-motion (for strict, non-spring transitions)",
+    "toasts": "sonner (customize to be square, black background, hard white borders)"
+  },
+  "general_ui_ux_guidelines": [
+    "CREATE RAW, BOLD FRONTENDS: Do not converge toward generic SaaS aesthetics. The app should feel like a high-end European techno club or contemporary art zine.",
+    "DO NOT use 'transition: all'. Explicitly animate transform, opacity, or colors.",
+    "NEVER center-align the main App container. Left-align for editorial reading flow.",
+    "DO NOT use emojis for icons. Rely on typography and Lucide icons.",
+    "All JS files (not TSX). Write modern, clean React using JavaScript.",
+    "All interactive elements MUST include data-testid. Example: data-testid='buy-ticket-btn'.",
+    "Ensure contrast is brutal and clear. Text must not be lost against dark backgrounds.",
+    "DO NOT use fully transparent backgrounds on headers, overlays, or dropdowns. ALWAYS use solid #050505 or heavy blur with low transparency.",
+    "Use layered z-index hierarchy thoughtfully. Elements should feel like architectural layers.",
+    "Custom scrollbar: Hide the default gutter, use a thin, stark white or gray scroll thumb."
+  ],
+  "instructions_to_main_agent": [
+    "Read these guidelines thoroughly.",
+    "Implement the UI exclusively using React functional components in JS (.js) files, not TypeScript.",
+    "Follow the typography strictly: Clash Display for headers, IBM Plex Mono for data/dates, Manrope for body text.",
+    "Style Shadcn components to remove their default rounded, soft looks. Apply rounded-none and hard borders.",
+    "Ensure the ticketing engine checkout flow (10min hold timer) looks hyper-functional and secure, using the mono font for the timer.",
+    "The admin dashboard must prioritize data density and quick edits over visual flair, but retain the dark brutalist theme.",
+    "The door scanner PWA should have massive touch targets and high-contrast color shifts (Green for valid, Red for invalid) for visibility in dark clubs."
+  ]
+}
