@@ -51,7 +51,7 @@ export default function Home() {
         <div className="marquee">
           <div className="marquee-track font-mono-x uppercase tracking-[0.3em] text-2xl md:text-4xl">
             {[...marqueeItems, ...marqueeItems].map((m, i) => (
-              <span key={i} className="flex items-center gap-16 text-zinc-500">
+              <span key={`${m}-${i}`} className="flex items-center gap-16 text-zinc-500">
                 {m} <span className="text-[color:var(--accent)]">◆</span>
               </span>
             ))}

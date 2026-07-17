@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
 import { useAuth, startLogin } from "../auth";
@@ -33,8 +33,27 @@ export default function EventDetail() {
     }
   }, [slug, specialToken]);
 
+  // Derived UI values — memoized so re-renders on qty/code changes don't rescan the waves array.
+  const selectedWave = useMemo(
+    () => event?.waves?.find((w) => w.wave_id === waveId) || null,
+    [event, waveId]
+  );
+  const unitPrice = special ? special.price_ron : (selectedWave?.price_ron || 0);
+  const total = useMemo(() => unitPrice * qty, [unitPrice, qty]);
+  const qtyOptions = useMemo(() => {
+    const cap = event?.max_tickets_per_user || 4;
+    return [1, 2, 3, 4].filter((n) => n <= cap);
+  }, [event]);
+
   const reserve = async () => {
-    if (!user) { localStorage.setItem("auth_return_to", window.location.pathname + window.location.search); startLogin(window.location.pathname); return; }
+    if (!user) {
+      // NON-SENSITIVE: this stores the current URL path (not an auth token or PII)
+      // so we can return the user to the same event page after Google OAuth.
+      // Auth tokens themselves live in an httpOnly cookie set by the backend.
+      localStorage.setItem("auth_return_to", window.location.pathname + window.location.search);
+      startLogin(window.location.pathname);
+      return;
+    }
     if (!waveId) { toast.error("Pick a wave"); return; }
     setBusy(true);
     try {
@@ -54,10 +73,6 @@ export default function EventDetail() {
   };
 
   if (!event) return <div className="p-16 text-center text-zinc-500 font-mono-x uppercase text-xs tracking-[0.3em]">Loading…</div>;
-
-  const wave = event.waves.find((w) => w.wave_id === waveId);
-  const unitPrice = special ? special.price_ron : (wave?.price_ron || 0);
-  const total = unitPrice * qty;
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10">
@@ -107,7 +122,7 @@ export default function EventDetail() {
             <label className="col-span-1">
               <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Quantity</div>
               <select value={qty} onChange={(e) => setQty(Number(e.target.value))} data-testid="qty-select" className="input-x">
-                {[1,2,3,4].filter(n => n <= (event.max_tickets_per_user || 4)).map(n => <option key={n} value={n}>{n}</option>)}
+                {qtyOptions.map(n => <option key={n} value={n}>{n}</option>)}
               </select>
             </label>
             {!special && (

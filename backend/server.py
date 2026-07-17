@@ -371,79 +371,21 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     await _cleanup_expired_reservations(body.event_id)
     event = await db.events.find_one({"event_id": body.event_id}, {"_id": 0})
 
-    # Enforce max tickets per user for this event
-    max_per_user = event.get("max_tickets_per_user", 4)
-    existing = await db.tickets.count_documents({"event_id": body.event_id, "user_id": user["user_id"]})
-    pending = await db.reservations.find(
-        {"event_id": body.event_id, "user_id": user["user_id"], "status": "pending"}, {"_id": 0}
-    ).to_list(50)
-    pending_qty = sum(r["quantity"] for r in pending)
-    if existing + pending_qty + body.quantity > max_per_user:
-        raise HTTPException(400, f"Ticket limit reached ({max_per_user} per user)")
-
-    # Find wave
-    wave = None
-    for w in event.get("waves", []):
-        if w["wave_id"] == body.wave_id:
-            wave = w
-            break
-    if not wave:
-        raise HTTPException(404, "Wave not found")
-
-    now_iso = now_utc().isoformat()
-    unit_price = float(wave["price_ron"])
-    # Special link overrides price and uses its own capacity
-    special = None
-    if body.special_link_token:
-        special = await db.special_links.find_one({"token": body.special_link_token, "event_id": body.event_id}, {"_id": 0})
-        if not special:
-            raise HTTPException(400, "Invalid special link")
-        used = special.get("used", 0)
-        if used + body.quantity > special["capacity"]:
-            raise HTTPException(400, "Special link capacity exceeded")
-        unit_price = float(special["price_ron"])
-    else:
-        if not (wave["starts_at"] <= now_iso <= wave["ends_at"]):
-            raise HTTPException(400, "Wave not active")
-        if wave.get("available", wave["capacity"]) < body.quantity:
-            raise HTTPException(400, "Not enough tickets available")
-
-    # Apply discount code
-    discount_percent = 0
-    discount_code_used = None
-    if body.discount_code and not special:
-        code = await db.discounts.find_one({"code": body.discount_code.upper()}, {"_id": 0})
-        if not code:
-            raise HTTPException(400, "Invalid discount code")
-        if code.get("event_id") and code["event_id"] != body.event_id:
-            raise HTTPException(400, "Discount not valid for this event")
-        if code.get("expires_at") and code["expires_at"] < now_iso:
-            raise HTTPException(400, "Discount code expired")
-        if code.get("max_uses", 0) > 0 and code.get("uses", 0) >= code["max_uses"]:
-            raise HTTPException(400, "Discount code exhausted")
-        discount_percent = int(code["percent_off"])
-        discount_code_used = code["code"]
+    await _enforce_user_ticket_cap(event, user["user_id"], body.quantity)
+    wave = _find_wave(event, body.wave_id)
+    unit_price, special = await _resolve_pricing_source(body, event, wave)
+    discount_percent, discount_code_used = await _apply_discount(body, using_special=bool(special))
 
     subtotal = unit_price * body.quantity
     discount_amount = subtotal * (discount_percent / 100.0)
     total = round(subtotal - discount_amount, 2)
 
-    # Deduct from wave availability (only if not a special link)
+    # Deduct from wave availability (only if not a special link).
     if not special:
-        upd = await db.events.update_one(
-            {
-                "event_id": body.event_id,
-                "waves": {"$elemMatch": {"wave_id": body.wave_id, "available": {"$gte": body.quantity}}},
-            },
-            {"$inc": {"waves.$.available": -body.quantity}},
-        )
-        if upd.modified_count != 1:
-            raise HTTPException(400, "Failed to hold tickets (sold out)")
+        await _atomic_hold_wave_stock(body.event_id, body.wave_id, body.quantity)
 
-    reservation_id = new_id("res")
-    expires_at = now_utc() + timedelta(minutes=HOLD_MINUTES)
     doc = {
-        "reservation_id": reservation_id,
+        "reservation_id": new_id("res"),
         "user_id": user["user_id"],
         "event_id": body.event_id,
         "wave_id": body.wave_id,
@@ -456,11 +398,80 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
         "total_ron": total,
         "special_link_token": body.special_link_token,
         "status": "pending",
-        "expires_at": expires_at.isoformat(),
+        "expires_at": (now_utc() + timedelta(minutes=HOLD_MINUTES)).isoformat(),
         "created_at": now_utc().isoformat(),
     }
     await db.reservations.insert_one(doc)
     return {**{k: v for k, v in doc.items() if k != "_id"}, "hold_minutes": HOLD_MINUTES}
+
+
+async def _enforce_user_ticket_cap(event, user_id: str, quantity: int):
+    """Raise 400 if adding `quantity` tickets would exceed the event's per-user cap."""
+    max_per_user = event.get("max_tickets_per_user", 4)
+    existing = await db.tickets.count_documents({"event_id": event["event_id"], "user_id": user_id})
+    pending_docs = await db.reservations.find(
+        {"event_id": event["event_id"], "user_id": user_id, "status": "pending"}, {"_id": 0, "quantity": 1}
+    ).to_list(50)
+    pending_qty = sum(r["quantity"] for r in pending_docs)
+    if existing + pending_qty + quantity > max_per_user:
+        raise HTTPException(400, f"Ticket limit reached ({max_per_user} per user)")
+
+
+def _find_wave(event, wave_id: str):
+    for w in event.get("waves", []):
+        if w["wave_id"] == wave_id:
+            return w
+    raise HTTPException(404, "Wave not found")
+
+
+async def _resolve_pricing_source(body: "ReserveIn", event, wave):
+    """Return (unit_price, special_doc_or_None). Validates special link or wave window/capacity."""
+    now_iso = now_utc().isoformat()
+    if body.special_link_token:
+        special = await db.special_links.find_one(
+            {"token": body.special_link_token, "event_id": body.event_id}, {"_id": 0}
+        )
+        if not special:
+            raise HTTPException(400, "Invalid special link")
+        if special.get("used", 0) + body.quantity > special["capacity"]:
+            raise HTTPException(400, "Special link capacity exceeded")
+        return float(special["price_ron"]), special
+    # Regular wave path: enforce sale window + inventory hint (atomic decrement will re-check)
+    if not (wave["starts_at"] <= now_iso <= wave["ends_at"]):
+        raise HTTPException(400, "Wave not active")
+    if wave.get("available", wave["capacity"]) < body.quantity:
+        raise HTTPException(400, "Not enough tickets available")
+    return float(wave["price_ron"]), None
+
+
+async def _apply_discount(body: "ReserveIn", using_special: bool):
+    """Return (percent_off, code_string) or (0, None). Raises 400 on invalid/expired/exhausted."""
+    if not body.discount_code or using_special:
+        return 0, None
+    now_iso = now_utc().isoformat()
+    code = await db.discounts.find_one({"code": body.discount_code.upper()}, {"_id": 0})
+    if not code:
+        raise HTTPException(400, "Invalid discount code")
+    if code.get("event_id") and code["event_id"] != body.event_id:
+        raise HTTPException(400, "Discount not valid for this event")
+    if code.get("expires_at") and code["expires_at"] < now_iso:
+        raise HTTPException(400, "Discount code expired")
+    if code.get("max_uses", 0) > 0 and code.get("uses", 0) >= code["max_uses"]:
+        raise HTTPException(400, "Discount code exhausted")
+    return int(code["percent_off"]), code["code"]
+
+
+async def _atomic_hold_wave_stock(event_id: str, wave_id: str, quantity: int):
+    """Atomically decrement wave availability. Raises 400 if not enough stock at write-time."""
+    upd = await db.events.update_one(
+        {
+            "event_id": event_id,
+            "waves": {"$elemMatch": {"wave_id": wave_id, "available": {"$gte": quantity}}},
+        },
+        {"$inc": {"waves.$.available": -quantity}},
+    )
+    if upd.modified_count != 1:
+        raise HTTPException(400, "Failed to hold tickets (sold out)")
 
 
 @api.get("/reservations/{reservation_id}")

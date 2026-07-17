@@ -28,7 +28,10 @@ export const AuthProvider = ({ children }) => {
   }, [refresh]);
 
   const logout = async () => {
-    try { await http.post("/auth/logout"); } catch (e) { /* ignore */ }
+    try { await http.post("/auth/logout"); } catch (e) {
+      // Non-fatal: even if server logout fails, clear local state and redirect.
+      console.warn("Logout endpoint failed, clearing client state anyway:", e?.message || e);
+    }
     setUser(null);
     window.location.href = "/";
   };

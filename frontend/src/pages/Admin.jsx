@@ -127,7 +127,7 @@ function EventForm({ form, setForm, onSave, onClose }) {
         <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-zinc-500">Waves</div>
         <div className="mt-3 space-y-2">
           {form.waves.map((w, i) => (
-            <div key={i} className="grid grid-cols-12 gap-2 border border-white/10 p-3">
+            <div key={w.wave_id || w._key || `new-${i}`} className="grid grid-cols-12 gap-2 border border-white/10 p-3">
               <input placeholder="Name" value={w.name} onChange={(e) => setWave(i, "name", e.target.value)} className="input-x col-span-3" />
               <input type="number" step="0.01" placeholder="Price RON" value={w.price_ron} onChange={(e) => setWave(i, "price_ron", Number(e.target.value))} className="input-x col-span-2" />
               <input type="number" placeholder="Cap" value={w.capacity} onChange={(e) => setWave(i, "capacity", Number(e.target.value))} className="input-x col-span-2" />
@@ -136,7 +136,7 @@ function EventForm({ form, setForm, onSave, onClose }) {
               <select value={w.tier} onChange={(e) => setWave(i, "tier", e.target.value)} className="input-x col-span-1"><option value="early_bird">early</option><option value="general">gen</option><option value="vip">vip</option></select>
             </div>
           ))}
-          <button onClick={() => setForm({...form, waves: [...form.waves, { name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general" }]})} className="btn-primary">+ Add wave</button>
+          <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general" }]})} className="btn-primary">+ Add wave</button>
         </div>
         <button onClick={onSave} data-testid="save-event-btn" className="btn-accent w-full mt-6">SAVE</button>
       </div>

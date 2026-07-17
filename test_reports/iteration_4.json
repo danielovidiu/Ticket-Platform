@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 4 regression verification after refactor of create_reservation into 5 helpers (_enforce_user_ticket_cap, _find_wave, _resolve_pricing_source, _apply_discount, _atomic_hold_wave_stock). Ran full existing suite (backend_test.py 20 tests + test_daniel_admin_rbac.py 7 tests = 27) — ALL PASS. Added a new focused suite test_refactor_regression.py (11 tests) covering the specific scenarios called out in the review request: happy-path expires_at ~10min, per-user cap (multi-request AND single-request-over-cap), wave-window before/after, discount invalid/wrong-event/expired/exhausted, special-link over-capacity, and special-link bypasses wave window + does not decrement wave + special.used stays 0 until finalize. All 11 also PASS. Total: 38/38 pass. Refactor is behavior-preserving — no regression detected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_daniel_admin_rbac.py",
+    "/app/backend/tests/test_refactor_regression.py",
+    "/app/test_reports/pytest/iteration_4.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py L362-475 refactor is clean: helpers are single-responsibility, ordered logically (cap → find_wave → pricing → discount → atomic_hold), and public POST /api/reservations behavior is unchanged. Good extraction.",
+    "_resolve_pricing_source performs a non-atomic 'available >= quantity' pre-check on line 442 that is redundant to the atomic $elemMatch in _atomic_hold_wave_stock (L466-472). The pre-check is fine as a fast-fail UX hint, but if you ever refactor further, the atomic step is the actual source of truth.",
+    "_apply_discount does not $inc the discounts.uses counter on reservation — that's presumably done in _finalize_paid_reservation. Please confirm exhaustion accounting is only bumped on finalize (not on hold), otherwise a spammed reservation flow could burn max_uses without any payment.",
+    "_enforce_user_ticket_cap sums pending reservations' quantity but uses .to_list(50) — hard cap of 50. In practice max_tickets_per_user is small (~4) so this is fine, but a comment or removing the limit would be safer.",
+    "Minor DRY: 4+ places in server.py build reservation-finalize via subprocess in tests; not a server code issue — but the door-scan finalize helper should probably be reusable from an admin endpoint too (not tested here, just an observation).",
+    "require_admin (~L95) still has the redundant door-role double-check flagged in iteration_2/3. Still works, still low priority."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_refactor_regression.py (new — 11 focused refactor regression tests)"
+  ],
+  "success_rate": {"backend": "100% (38/38)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Minted 4 ephemeral bearer tokens via mongosh (admin/door/user/user2 @umbra.test) for the run; all 4 sessions + 25 accumulated @umbra.test users cleaned up at end. Daniel's user (user_fae07ade1e48 / daniel.ovidiu@gmail.com, role=admin) untouched — verified post-run.",
+  "seed_data_creation": "Called POST /api/seed (idempotent) inside obsidian fixture. No manual seed rows inserted beyond ephemeral test users and temporary events/discounts/special-links, all deleted at end of each test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "To re-run the full regression: mint 4 tokens via mongosh (see /app/memory/test_credentials.md), export UMB_ADMIN_TOKEN/UMB_DOOR_TOKEN/UMB_USER_TOKEN/UMB_USER2_TOKEN plus REACT_APP_BACKEND_URL, then `pytest /app/backend/tests/backend_test.py /app/backend/tests/test_daniel_admin_rbac.py /app/backend/tests/test_refactor_regression.py -v`. The pytest.ini forces `-n 2 --dist loadscope` — do not override. All three files together = 38 tests, ~30s wall-clock. Concurrent-hold race test intentionally skipped (main agent said optional; $elemMatch atomicity already verified via single-user sold-out test).",
+  "rca_of_the_issue": "N/A — no bug. This iteration was pure regression verification for a refactor. Confirmed refactor preserves all previously-passing behavior."
+}
