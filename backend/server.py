@@ -342,6 +342,54 @@ async def contact(msg: ContactMsg):
     return {"ok": True}
 
 
+# ---------- Newsletter ----------
+
+class NewsletterIn(BaseModel):
+    email: str
+    source: Optional[str] = None  # optional label ("home hero", "footer", …)
+
+
+@api.post("/newsletter")
+async def newsletter_subscribe(body: NewsletterIn):
+    email = body.email.strip().lower()
+    if "@" not in email or len(email) > 254:
+        raise HTTPException(400, "Invalid email")
+    existing = await db.newsletter_subscriptions.find_one({"email": email}, {"_id": 0})
+    if existing:
+        return {"ok": True, "already_subscribed": True}
+    await db.newsletter_subscriptions.insert_one({
+        "sub_id": new_id("sub"),
+        "email": email,
+        "source": body.source or "",
+        "created_at": now_utc().isoformat(),
+        "unsubscribed_at": None,
+    })
+    return {"ok": True, "already_subscribed": False}
+
+
+@api.get("/admin/newsletter")
+async def admin_list_newsletter(user=Depends(require_admin_or_editor)):
+    return await db.newsletter_subscriptions.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+
+@api.get("/admin/newsletter.csv")
+async def admin_export_newsletter(user=Depends(require_admin_or_editor)):
+    from fastapi.responses import PlainTextResponse
+    subs = await db.newsletter_subscriptions.find({}, {"_id": 0}).sort("created_at", 1).to_list(20000)
+    lines = ["email,source,created_at,unsubscribed_at"]
+    for s in subs:
+        lines.append(f"{s['email']},{s.get('source','')},{s['created_at']},{s.get('unsubscribed_at') or ''}")
+    return PlainTextResponse("\n".join(lines), headers={"Content-Disposition": "attachment; filename=newsletter.csv"})
+
+
+@api.delete("/admin/newsletter/{sub_id}")
+async def admin_delete_subscription(sub_id: str, user=Depends(require_admin_or_editor)):
+    r = await db.newsletter_subscriptions.delete_one({"sub_id": sub_id})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Subscription not found")
+    return {"ok": True}
+
+
 # ---------- Ticketing (Reserve → Checkout → Confirm) ----------
 
 HOLD_MINUTES = 10

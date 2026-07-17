@@ -113,8 +113,15 @@ def test_reservation_decrements_correct_wave(obsidian_event):
     """Reserving on GENERAL must reduce ONLY GENERAL, not EARLY_BIRD."""
     user_headers = _fresh_user_headers()
     ev = obsidian_event
-    waves_before = {w["tier"]: w["available"] for w in ev["waves"]}
-    general_wave = next(w for w in ev["waves"] if w["tier"] == "general")
+
+    # Capture 'before' state RIGHT NOW, not from the session-scoped fixture.
+    # Parallel tests (via pytest-xdist) may have mutated inventory since the
+    # fixture snapshot was taken.
+    r0 = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15)
+    assert r0.status_code == 200
+    ev_now = r0.json()
+    waves_before = {w["tier"]: w["available"] for w in ev_now["waves"]}
+    general_wave = next(w for w in ev_now["waves"] if w["tier"] == "general")
 
     payload = {
         "event_id": ev["event_id"],

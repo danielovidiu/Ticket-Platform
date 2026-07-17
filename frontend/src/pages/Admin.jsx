@@ -4,7 +4,7 @@ import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 
-const TABS = ["stats", "events", "orders", "artists", "projects", "discounts", "invites", "users", "gallery"];
+const TABS = ["stats", "events", "orders", "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
 
 export default function Admin() {
   const { user, loading } = useAuth();
@@ -33,6 +33,7 @@ export default function Admin() {
         {tab === "invites" && <Invites />}
         {tab === "users" && <Users />}
         {tab === "gallery" && <GalleryAdmin />}
+        {tab === "newsletter" && <NewsletterAdmin />}
       </div>
     </div>
   );
@@ -330,3 +331,33 @@ function GalleryAdmin() {
     </div>
   );
 }
+
+function NewsletterAdmin() {
+  const [items, setItems] = useState([]);
+  const load = () => http.get("/admin/newsletter").then((r) => setItems(r.data));
+  useEffect(() => { load(); }, []);
+  const del = async (id) => { if (!window.confirm("Remove subscriber?")) return; await http.delete(`/admin/newsletter/${id}`); load(); };
+  const csvUrl = `${process.env.REACT_APP_BACKEND_URL}/api/admin/newsletter.csv`;
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-400">{items.length} subscriber{items.length === 1 ? "" : "s"}</div>
+        <a href={csvUrl} className="btn-primary text-xs" data-testid="newsletter-export">Download CSV</a>
+      </div>
+      <div className="space-y-2">
+        {items.map((s) => (
+          <div key={s.sub_id} className="border border-white/10 p-3 grid grid-cols-12 gap-2 items-center text-sm">
+            <div className="col-span-5 font-mono-x">{s.email}</div>
+            <div className="col-span-3 text-zinc-400 text-xs">{s.source || "—"}</div>
+            <div className="col-span-3 font-mono-x text-xs text-zinc-400">{new Date(s.created_at).toLocaleString("en-GB")}</div>
+            <div className="col-span-1 text-right">
+              <button onClick={() => del(s.sub_id)} className="btn-primary text-[10px]" data-testid={`newsletter-del-${s.sub_id}`}>Del</button>
+            </div>
+          </div>
+        ))}
+        {items.length === 0 && <div className="text-zinc-500 border border-dashed border-white/10 p-6 text-center font-mono-x text-xs uppercase tracking-[0.3em]">No subscribers yet</div>}
+      </div>
+    </div>
+  );
+}
+

@@ -222,14 +222,27 @@ function ContactFormBlock({ props }) {
 
 function Newsletter({ props }) {
   const [email, setEmail] = useState("");
-  const submit = (e) => { e.preventDefault(); toast.success("Subscribed"); setEmail(""); };
+  const [busy, setBusy] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!email) return;
+    setBusy(true);
+    try {
+      const { data } = await http.post("/newsletter", { email, source: props.heading || "newsletter" });
+      toast.success(data.already_subscribed ? "You're already on the list" : "Subscribed");
+      setEmail("");
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed");
+    }
+    setBusy(false);
+  };
   return (
     <section className="py-16 hairline"><Container className="max-w-[900px]">
       {props.heading && <h2 className="font-display text-3xl md:text-4xl uppercase font-bold tracking-tighter">{props.heading}</h2>}
       {props.body && <p className="text-zinc-400 mt-3">{props.body}</p>}
       <form onSubmit={submit} className="mt-6 flex gap-3 flex-wrap">
-        <input required type="email" placeholder="you@domain.com" value={email} onChange={(e) => setEmail(e.target.value)} className="input-x flex-1 min-w-[240px]" />
-        <button className="btn-accent">{props.cta_label || "Subscribe"}</button>
+        <input required type="email" placeholder="you@domain.com" value={email} onChange={(e) => setEmail(e.target.value)} className="input-x flex-1 min-w-[240px]" data-testid="newsletter-email" />
+        <button disabled={busy} className="btn-accent" data-testid="newsletter-submit">{busy ? "…" : (props.cta_label || "Subscribe")}</button>
       </form>
     </Container></section>
   );
