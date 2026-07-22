@@ -36,8 +36,8 @@ export const AuthProvider = ({ children }) => {
 
 export const useAuth = () => useContext(AuthCtx);
 
-// Sends the user to our own /login page, preserving where they came from so we can
-// return them there after sign-in. (Replaces the old Emergent hosted-OAuth redirect.)
+// Sends the user to our /login page, preserving where they came from so we can
+// return them there after sign-in.
 export const startLogin = (returnPath = "/my-tickets") => {
   window.location.assign("/login?return=" + encodeURIComponent(returnPath));
 };

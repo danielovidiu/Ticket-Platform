@@ -177,17 +177,19 @@ print('CLEANED');
         subprocess.check_output(["mongosh", "--quiet", "--eval", js], text=True)
 
 
-class TestRateLimitAuthSession:
-    """Limit is 15/min. 16th must return 429. Uses invalid session_id to avoid emergent auth cost."""
-    def test_auth_session_16th_returns_429(self):
+class TestRateLimitAuthLogin:
+    """Login is limited to 10 per 5 min per IP. The 11th must return 429.
+    Uses a bogus account so wrong-password 401s are cheap; the rate-limit dep is
+    evaluated before the credential check either way."""
+    def test_auth_login_11th_returns_429(self):
         codes = []
-        for i in range(16):
-            # invalid session_id => backend returns 401 (or emergent 401) but rate limit dep is evaluated first
-            r = requests.post(f"{BASE_URL}/api/auth/session", json={"session_id": "invalid-rl-test"})
+        for i in range(11):
+            r = requests.post(f"{BASE_URL}/api/auth/login",
+                              json={"email": "rl-test@invalid.local", "password": "wrong-password"})
             codes.append(r.status_code)
             if r.status_code == 429:
                 break
-        assert codes[-1] == 429, f"16th auth/session should be 429: {codes}"
+        assert codes[-1] == 429, f"11th auth/login should be 429: {codes}"
 
 
 class TestRateLimitReservations:

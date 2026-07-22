@@ -1,6 +1,6 @@
 """
 Supersanity - Ticketing platform backend
-FastAPI + MongoDB + Emergent Auth + Stripe Checkout
+FastAPI + MongoDB, first-party auth (password + Google/Apple OAuth) + Stripe Checkout
 """
 import io
 import os

@@ -21,10 +21,7 @@ import subprocess
 import pytest
 import requests
 
-BASE_URL = os.environ.get(
-    "REACT_APP_BACKEND_URL",
-    "https://collective-box.preview.emergentagent.com",
-).rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8000").rstrip("/")
 API = f"{BASE_URL}/api"
 
 DANIEL_EMAIL = "daniel.ovidiu@gmail.com"

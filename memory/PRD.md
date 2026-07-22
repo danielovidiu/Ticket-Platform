@@ -4,7 +4,7 @@
 Website + ticketing platform for a music/performance collective. Public site: home, mission, archive, events, gallery, artists, contact. Ticketing engine with Google OAuth, staged sale waves, discount codes, invite-only special links, 10-min reserve-then-confirm hold, RON via Stripe, QR tickets in "My Tickets", door scanner (first-scan-wins, offline-capable), auto Romanian VAT invoices, admin dashboard, door-staff role.
 
 ## Architecture
-- Backend: FastAPI + MongoDB (motor). Emergent Auth for Google sign-in. Emergent Stripe test key + emergentintegrations lib for checkout & webhooks. reportlab for PDF invoices. qrcode for PNG generation. Session cookies (httpOnly) + Bearer fallback.
+- Backend: FastAPI + MongoDB (motor). First-party auth: email/password (bcrypt) + direct Google/Apple OAuth, email verification, password reset. Stripe SDK (env-gated, with a local fake-payments mode) for checkout & signature-verified webhooks. reportlab for PDF invoices. qrcode for PNG generation. Session cookies (httpOnly) + Bearer fallback.
 - Frontend: React 19 + React Router 7 + Tailwind. Shadcn base + custom brutalist dark styling (Clash Display / IBM Plex Mono / Manrope). qrcode.react for ticket QRs. Native BarcodeDetector API + camera for door scanner; localStorage offline queue.
 
 ## User personas
@@ -13,8 +13,8 @@ Website + ticketing platform for a music/performance collective. Public site: ho
 3. Door staff – only /scan, first-scan-wins QR validation.
 
 ## Core requirements (static)
-- Emergent Google OAuth. First user auto-promoted to admin. Roles: user/admin/door.
-- RON pricing, Stripe test key (`sk_test_emergent`), reservations hold stock for 10 min, released on expiry.
+- Email/password + Google/Apple OAuth. First user auto-promoted to admin. Roles: user/editor/admin/door.
+- RON pricing via Stripe (real key gates live mode; fake mode for local dev), reservations hold stock for 10 min, released on expiry.
 - Wave tiers (early_bird/general/vip), % discount codes w/ expiry & max uses, invite-only special-price links.
 - Max tickets per user enforced at reservation time.
 - QR codes are unique per ticket; scan is first-write-wins (Mongo atomic update).
