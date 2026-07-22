@@ -22,8 +22,8 @@ export default function Contact() {
         <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Reach us</div>
         <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-2 leading-none">Contact</h1>
         <div className="mt-10 space-y-4 text-zinc-300">
-          <div><div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">Bookings</div>bookings@umbra.collective</div>
-          <div><div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">Press</div>press@umbra.collective</div>
+          <div><div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">Bookings</div>bookings@supersanity.collective</div>
+          <div><div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">Press</div>press@supersanity.collective</div>
           <div><div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">Studio</div>Bucharest, RO</div>
         </div>
       </div>

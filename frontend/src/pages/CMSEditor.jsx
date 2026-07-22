@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History } from "lucide-react";
 import { BlockRenderer } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
+import { FormatToolbar } from "../lib/richText";
 
 const AUTOSAVE_MS = 1200;
 
@@ -192,10 +193,10 @@ export default function CMSEditor() {
   const previewWidth = device === "mobile" ? "min(420px, 100%)" : "100%";
 
   return (
-    <div className="h-screen flex flex-col bg-[color:var(--bg,#050505)] text-white overflow-hidden">
+    <div className="h-full flex flex-col bg-[color:var(--bg,#050505)] text-white overflow-hidden">
       {/* TOP BAR */}
       <div className="hairline-b bg-black px-4 py-3 flex items-center gap-3 flex-wrap">
-        <div className="font-display uppercase font-black tracking-tighter text-lg">UMBRA<span className="text-[color:var(--accent)]">/</span>CMS</div>
+        <div className="font-display uppercase font-black tracking-tighter text-lg">SUPERSANITY<span className="text-[color:var(--accent)]">/</span>CMS</div>
         <div className="hidden md:block h-6 border-l border-white/10 mx-2" />
         <select value={currentId || ""} onChange={(e) => setCurrentId(e.target.value)} data-testid="page-select" className="input-x !py-1.5 !px-2 max-w-[280px]">
           {pages.map((p) => <option key={p.page_id} value={p.page_id}>{p.title} — /p/{p.slug}</option>)}
@@ -332,7 +333,7 @@ const FIELDS = {
   hero: [
     { k: "eyebrow", label: "Eyebrow (small caps)" },
     { k: "heading", label: "Heading", type: "textarea" },
-    { k: "body", label: "Body", type: "textarea" },
+    { k: "body", label: "Body", type: "textarea", format: true },
     { k: "image_url", label: "Background image URL" },
     { k: "cta_label", label: "Primary CTA label" },
     { k: "cta_href", label: "Primary CTA link" },
@@ -342,7 +343,7 @@ const FIELDS = {
     { k: "align", label: "Align", type: "select", options: ["left", "center", "right"] },
     { k: "height", label: "Height", type: "select", options: ["short", "medium", "tall"] },
   ],
-  rich_text: [{ k: "content", label: "Content (markdown-ish)", type: "textarea", rows: 12 }],
+  rich_text: [{ k: "content", label: "Content (markdown-ish)", type: "textarea", rows: 12, format: true }],
   image: [
     { k: "image_url", label: "Image URL" },
     { k: "caption", label: "Caption" },
@@ -367,10 +368,10 @@ const FIELDS = {
     { k: "layout", label: "Layout", type: "select", options: ["grid-2", "grid-3", "grid-4"] },
     { k: "card_aspect", label: "Card aspect", type: "select", options: ["1:1", "4:3", "3:4", "16:10"] },
   ],
-  marquee: [{ k: "items", label: "Items (one per line)", type: "list" }],
+  marquee: [{ k: "items", label: "Fallback items (used only when there are no upcoming events)", type: "list" }],
   cta_banner: [
     { k: "heading", label: "Heading", type: "textarea" },
-    { k: "body", label: "Body", type: "textarea" },
+    { k: "body", label: "Body", type: "textarea", format: true },
     { k: "cta_label", label: "Button label" },
     { k: "cta_href", label: "Button link" },
   ],
@@ -380,7 +381,7 @@ const FIELDS = {
   ],
   newsletter: [
     { k: "heading", label: "Heading" },
-    { k: "body", label: "Body" },
+    { k: "body", label: "Body", type: "textarea", format: true },
     { k: "cta_label", label: "Button label" },
   ],
   video: [
@@ -395,11 +396,21 @@ const FIELDS = {
     { k: "aspect", label: "Image aspect", type: "select", options: ["1:1", "4:3", "3:4", "16:9", "16:10", "3:2"] },
     { k: "eyebrow", label: "Eyebrow" },
     { k: "heading", label: "Heading" },
-    { k: "body", label: "Body", type: "textarea" },
+    { k: "body", label: "Body", type: "textarea", format: true },
     { k: "cta_label", label: "CTA label" },
     { k: "cta_href", label: "CTA link" },
   ],
 };
+
+function FormattedTextareaField({ f, value, onChange }) {
+  const ref = useRef(null);
+  return (
+    <>
+      <FormatToolbar textareaRef={ref} value={value} onChange={onChange} />
+      <textarea ref={ref} rows={f.rows || 4} value={value} onChange={(e) => onChange(e.target.value)} className="input-x !py-2 !text-sm" />
+    </>
+  );
+}
 
 function PropsEditor({ block, onChange }) {
   const fields = FIELDS[block.type] || [];
@@ -410,7 +421,9 @@ function PropsEditor({ block, onChange }) {
       {fields.map((f) => (
         <label key={f.k} className="block">
           <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">{f.label}</div>
-          {f.type === "textarea" ? (
+          {f.type === "textarea" && f.format ? (
+            <FormattedTextareaField f={f} value={v[f.k] || ""} onChange={(val) => onChange({ [f.k]: val })} />
+          ) : f.type === "textarea" ? (
             <textarea rows={f.rows || 4} value={v[f.k] || ""} onChange={(e) => onChange({ [f.k]: e.target.value })} className="input-x !py-2 !text-sm" />
           ) : f.type === "select" ? (
             <select value={v[f.k] || ""} onChange={(e) => onChange({ [f.k]: e.target.value })} className="input-x !py-2 !text-sm">

@@ -3,6 +3,7 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
 import { useAuth, startLogin } from "../auth";
 import { toast } from "sonner";
+import { renderRich } from "../lib/richText";
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }).toUpperCase();
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -38,6 +39,7 @@ export default function EventDetail() {
     () => event?.waves?.find((w) => w.wave_id === waveId) || null,
     [event, waveId]
   );
+  const soldOut = !special && !!event && event.waves.length > 0 && event.waves.every((w) => !w.is_active || w.available <= 0);
   const unitPrice = special ? special.price_ron : (selectedWave?.price_ron || 0);
   const total = useMemo(() => unitPrice * qty, [unitPrice, qty]);
   const qtyOptions = useMemo(() => {
@@ -81,12 +83,12 @@ export default function EventDetail() {
           <img src={event.image_url} alt={event.title} className="w-full h-full object-cover" />
         </div>
         <div className="mt-8 font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-400">
-          {fmtDate(event.starts_at)} · Doors {fmtTime(event.doors_open_at || event.starts_at)} · {event.venue}
+          {fmtDate(event.starts_at)} · Doors {fmtTime(event.doors_open_at || event.starts_at)} · {[event.venue, event.city].filter(Boolean).join(", ")}
         </div>
         <h1 data-testid="event-title" className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-4 leading-none">
           {event.title}
         </h1>
-        <p className="mt-8 text-zinc-300 text-lg leading-relaxed max-w-2xl">{event.description}</p>
+        <div className="mt-8">{renderRich(event.description, { paraClassName: "text-zinc-300 text-lg leading-relaxed max-w-2xl mt-4 first:mt-0" })}</div>
       </div>
 
       <div className="md:col-span-5">
@@ -100,57 +102,67 @@ export default function EventDetail() {
             </div>
           )}
 
-          <div className="mt-6 space-y-3">
-            {!special && event.waves.map((w) => (
-              <button key={w.wave_id} onClick={() => setWaveId(w.wave_id)} data-testid={`wave-${w.tier}`}
-                      disabled={!w.is_active || w.available <= 0}
-                      className={`w-full text-left border p-4 transition-colors ${waveId===w.wave_id ? "border-white bg-white/5" : "border-white/15"} ${(!w.is_active || w.available<=0) ? "opacity-40 cursor-not-allowed" : "hover:border-white"}`}>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-display uppercase font-bold">{w.name}</div>
-                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1">
-                      {w.available > 0 ? `${w.available} available` : "SOLD OUT"}
+          {soldOut ? (
+            <div data-testid="sold-out-message" className="mt-6 border border-white/15 bg-white/5 p-6 text-center">
+              <div className="font-display text-2xl uppercase font-bold tracking-tight">
+                {event.sold_out_message || "Sold Out"}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="mt-6 space-y-3">
+                {!special && event.waves.map((w) => (
+                  <button key={w.wave_id} onClick={() => setWaveId(w.wave_id)} data-testid={`wave-${w.tier}`}
+                          disabled={!w.is_active || w.available <= 0}
+                          className={`w-full text-left border p-4 transition-colors ${waveId===w.wave_id ? "border-white bg-white/5" : "border-white/15"} ${(!w.is_active || w.available<=0) ? "opacity-40 cursor-not-allowed" : "hover:border-white"}`}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-display uppercase font-bold">{w.name}</div>
+                        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1">
+                          {w.available > 0 ? `${w.available} available` : "SOLD OUT"}
+                        </div>
+                      </div>
+                      <div className="font-mono-x">{w.price_ron.toFixed(2)} RON</div>
                     </div>
-                  </div>
-                  <div className="font-mono-x">{w.price_ron.toFixed(2)} RON</div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-6 grid grid-cols-2 gap-3">
+                <label className="col-span-1">
+                  <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Quantity</div>
+                  <select value={qty} onChange={(e) => setQty(Number(e.target.value))} data-testid="qty-select" className="input-x">
+                    {qtyOptions.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+                {!special && (
+                  <label className="col-span-1">
+                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Discount code</div>
+                    <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="CODE" data-testid="discount-input" className="input-x uppercase" />
+                  </label>
+                )}
+              </div>
+
+              <div className="mt-6 hairline pt-6">
+                <div className="flex justify-between font-mono-x text-sm">
+                  <span className="text-zinc-500 uppercase tracking-[0.2em] text-xs">Subtotal</span>
+                  <span>{total.toFixed(2)} RON</span>
                 </div>
+                <div className="flex justify-between mt-3 items-center">
+                  <span className="font-mono-x uppercase text-xs tracking-[0.2em] text-zinc-400">Total</span>
+                  <span className="font-display text-3xl font-bold">{total.toFixed(2)} RON</span>
+                </div>
+              </div>
+
+              <button onClick={reserve} disabled={busy} data-testid="reserve-btn" className="btn-accent w-full mt-6">
+                {busy ? "HOLDING…" : "HOLD & CHECKOUT · 10 MIN"}
               </button>
-            ))}
-          </div>
-
-          <div className="mt-6 grid grid-cols-2 gap-3">
-            <label className="col-span-1">
-              <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Quantity</div>
-              <select value={qty} onChange={(e) => setQty(Number(e.target.value))} data-testid="qty-select" className="input-x">
-                {qtyOptions.map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </label>
-            {!special && (
-              <label className="col-span-1">
-                <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Discount code</div>
-                <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="CODE" data-testid="discount-input" className="input-x uppercase" />
-              </label>
-            )}
-          </div>
-
-          <div className="mt-6 hairline pt-6">
-            <div className="flex justify-between font-mono-x text-sm">
-              <span className="text-zinc-500 uppercase tracking-[0.2em] text-xs">Subtotal</span>
-              <span>{total.toFixed(2)} RON</span>
-            </div>
-            <div className="flex justify-between mt-3 items-center">
-              <span className="font-mono-x uppercase text-xs tracking-[0.2em] text-zinc-400">Total</span>
-              <span className="font-display text-3xl font-bold">{total.toFixed(2)} RON</span>
-            </div>
-          </div>
-
-          <button onClick={reserve} disabled={busy} data-testid="reserve-btn" className="btn-accent w-full mt-6">
-            {busy ? "HOLDING…" : "HOLD & CHECKOUT · 10 MIN"}
-          </button>
-          <p className="mt-4 text-xs text-zinc-500 leading-relaxed">
-            Tickets are held for 10 minutes while you pay via Stripe. All sales final unless the event is cancelled.
-            Max {event.max_tickets_per_user} tickets per person.
-          </p>
+              <p className="mt-4 text-xs text-zinc-500 leading-relaxed">
+                Tickets are held for 10 minutes while you pay via Stripe. All sales final unless the event is cancelled.
+                Max {event.max_tickets_per_user} tickets per person.
+              </p>
+            </>
+          )}
         </div>
       </div>
     </div>

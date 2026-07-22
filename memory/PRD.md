@@ -1,4 +1,4 @@
-# Umbra Collective — PRD
+# Supersanity — PRD
 
 ## Original problem statement
 Website + ticketing platform for a music/performance collective. Public site: home, mission, archive, events, gallery, artists, contact. Ticketing engine with Google OAuth, staged sale waves, discount codes, invite-only special links, 10-min reserve-then-confirm hold, RON via Stripe, QR tickets in "My Tickets", door scanner (first-scan-wins, offline-capable), auto Romanian VAT invoices, admin dashboard, door-staff role.

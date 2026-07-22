@@ -4,50 +4,9 @@ import { QRCodeCanvas } from "qrcode.react";
 import DOMPurify from "dompurify";
 import { http } from "../../api";
 import { toast } from "sonner";
+import { renderRich, renderInline } from "../../lib/richText";
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
-
-/** Very light markdown-ish renderer: supports #/##/### headings, blank-line paragraphs, **bold**, [text](url). */
-function renderRich(md) {
-  if (!md) return null;
-  const lines = String(md).split(/\n/);
-  const nodes = [];
-  let paraBuf = [];
-  const flushPara = () => {
-    if (paraBuf.length === 0) return;
-    const text = paraBuf.join(" ");
-    nodes.push(<p key={`p${nodes.length}`} className="text-zinc-300 text-lg leading-relaxed max-w-2xl mt-4">{renderInline(text)}</p>);
-    paraBuf = [];
-  };
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (line === "") { flushPara(); continue; }
-    if (line.startsWith("### ")) { flushPara(); nodes.push(<h3 key={`h${nodes.length}`} className="font-display text-2xl md:text-3xl uppercase font-bold tracking-tight mt-8">{renderInline(line.slice(4))}</h3>); continue; }
-    if (line.startsWith("## ")) { flushPara(); nodes.push(<h2 key={`h${nodes.length}`} className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mt-10">{renderInline(line.slice(3))}</h2>); continue; }
-    if (line.startsWith("# ")) { flushPara(); nodes.push(<h1 key={`h${nodes.length}`} className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-4 leading-[0.9]">{renderInline(line.slice(2))}</h1>); continue; }
-    if (/^[A-Z][A-Z0-9 ·\-—/]{2,}$/.test(line) && paraBuf.length === 0) {
-      nodes.push(<div key={`eb${nodes.length}`} className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500 mt-6">{line}</div>);
-      continue;
-    }
-    paraBuf.push(line);
-  }
-  flushPara();
-  return nodes;
-}
-function renderInline(t) {
-  const parts = [];
-  let i = 0;
-  const re = /\*\*(.+?)\*\*|\[(.+?)\]\((.+?)\)/g;
-  let m;
-  while ((m = re.exec(t))) {
-    if (m.index > i) parts.push(t.slice(i, m.index));
-    if (m[1]) parts.push(<strong key={i} className="text-white">{m[1]}</strong>);
-    else if (m[2]) parts.push(<a key={i} href={m[3]} className="underline underline-offset-4 hover:text-white">{m[2]}</a>);
-    i = m.index + m[0].length;
-  }
-  if (i < t.length) parts.push(t.slice(i));
-  return parts;
-}
 
 /** Tailwind-safe aspect utility from a friendly ratio label. */
 const ASPECTS = {
@@ -82,7 +41,7 @@ function Hero({ props }) {
         <div className={`flex flex-col ${align}`}>
           {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-400 mb-6">{props.eyebrow}</div>}
           {props.heading && <h1 className="font-display text-[10vw] md:text-[7vw] leading-[0.85] uppercase tracking-tighter font-black max-w-6xl">{props.heading}</h1>}
-          {props.body && <p className="mt-8 max-w-xl text-zinc-300 leading-relaxed text-lg">{props.body}</p>}
+          {props.body && <p className="mt-8 max-w-xl text-zinc-300 leading-relaxed text-lg">{renderInline(props.body)}</p>}
           <div className="mt-8 flex flex-wrap gap-3">
             {props.cta_label && <Link to={props.cta_href || "#"} className={props.cta_style === "accent" ? "btn-accent" : "btn-primary"}>{props.cta_label}</Link>}
             {props.second_cta_label && <Link to={props.second_cta_href || "#"} className="btn-primary">{props.second_cta_label}</Link>}
@@ -148,7 +107,7 @@ function EventsGrid({ props }) {
           <Link key={e.event_id} to={`/events/${e.slug}`} className="group block border border-white/10 bg-[#0F0F0F] hover:border-white transition-colors">
             <div className="aspect-[16/10] overflow-hidden"><img src={e.image_url} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" /></div>
             <div className="p-6">
-              <div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">{fmtDate(e.starts_at)} · {e.venue}</div>
+              <div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">{fmtDate(e.starts_at)} · {[e.venue, e.city].filter(Boolean).join(", ")}</div>
               <div className="font-display text-3xl uppercase tracking-tighter font-bold mt-3">{e.title}</div>
             </div>
           </Link>
@@ -185,7 +144,13 @@ function ArtistsGrid({ props }) {
 }
 
 function Marquee({ props }) {
-  const items = (props.items || []).length ? props.items : ["ITEM"];
+  const [events, setEvents] = useState([]);
+  useEffect(() => { http.get("/events?upcoming=true").then((r) => setEvents(r.data)).catch(() => {}); }, []);
+  // Live upcoming events drive the marquee; the configured `items` are only a
+  // fallback for when there are none, not the primary source.
+  const items = events.length
+    ? events.map((e) => (e.city ? `${e.title} · ${e.city}` : e.title))
+    : (props.items || []).length ? props.items : ["NO UPCOMING EVENTS"];
   return (
     <section className="hairline-b hairline py-6 overflow-hidden">
       <div className="marquee">
@@ -206,7 +171,7 @@ function CTABanner({ props }) {
         <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">CTA</div>
         <div>
           {props.heading && <p className="font-display text-3xl md:text-5xl uppercase tracking-tighter leading-tight">{props.heading}</p>}
-          {props.body && <p className="mt-4 text-zinc-400 max-w-lg">{props.body}</p>}
+          {props.body && <p className="mt-4 text-zinc-400 max-w-lg">{renderInline(props.body)}</p>}
           {props.cta_label && <Link to={props.cta_href || "#"} className="mt-8 inline-block btn-primary">{props.cta_label}</Link>}
         </div>
       </div>
@@ -255,7 +220,7 @@ function Newsletter({ props }) {
   return (
     <section className="py-16 hairline"><Container className="max-w-[900px]">
       {props.heading && <h2 className="font-display text-3xl md:text-4xl uppercase font-bold tracking-tighter">{props.heading}</h2>}
-      {props.body && <p className="text-zinc-400 mt-3">{props.body}</p>}
+      {props.body && <p className="text-zinc-400 mt-3">{renderInline(props.body)}</p>}
       <form onSubmit={submit} className="mt-6 flex gap-3 flex-wrap">
         <input required type="email" placeholder="you@domain.com" value={email} onChange={(e) => setEmail(e.target.value)} className="input-x flex-1 min-w-[240px]" data-testid="newsletter-email" />
         <button disabled={busy} className="btn-accent" data-testid="newsletter-submit">{busy ? "…" : (props.cta_label || "Subscribe")}</button>
@@ -304,7 +269,7 @@ function Split({ props }) {
         <div>
           {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">{props.eyebrow}</div>}
           {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
-          {props.body && <p className="mt-4 text-zinc-300 leading-relaxed">{props.body}</p>}
+          {props.body && <p className="mt-4 text-zinc-300 leading-relaxed">{renderInline(props.body)}</p>}
           {props.cta_label && <Link to={props.cta_href || "#"} className="mt-6 inline-block btn-primary">{props.cta_label}</Link>}
         </div>
       </div>

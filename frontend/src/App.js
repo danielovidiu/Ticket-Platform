@@ -25,14 +25,6 @@ function AppRouter() {
   if (loc.hash?.includes("session_id=")) {
     return <AuthCallback />;
   }
-  // The CMS editor is a full-screen chrome, no Layout wrapper.
-  if (loc.pathname.startsWith("/cms")) {
-    return (
-      <Routes>
-        <Route path="/cms" element={<CMSEditor />} />
-      </Routes>
-    );
-  }
   return (
     <Layout>
       <Routes>
@@ -52,6 +44,7 @@ function AppRouter() {
         <Route path="/gallery" element={<Gallery />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/scan" element={<Scan />} />
+        <Route path="/cms" element={<CMSEditor />} />
       </Routes>
     </Layout>
   );

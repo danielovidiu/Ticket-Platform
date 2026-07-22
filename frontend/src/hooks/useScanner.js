@@ -11,7 +11,7 @@ import { http } from "../api";
  * cookie). Storing them in localStorage on a staff device is intentional
  * and required for the "works even with bad venue signal" requirement.
  */
-const OFFLINE_KEY = "umbra_scan_queue";
+const OFFLINE_KEY = "supersanity_scan_queue";
 
 export function useOfflineScanQueue() {
   useEffect(() => {

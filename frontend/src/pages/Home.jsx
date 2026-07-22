@@ -37,7 +37,7 @@ export default function Home() {
             A collective for<br/>the ones after<br/><span className="text-[color:var(--accent)]">midnight.</span>
           </h1>
           <p className="mt-10 max-w-xl text-zinc-300 leading-relaxed text-lg">
-            Umbra programmes music and performance with its own artists and its own box office. No promoter. No middlemen. One door.
+            Supersanity programmes music and performance with its own artists and its own box office. No promoter. No middlemen. One door.
           </p>
           <div className="mt-10 flex flex-wrap gap-4">
             <Link to="/events" data-testid="hero-events-btn" className="btn-accent inline-flex items-center gap-2">Buy Tickets <ArrowUpRight size={16} /></Link>

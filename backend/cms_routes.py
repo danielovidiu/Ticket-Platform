@@ -315,7 +315,7 @@ def _seed_home_blocks():
         _bk("hero",
             eyebrow="BUCHAREST · EST. 2019 · MUSIC · PERFORMANCE",
             heading="A collective for the ones after midnight.",
-            body="Umbra programmes music and performance with its own artists and its own box office. No promoter. No middlemen. One door.",
+            body="Supersanity programmes music and performance with its own artists and its own box office. No promoter. No middlemen. One door.",
             image_url="https://images.unsplash.com/photo-1545128485-c400e7702796?crop=entropy&cs=srgb&fm=jpg&q=85",
             cta_label="Buy Tickets",
             cta_href="/events",
@@ -334,7 +334,7 @@ def _seed_home_blocks():
 def _seed_mission_blocks():
     return [
         _bk("rich_text",
-            content="MANIFESTO · 01\n\n# We build the room, the sound, and the door.\n\nUmbra is a music and performance collective in Bucharest. We programme our own nights, work with our own artists, and run our own box office. No promoter. No middleman.\n\nThe site you're on is the storefront. The ticketing engine behind it is ours. Every ticket sold, every scan at the door, every invoice — it all lands with us.\n\nWe keep the money inside the work. What comes in from the door pays the artists, the crew, the room, the light, the sound. What's left builds the next project.\n\n## After midnight, the collective owns its whole funnel."),
+            content="MANIFESTO · 01\n\n# We build the room, the sound, and the door.\n\nSupersanity is a music and performance collective in Bucharest. We programme our own nights, work with our own artists, and run our own box office. No promoter. No middleman.\n\nThe site you're on is the storefront. The ticketing engine behind it is ours. Every ticket sold, every scan at the door, every invoice — it all lands with us.\n\nWe keep the money inside the work. What comes in from the door pays the artists, the crew, the room, the light, the sound. What's left builds the next project.\n\n## After midnight, the collective owns its whole funnel."),
         _bk("split", direction="image-right",
             image_url="https://images.unsplash.com/photo-1593408995262-1d8933c37afc?crop=entropy&cs=srgb&fm=jpg&q=85",
             eyebrow="Approach",
@@ -349,7 +349,7 @@ def _seed_mission_blocks():
 def _seed_contact_blocks():
     return [
         _bk("rich_text",
-            content="REACH US\n\n# Contact\n\nbookings@umbra.collective — bookings\npress@umbra.collective — press\nStudio, Bucharest, RO"),
+            content="REACH US\n\n# Contact\n\nbookings@supersanity.collective — bookings\npress@supersanity.collective — press\nStudio, Bucharest, RO"),
         _bk("contact_form", heading="Say hello", success_message="Message sent. We'll be in touch."),
         _bk("newsletter", heading="No promoter. Just us.", body="Two emails a season, tops.", cta_label="Subscribe"),
     ]

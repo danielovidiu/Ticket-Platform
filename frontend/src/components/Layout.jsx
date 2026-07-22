@@ -25,7 +25,7 @@ const Header = ({ cmsNav }) => {
     <header className="sticky top-0 z-40 bg-[color:var(--bg,#050505)] hairline-b">
       <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-5 flex items-center justify-between">
         <Link to="/" data-testid="logo-link" className="font-display text-xl md:text-2xl font-bold tracking-tighter uppercase">
-          UMBRA<span className="text-[color:var(--accent)]">/</span>COLLECTIVE
+          SUPERSANITY
         </Link>
         <nav className="hidden lg:flex items-center gap-5 font-mono-x text-[11px] uppercase tracking-[0.18em]">
           {nav.map((n) => (
@@ -53,7 +53,7 @@ const Header = ({ cmsNav }) => {
         </button>
       </div>
       {open && (
-        <div className="md:hidden hairline-b bg-[color:var(--bg,#050505)]">
+        <div className="lg:hidden hairline-b bg-[color:var(--bg,#050505)]">
           <div className="px-6 py-6 flex flex-col gap-4 font-mono-x uppercase text-sm">
             {nav.map((n) => <NavLink key={n.to} to={n.to} onClick={() => setOpen(false)} className="text-zinc-300">{n.label}</NavLink>)}
             {user ? (
@@ -78,7 +78,7 @@ const Footer = () => (
   <footer className="hairline mt-24">
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-14 grid grid-cols-1 md:grid-cols-4 gap-10">
       <div>
-        <div className="font-display text-2xl uppercase tracking-tighter">UMBRA<span className="text-[color:var(--accent)]">/</span>COLLECTIVE</div>
+        <div className="font-display text-2xl uppercase tracking-tighter">SUPERSANITY</div>
         <p className="mt-4 text-zinc-400 text-sm max-w-xs">A Bucharest music &amp; performance collective. Programming, artists, box office — one door.</p>
       </div>
       <div>
@@ -91,9 +91,9 @@ const Footer = () => (
       </div>
       <div>
         <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-500 mb-4">Contact</div>
-        <p className="text-zinc-300 text-sm">bookings@umbra.collective</p>
+        <p className="text-zinc-300 text-sm">bookings@supersanity.collective</p>
       </div>
-      <div className="font-mono-x text-xs text-zinc-500">© {new Date().getFullYear()} Umbra Collective</div>
+      <div className="font-mono-x text-xs text-zinc-500">© {new Date().getFullYear()} Supersanity</div>
     </div>
   </footer>
 );
@@ -104,14 +104,16 @@ export default function Layout({ children }) {
   useEffect(() => {
     http.get("/cms/nav").then((r) => setCmsNav(r.data)).catch(() => setCmsNav([]));
   }, []);
-  const bare = location.pathname === "/scan";
-  if (bare) return <>{children}</>;
+  // Scan and CMS are full-screen tools — the top nav still needs to stay
+  // reachable, but a page footer below a camera view or the CMS editor
+  // canvas doesn't make sense.
+  const noFooter = location.pathname === "/scan" || location.pathname === "/cms";
   return (
     <div className="min-h-screen flex flex-col">
       <div className="grain-overlay" />
       <Header cmsNav={cmsNav} />
-      <main className="flex-1">{children}</main>
-      <Footer />
+      <main className="flex-1 min-h-0">{children}</main>
+      {!noFooter && <Footer />}
     </div>
   );
 }

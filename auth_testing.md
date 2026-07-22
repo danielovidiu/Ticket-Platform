@@ -1,4 +1,4 @@
-# Auth Testing Playbook (Emergent Auth) — Umbra Collective
+# Auth Testing Playbook (Emergent Auth) — Supersanity
 
 ## Step 1: Create test admin + session
 ```

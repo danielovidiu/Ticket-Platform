@@ -1,5 +1,5 @@
 """
-Umbra Collective — Backend regression + iteration-2 tests
+Supersanity — Backend regression + iteration-2 tests
 Covers:
   - Wave-decrement regression ($elemMatch fix)
   - Sold-out edge (400, no decrement)

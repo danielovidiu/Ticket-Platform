@@ -1,4 +1,4 @@
-# CMS Guide — Umbra Collective
+# CMS Guide — Supersanity
 
 ## What you get
 - **/cms** — full visual editor (admin or editor role required)

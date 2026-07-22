@@ -8,7 +8,7 @@ export default function Mission() {
         We build the room, the sound, and the door.
       </h1>
       <div className="mt-12 space-y-8 text-zinc-300 text-lg leading-relaxed max-w-2xl">
-        <p>Umbra is a music and performance collective in Bucharest. We programme our own nights, work with our own artists, and run our own box office. No promoter. No middleman.</p>
+        <p>Supersanity is a music and performance collective in Bucharest. We programme our own nights, work with our own artists, and run our own box office. No promoter. No middleman.</p>
         <p>The site you're on is the storefront. The ticketing engine behind it is ours. Every ticket sold, every scan at the door, every invoice — it all lands with us.</p>
         <p>We keep the money inside the work. What comes in from the door pays the artists, the crew, the room, the light, the sound. What's left builds the next project.</p>
         <p className="font-display text-2xl uppercase tracking-tight text-white">

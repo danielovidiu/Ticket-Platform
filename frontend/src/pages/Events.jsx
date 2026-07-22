@@ -38,7 +38,7 @@ export default function Events() {
             <div className="col-span-12 md:col-span-6 font-display text-2xl md:text-4xl uppercase tracking-tighter font-bold group-hover:text-[color:var(--accent)]">
               {e.title}
             </div>
-            <div className="col-span-6 md:col-span-2 font-mono-x text-xs text-zinc-400 uppercase">{e.venue}</div>
+            <div className="col-span-6 md:col-span-2 font-mono-x text-xs text-zinc-400 uppercase">{[e.venue, e.city].filter(Boolean).join(", ")}</div>
             <div className="col-span-6 md:col-span-2 font-mono-x text-xs text-right text-zinc-300">
               {tab === "upcoming" ? (e.total_available > 0 ? `${e.total_available} LEFT` : "SOLD OUT") : "ARCHIVED"}
             </div>

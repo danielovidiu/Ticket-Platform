@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { http } from "../api";
+import { renderInline } from "../lib/richText";
 
 export default function Archive() {
   const [projects, setProjects] = useState([]);
@@ -21,7 +22,7 @@ export default function Archive() {
             <div className="p-6">
               <div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">{p.year}</div>
               <div className="font-display text-2xl uppercase font-bold tracking-tighter mt-2">{p.title}</div>
-              <p className="text-zinc-400 mt-3 text-sm">{p.description}</p>
+              <p className="text-zinc-400 mt-3 text-sm">{renderInline(p.description)}</p>
             </div>
           </div>
         ))}
@@ -35,7 +36,7 @@ export default function Archive() {
               <div key={e.event_id} className="grid grid-cols-12 gap-4 py-6">
                 <div className="col-span-3 font-mono-x text-xs uppercase text-zinc-400">{new Date(e.starts_at).toLocaleDateString("en-GB")}</div>
                 <div className="col-span-7 font-display text-xl uppercase font-bold tracking-tight">{e.title}</div>
-                <div className="col-span-2 font-mono-x text-xs text-right text-zinc-500">{e.venue}</div>
+                <div className="col-span-2 font-mono-x text-xs text-right text-zinc-500">{[e.venue, e.city].filter(Boolean).join(", ")}</div>
               </div>
             ))}
           </div>

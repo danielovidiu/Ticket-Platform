@@ -1,5 +1,5 @@
 """
-Umbra Collective - Ticketing platform backend
+Supersanity - Ticketing platform backend
 FastAPI + MongoDB + Emergent Auth + Stripe Checkout
 """
 import io
@@ -64,11 +64,11 @@ INITIAL_ADMIN_EMAIL = os.environ.get("INITIAL_ADMIN_EMAIL", "").strip().lower()
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
-app = FastAPI(title="Umbra Collective API")
+app = FastAPI(title="Supersanity API")
 api = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("umbra")
+logger = logging.getLogger("supersanity")
 
 # ---------- Utility ----------
 
@@ -179,6 +179,7 @@ class EventIn(BaseModel):
     slug: str
     description: str = ""
     venue: str = ""
+    city: str = ""
     starts_at: str
     ends_at: Optional[str] = None
     doors_open_at: Optional[str] = None
@@ -186,6 +187,7 @@ class EventIn(BaseModel):
     artist_ids: List[str] = []
     max_tickets_per_user: int = 4
     is_published: bool = False
+    sold_out_message: str = ""
     waves: List[WaveIn] = []
 
 
@@ -319,10 +321,20 @@ async def list_projects():
 async def list_events(upcoming: bool = True):
     now_iso = now_utc().isoformat()
     query = {"is_published": True}
+    # An event stays "upcoming" for its whole duration, not just until it starts —
+    # judged by ends_at, falling back to starts_at only when no end time is set.
     if upcoming:
-        query["starts_at"] = {"$gte": now_iso}
+        query["$or"] = [
+            {"ends_at": {"$gte": now_iso}},
+            {"ends_at": None, "starts_at": {"$gte": now_iso}},
+            {"ends_at": {"$exists": False}, "starts_at": {"$gte": now_iso}},
+        ]
     else:
-        query["starts_at"] = {"$lt": now_iso}
+        query["$or"] = [
+            {"ends_at": {"$lt": now_iso}},
+            {"ends_at": None, "starts_at": {"$lt": now_iso}},
+            {"ends_at": {"$exists": False}, "starts_at": {"$lt": now_iso}},
+        ]
     items = await db.events.find(query, {"_id": 0}).sort("starts_at", 1 if upcoming else -1).to_list(200)
     # Compute availability per event
     for e in items:
@@ -781,7 +793,7 @@ async def invoice_pdf(invoice_id: str, user=Depends(get_current_user)):
     W, H = A4
     c.setFillColor(colors.black)
     c.setFont("Helvetica-Bold", 22)
-    c.drawString(40, H - 60, "UMBRA COLLECTIVE")
+    c.drawString(40, H - 60, "SUPERSANITY")
     c.setFont("Helvetica", 9)
     c.drawString(40, H - 75, "Bucharest, Romania · VAT compliant invoice")
     c.setFont("Helvetica-Bold", 14)
@@ -790,7 +802,8 @@ async def invoice_pdf(invoice_id: str, user=Depends(get_current_user)):
     c.drawString(40, H - 138, f"Issued: {inv['issued_at'][:19].replace('T', ' ')} UTC")
     c.drawString(40, H - 155, f"Bill to: {buyer.get('name', '')} <{buyer.get('email', '')}>")
     c.drawString(40, H - 172, f"Event: {ev.get('title', '')}")
-    c.drawString(40, H - 189, f"Venue: {ev.get('venue', '')}")
+    venue_line = ", ".join(filter(None, [ev.get("venue", ""), ev.get("city", "")]))
+    c.drawString(40, H - 189, f"Venue: {venue_line}")
 
     y = H - 240
     c.setFont("Helvetica-Bold", 10)
