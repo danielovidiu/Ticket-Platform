@@ -3,7 +3,10 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
 import { useAuth, startLogin } from "../auth";
 import { toast } from "sonner";
+import { Play } from "lucide-react";
 import { renderRich } from "../lib/richText";
+import { mediaUrl } from "../lib/media";
+import { Lightbox } from "../components/ui/lightbox";
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }).toUpperCase();
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -19,6 +22,7 @@ export default function EventDetail() {
   const [code, setCode] = useState("");
   const [special, setSpecial] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [lbIndex, setLbIndex] = useState(null);
 
   const specialToken = search.get("invite") || null;
 
@@ -89,6 +93,38 @@ export default function EventDetail() {
           {event.title}
         </h1>
         <div className="mt-8">{renderRich(event.description, { paraClassName: "text-zinc-300 text-lg leading-relaxed max-w-2xl mt-4 first:mt-0" })}</div>
+
+        {event.gallery && event.gallery.length > 0 && (
+          <div className="mt-12">
+            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500 mb-4">Album · {event.gallery.length}</div>
+            <div className="columns-2 sm:columns-3 gap-2">
+              {event.gallery.map((g, i) => (
+                <button
+                  key={g.gallery_id}
+                  onClick={() => setLbIndex(i)}
+                  data-testid={`album-thumb-${i}`}
+                  className="mb-2 block w-full break-inside-avoid relative group"
+                >
+                  {g.media_type === "video" ? (
+                    <>
+                      <video src={mediaUrl(g.image_url)} className="w-full object-cover" muted preload="metadata" />
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/10 transition-colors">
+                        <Play size={28} className="text-white" fill="white" />
+                      </div>
+                    </>
+                  ) : (
+                    <img
+                      src={mediaUrl(g.thumbnail_url || g.image_url)}
+                      alt={g.caption || ""}
+                      loading="lazy"
+                      className="w-full object-cover group-hover:opacity-80 transition-opacity"
+                    />
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="md:col-span-5">
@@ -165,6 +201,15 @@ export default function EventDetail() {
           )}
         </div>
       </div>
+
+      {lbIndex !== null && (
+        <Lightbox
+          items={event.gallery.map((g) => ({ url: g.image_url, thumbnail_url: g.thumbnail_url, media_type: g.media_type, caption: g.caption }))}
+          index={lbIndex}
+          onClose={() => setLbIndex(null)}
+          onIndexChange={setLbIndex}
+        />
+      )}
     </div>
   );
 }

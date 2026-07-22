@@ -4,6 +4,9 @@
 .idea/
 .vscode/
 
+# User-uploaded media (runtime data, not source — same treatment as the DB)
+backend/uploads/
+
 # Dependencies
 node_modules/
 /node_modules

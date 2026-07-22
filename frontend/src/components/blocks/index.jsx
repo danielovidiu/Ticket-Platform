@@ -5,6 +5,9 @@ import DOMPurify from "dompurify";
 import { http } from "../../api";
 import { toast } from "sonner";
 import { renderRich, renderInline } from "../../lib/richText";
+import { mediaUrl } from "../../lib/media";
+import { Lightbox } from "../ui/lightbox";
+import { Camera } from "lucide-react";
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 
@@ -91,8 +94,15 @@ function GalleryGrid({ props }) {
 
 function EventsGrid({ props }) {
   const [events, setEvents] = useState([]);
+  const [active, setActive] = useState(null); // { items, index }
   useEffect(() => { http.get("/events?upcoming=true").then((r) => setEvents(r.data.slice(0, props.limit || 4))).catch(() => {}); }, [props.limit]);
   const cols = props.layout === "grid-3" ? "md:grid-cols-3" : props.layout === "grid-1" ? "" : "md:grid-cols-2";
+
+  const openAlbum = (e) => {
+    const items = e.gallery.map((g) => ({ url: g.image_url, thumbnail_url: g.thumbnail_url, media_type: g.media_type, caption: g.caption }));
+    setActive({ items, index: 0 });
+  };
+
   return (
     <section className="py-16"><Container>
       <div className="flex items-end justify-between mb-10">
@@ -102,18 +112,45 @@ function EventsGrid({ props }) {
         </div>
         <Link to="/events" className="btn-primary hidden md:inline">All events</Link>
       </div>
-      <div className={`grid grid-cols-1 ${cols} gap-6`}>
-        {events.map((e) => (
-          <Link key={e.event_id} to={`/events/${e.slug}`} className="group block border border-white/10 bg-[#0F0F0F] hover:border-white transition-colors">
-            <div className="aspect-[16/10] overflow-hidden"><img src={e.image_url} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" /></div>
-            <div className="p-6">
-              <div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">{fmtDate(e.starts_at)} · {[e.venue, e.city].filter(Boolean).join(", ")}</div>
-              <div className="font-display text-3xl uppercase tracking-tighter font-bold mt-3">{e.title}</div>
+      <div className={`grid grid-cols-1 ${cols} gap-6 items-stretch`}>
+        {events.map((e) => {
+          const hasAlbum = e.gallery && e.gallery.length > 0;
+          const cover = hasAlbum ? e.gallery[0] : null;
+          return (
+            <div key={e.event_id} className="group flex flex-col h-full border border-white/10 bg-[#0F0F0F] hover:border-white transition-colors">
+              {hasAlbum ? (
+                <button onClick={() => openAlbum(e)} data-testid={`events-grid-cover-${e.slug}`} className="aspect-[16/10] overflow-hidden relative block w-full text-left shrink-0">
+                  {cover.media_type === "video" ? (
+                    <video src={mediaUrl(cover.image_url)} className="w-full h-full object-cover" muted preload="metadata" />
+                  ) : (
+                    <img src={mediaUrl(cover.thumbnail_url || cover.image_url)} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                  )}
+                  <div className="absolute bottom-2 right-2 bg-black/70 px-2 py-1 flex items-center gap-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-white">
+                    <Camera size={11} /> {e.gallery.length}
+                  </div>
+                </button>
+              ) : (
+                <Link to={`/events/${e.slug}`} className="aspect-[16/10] overflow-hidden block shrink-0">
+                  <img src={e.image_url} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                </Link>
+              )}
+              <Link to={`/events/${e.slug}`} className="p-6 flex-1 flex flex-col justify-center">
+                <div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">{fmtDate(e.starts_at)} · {[e.venue, e.city].filter(Boolean).join(", ")}</div>
+                <div className="font-display text-3xl uppercase tracking-tighter font-bold mt-3">{e.title}</div>
+              </Link>
             </div>
-          </Link>
-        ))}
+          );
+        })}
         {events.length === 0 && <div className="col-span-full border border-dashed border-white/10 p-10 text-center text-zinc-500 font-mono-x text-xs uppercase tracking-[0.3em]">No upcoming events</div>}
       </div>
+      {active && (
+        <Lightbox
+          items={active.items}
+          index={active.index}
+          onClose={() => setActive(null)}
+          onIndexChange={(i) => setActive({ ...active, index: i })}
+        />
+      )}
     </Container></section>
   );
 }

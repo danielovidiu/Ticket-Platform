@@ -14,10 +14,12 @@ from typing import List, Optional
 import httpx
 import qrcode
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, Cookie, Header
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, Cookie, Header, UploadFile, File
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
+from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
@@ -66,6 +68,14 @@ db = client[DB_NAME]
 
 app = FastAPI(title="Supersanity API")
 api = APIRouter(prefix="/api")
+
+UPLOAD_DIR = ROOT_DIR / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
+IMAGE_CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
+VIDEO_CONTENT_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov"}
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("supersanity")
@@ -336,9 +346,16 @@ async def list_events(upcoming: bool = True):
             {"ends_at": {"$exists": False}, "starts_at": {"$lt": now_iso}},
         ]
     items = await db.events.find(query, {"_id": 0}).sort("starts_at", 1 if upcoming else -1).to_list(200)
-    # Compute availability per event
+    # Batch-fetch albums for every listed event in one query instead of N+1,
+    # so cards can show a cover photo without a per-event round trip.
+    event_ids = [e["event_id"] for e in items]
+    gallery_items = await db.gallery.find({"event_id": {"$in": event_ids}}, {"_id": 0}).sort("created_at", 1).to_list(2000)
+    gallery_by_event = {}
+    for g in gallery_items:
+        gallery_by_event.setdefault(g["event_id"], []).append(g)
     for e in items:
         e["total_available"] = sum(max(0, w.get("available", w.get("capacity", 0))) for w in e.get("waves", []))
+        e["gallery"] = gallery_by_event.get(e["event_id"], [])
     return items
 
 
@@ -354,12 +371,44 @@ async def get_event(slug: str):
         w["available"] = max(0, w.get("available", w.get("capacity", 0)))
         active_waves.append(w)
     e["waves"] = active_waves
+    e["gallery"] = await db.gallery.find({"event_id": e["event_id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
     return e
 
 
 @api.get("/gallery")
 async def gallery():
-    return await db.gallery.find({}, {"_id": 0}).to_list(200)
+    # Sitewide "Documentation" gallery only — event albums (event_id set) live
+    # on their own event page instead.
+    return await db.gallery.find({"event_id": None}, {"_id": 0}).to_list(200)
+
+
+@api.get("/gallery/clusters")
+async def gallery_clusters():
+    """Powers the public Gallery page: standalone photos plus one cover tile
+    per event album, so 100s of event photos don't flood the main grid."""
+    standalone = await db.gallery.find({"event_id": None}, {"_id": 0}).sort("created_at", 1).to_list(200)
+
+    event_items = await db.gallery.find({"event_id": {"$ne": None}}, {"_id": 0}).sort("created_at", 1).to_list(5000)
+    by_event = {}
+    for g in event_items:
+        by_event.setdefault(g["event_id"], []).append(g)
+
+    events = await db.events.find(
+        {"event_id": {"$in": list(by_event.keys())}, "is_published": True},
+        {"_id": 0, "event_id": 1, "title": 1, "slug": 1},
+    ).to_list(500)
+
+    event_albums = []
+    for ev in events:
+        items = by_event.get(ev["event_id"], [])
+        if not items:
+            continue
+        event_albums.append({
+            "event_id": ev["event_id"], "title": ev["title"], "slug": ev["slug"],
+            "cover": items[0], "count": len(items), "items": items,
+        })
+
+    return {"standalone": standalone, "event_albums": event_albums}
 
 
 class ContactMsg(BaseModel):
@@ -1081,13 +1130,18 @@ async def admin_set_role(user_id: str, body: dict, user=Depends(require_admin)):
 
 
 @api.get("/admin/gallery")
-async def admin_gallery(user=Depends(require_admin)):
-    return await db.gallery.find({}, {"_id": 0}).to_list(500)
+async def admin_gallery(event_id: Optional[str] = None, user=Depends(require_admin)):
+    # No event_id -> the sitewide "Documentation" gallery tab; with one -> that event's album.
+    query = {"event_id": event_id if event_id else None}
+    return await db.gallery.find(query, {"_id": 0}).sort("created_at", 1).to_list(500)
 
 
 class GalleryIn(BaseModel):
     image_url: str
+    thumbnail_url: str = ""
     caption: str = ""
+    media_type: str = "image"
+    event_id: Optional[str] = None
 
 
 @api.post("/admin/gallery")
@@ -1103,6 +1157,42 @@ async def admin_add_gallery(body: GalleryIn, user=Depends(require_admin)):
 async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
     await db.gallery.delete_one({"gallery_id": gallery_id})
     return {"ok": True}
+
+
+@api.post("/admin/uploads")
+async def admin_upload_media(file: UploadFile = File(...), user=Depends(require_admin)):
+    content_type = file.content_type or ""
+    if content_type in IMAGE_CONTENT_TYPES:
+        media_type, ext = "image", IMAGE_CONTENT_TYPES[content_type]
+    elif content_type in VIDEO_CONTENT_TYPES:
+        media_type, ext = "video", VIDEO_CONTENT_TYPES[content_type]
+    else:
+        raise HTTPException(400, "Unsupported file type — images (JPEG/PNG/WebP/GIF) or video (MP4/WebM/MOV) only")
+
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "File too large (max 25MB)")
+
+    file_id = uuid.uuid4().hex
+    (UPLOAD_DIR / f"{file_id}{ext}").write_bytes(data)
+
+    thumbnail_url = None
+    if media_type == "image":
+        try:
+            img = Image.open(io.BytesIO(data))
+            img = img.convert("RGB")
+            img.thumbnail((640, 640))
+            thumb_name = f"{file_id}_thumb.jpg"
+            img.save(UPLOAD_DIR / thumb_name, "JPEG", quality=82)
+            thumbnail_url = f"/uploads/{thumb_name}"
+        except Exception:
+            logger.exception("Thumbnail generation failed for upload %s", file_id)
+
+    return {
+        "url": f"/uploads/{file_id}{ext}",
+        "thumbnail_url": thumbnail_url or f"/uploads/{file_id}{ext}",
+        "media_type": media_type,
+    }
 
 
 # ---------- Seed ----------

@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import { DateTimePicker } from "../components/ui/datetime-picker";
 import { FormatToolbar } from "../lib/richText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
+import { mediaUrl } from "../lib/media";
 
 const TABS = ["stats", "events", "orders", "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
 
@@ -173,8 +174,68 @@ function EventForm({ form, setForm, onSave, onClose }) {
           ))}
           <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general" }]})} className="btn-primary">+ Add wave</button>
         </div>
+        <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-zinc-500">Album</div>
+        <div className="mt-3">
+          {form.event_id
+            ? <EventAlbum eventId={form.event_id} />
+            : <div className="text-xs text-zinc-500 font-mono-x uppercase tracking-[0.2em]">Save the event once first to upload its album.</div>}
+        </div>
         <button onClick={onSave} data-testid="save-event-btn" className="btn-accent w-full mt-6">SAVE</button>
       </div>
+    </div>
+  );
+}
+
+function EventAlbum({ eventId }) {
+  const [items, setItems] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const load = () => http.get(`/admin/gallery?event_id=${eventId}`).then((r) => setItems(r.data));
+  useEffect(() => { load(); }, [eventId]);
+
+  const upload = async (files) => {
+    setUploading(true);
+    try {
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const { data } = await http.post("/admin/uploads", fd);
+        await http.post("/admin/gallery", {
+          image_url: data.url, thumbnail_url: data.thumbnail_url, media_type: data.media_type, event_id: eventId,
+        });
+      }
+      await load();
+      toast.success("Uploaded");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const del = async (id) => { await http.delete(`/admin/gallery/${id}`); load(); };
+
+  return (
+    <div>
+      <label className="btn-primary inline-flex items-center gap-2 cursor-pointer !text-xs">
+        {uploading ? "UPLOADING…" : "+ UPLOAD PHOTOS / VIDEO"}
+        <input type="file" accept="image/*,video/*" multiple className="hidden" data-testid="album-upload-input"
+               onChange={(e) => { if (e.target.files.length) upload([...e.target.files]); e.target.value = ""; }} />
+      </label>
+      {items.length > 0 && (
+        <div className="mt-3 grid grid-cols-4 md:grid-cols-6 gap-2">
+          {items.map((g) => (
+            <div key={g.gallery_id} className="relative group border border-white/10">
+              {g.media_type === "video"
+                ? <video src={mediaUrl(g.image_url)} className="w-full aspect-square object-cover" muted />
+                : <img src={mediaUrl(g.thumbnail_url || g.image_url)} alt="" className="w-full aspect-square object-cover" />}
+              <button onClick={() => del(g.gallery_id)}
+                      className="absolute inset-0 bg-black/70 text-white text-xs font-mono-x uppercase tracking-[0.2em] opacity-0 group-hover:opacity-100 transition-opacity">
+                Del
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -394,21 +455,46 @@ function Users() {
 
 function GalleryAdmin() {
   const [items, setItems] = useState([]);
-  const [f, setF] = useState({ image_url: "", caption: "" });
+  const [caption, setCaption] = useState("");
+  const [uploading, setUploading] = useState(false);
   const load = () => http.get("/admin/gallery").then((r) => setItems(r.data));
   useEffect(() => { load(); }, []);
-  const save = async () => { await http.post("/admin/gallery", f); setF({ image_url: "", caption: "" }); load(); };
+
+  const upload = async (files) => {
+    setUploading(true);
+    try {
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const { data } = await http.post("/admin/uploads", fd);
+        await http.post("/admin/gallery", { image_url: data.url, thumbnail_url: data.thumbnail_url, media_type: data.media_type, caption });
+      }
+      setCaption("");
+      await load();
+      toast.success("Uploaded");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div>
       <div className="border border-white/10 p-4 grid grid-cols-2 gap-3">
-        <input placeholder="Image URL" value={f.image_url} onChange={(e) => setF({...f, image_url: e.target.value})} className="input-x" />
-        <input placeholder="Caption" value={f.caption} onChange={(e) => setF({...f, caption: e.target.value})} className="input-x" />
-        <button onClick={save} className="btn-accent col-span-2">ADD</button>
+        <input placeholder="Caption (applies to next upload)" value={caption} onChange={(e) => setCaption(e.target.value)} className="input-x col-span-2" />
+        <label className="btn-accent col-span-2 text-center cursor-pointer">
+          {uploading ? "UPLOADING…" : "+ UPLOAD PHOTOS / VIDEO"}
+          <input type="file" accept="image/*,video/*" multiple className="hidden" data-testid="sitewide-gallery-upload-input"
+                 onChange={(e) => { if (e.target.files.length) upload([...e.target.files]); e.target.value = ""; }} />
+        </label>
       </div>
       <div className="mt-4 grid grid-cols-3 md:grid-cols-6 gap-2">
         {items.map((g) => (
           <div key={g.gallery_id} className="border border-white/10">
-            <img src={g.image_url} alt={g.caption} className="w-full aspect-square object-cover" />
+            {g.media_type === "video"
+              ? <video src={mediaUrl(g.image_url)} className="w-full aspect-square object-cover" muted />
+              : <img src={mediaUrl(g.thumbnail_url || g.image_url)} alt={g.caption} className="w-full aspect-square object-cover" />}
             <button onClick={async () => { await http.delete(`/admin/gallery/${g.gallery_id}`); load(); }} className="btn-primary text-[10px] w-full">Del</button>
           </div>
         ))}
