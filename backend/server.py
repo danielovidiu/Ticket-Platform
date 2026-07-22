@@ -4,19 +4,24 @@ FastAPI + MongoDB + Emergent Auth + Stripe Checkout
 """
 import io
 import os
+import csv
+import json
 import uuid
 import base64
+import secrets
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional
 
+import jwt
 import httpx
 import qrcode
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, Cookie, Header, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, Cookie, Header, UploadFile, File, Form, Query
+from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from urllib.parse import urlencode
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from PIL import Image
@@ -50,18 +55,65 @@ def rate_limit(key: str, max_calls: int, window_seconds: int):
             dq.append(now)
     return _dep
 
-from emergentintegrations.payments.stripe.checkout import (
-    StripeCheckout,
-    CheckoutSessionRequest,
-)
+import asyncio
+import stripe as stripe_sdk
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
-STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "sk_test_emergent")
+STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "").strip()
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
 INITIAL_ADMIN_EMAIL = os.environ.get("INITIAL_ADMIN_EMAIL", "").strip().lower()
+
+# Payments run in one of two modes. "fake" (the out-of-box default) simulates the
+# whole reserve→pay→finalize loop locally with no Stripe account, so the app is fully
+# usable in dev. "stripe" uses the real SDK and REQUIRES a webhook signing secret.
+_force_fake = os.environ.get("LOCAL_FAKE_PAYMENTS", "").strip() == "1"
+PAYMENTS_MODE = "stripe" if (STRIPE_API_KEY.startswith("sk_") and not _force_fake) else "fake"
+if PAYMENTS_MODE == "stripe":
+    stripe_sdk.api_key = STRIPE_API_KEY
+    if not STRIPE_WEBHOOK_SECRET:
+        raise RuntimeError("STRIPE_WEBHOOK_SECRET is required when running live Stripe payments")
+
+APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
+# Public origin of the FRONTEND (where OAuth callbacks and email links send users
+# back to). Its scheme also decides how session cookies are scoped (below).
+PUBLIC_APP_URL = os.environ.get("PUBLIC_APP_URL", "http://localhost:3000").rstrip("/")
+POLICY_VERSION = os.environ.get("POLICY_VERSION", "2026-07-22")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("supersanity")
+
+# SESSION_SECRET signs all our stateless tokens (email verification, password reset,
+# newsletter confirm/unsubscribe). It is REQUIRED in production; in dev we fall back to
+# an ephemeral secret so a fresh checkout still boots (tokens just don't survive a restart).
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "").strip()
+if not SESSION_SECRET:
+    if APP_ENV == "production":
+        raise RuntimeError("SESSION_SECRET is required when APP_ENV=production")
+    SESSION_SECRET = "dev-insecure-" + secrets.token_hex(16)
+    logger.warning("SESSION_SECRET not set — using an ephemeral dev secret; tokens reset on restart")
+
+# Session cookie scoping is derived from the frontend scheme. Cross-site HTTPS needs
+# SameSite=None; Secure; plain-http localhost needs Lax + insecure or browsers drop it.
+COOKIE_SECURE = PUBLIC_APP_URL.startswith("https://")
+COOKIE_SAMESITE = "none" if COOKIE_SECURE else "lax"
+
+# OAuth providers — each is fully optional. A provider whose vars are unset simply
+# doesn't appear in GET /auth/methods and its start/callback endpoints return 404.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
+GOOGLE_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI)
+
+APPLE_CLIENT_ID = os.environ.get("APPLE_CLIENT_ID", "").strip()      # Services ID
+APPLE_TEAM_ID = os.environ.get("APPLE_TEAM_ID", "").strip()
+APPLE_KEY_ID = os.environ.get("APPLE_KEY_ID", "").strip()
+APPLE_PRIVATE_KEY = os.environ.get("APPLE_PRIVATE_KEY", "").strip()  # .p8 contents
+APPLE_REDIRECT_URI = os.environ.get("APPLE_REDIRECT_URI", "").strip()
+APPLE_ENABLED = bool(APPLE_CLIENT_ID and APPLE_TEAM_ID and APPLE_KEY_ID and APPLE_PRIVATE_KEY and APPLE_REDIRECT_URI)
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -76,9 +128,6 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 IMAGE_CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
 VIDEO_CONTENT_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov"}
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("supersanity")
 
 # ---------- Utility ----------
 
@@ -98,9 +147,40 @@ def parse_dt(v):
     return datetime.fromisoformat(v.replace("Z", "+00:00"))
 
 
-# ---------- Auth ----------
+# ---------- Signed tokens ----------
+# Stateless, single-file-secret tokens for flows that arrive by email/link and can't
+# carry a session cookie: email verification, password reset, and newsletter
+# confirm/unsubscribe. Each purpose gets its own JWT `aud` so a token minted for one
+# flow can never be replayed against another, plus a purpose-specific TTL.
 
-EMERGENT_SESSION_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+TOKEN_TTLS = {
+    "email-verify": 24 * 3600,
+    "pwd-reset": 3600,
+    "news-confirm": 7 * 24 * 3600,
+    "news-unsub": 365 * 24 * 3600,
+}
+
+
+def make_token(purpose: str, subject: str, extra: Optional[dict] = None) -> str:
+    now = now_utc()
+    payload = {
+        "aud": f"ss:{purpose}",
+        "sub": subject,
+        "iat": now,
+        "exp": now + timedelta(seconds=TOKEN_TTLS[purpose]),
+        "jti": uuid.uuid4().hex,
+        **(extra or {}),
+    }
+    return jwt.encode(payload, SESSION_SECRET, algorithm="HS256")
+
+
+def read_token(purpose: str, token: str) -> dict:
+    """Decode + verify a token for a specific purpose. Raises jwt.PyJWTError
+    (expired/invalid/wrong-audience) — callers map that to HTTP 400."""
+    return jwt.decode(token, SESSION_SECRET, algorithms=["HS256"], audience=f"ss:{purpose}")
+
+
+# ---------- Auth ----------
 
 
 async def get_current_user(
@@ -146,10 +226,208 @@ async def require_admin_or_door(user=Depends(get_current_user)):
     return user
 
 
+# ---------- Auth helpers ----------
+
+import bcrypt  # noqa: E402
+
+
+def hash_password(pw: str) -> str:
+    # bcrypt caps at 72 bytes; encode + truncate so long inputs don't silently error.
+    return bcrypt.hashpw(pw.encode("utf-8")[:72], bcrypt.gensalt(rounds=12)).decode()
+
+
+def verify_password(pw: str, hashed: Optional[str]) -> bool:
+    if not hashed:
+        return False
+    try:
+        return bcrypt.checkpw(pw.encode("utf-8")[:72], hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
+
+
+# Precomputed hash used to equalize timing on the "no such user" login path so an
+# attacker can't distinguish a missing account from a wrong password by response time.
+_DUMMY_HASH = hash_password("timing-equalizer-not-a-real-password")
+
+
+def _valid_email(email: str) -> bool:
+    email = (email or "").strip()
+    return "@" in email and "." in email.split("@")[-1] and 3 <= len(email) <= 254
+
+
+def _client_ip(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    return request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
+        request.client.host if request.client else ""
+    )
+
+
+def _email_rate_check(bucket: str, email: str, max_calls: int, window: int):
+    """Per-email sibling of rate_limit() (which keys on IP). Guards password login
+    against distributed brute force of one account from many IPs."""
+    now = datetime.now(timezone.utc).timestamp()
+    key = (email or "").strip().lower()
+    with _rate_lock:
+        dq = _rate_buckets[bucket][key]
+        while dq and dq[0] < now - window:
+            dq.popleft()
+        if len(dq) >= max_calls:
+            raise HTTPException(429, "Too many attempts. Try again later.")
+        dq.append(now)
+
+
+async def _issue_session(response: Response, user_id: str, old_token: Optional[str] = None) -> str:
+    """Create a fresh opaque session, set the cookie, and rotate out any prior
+    session token (defeats fixation). expires_at is a real datetime so the Phase E
+    TTL index can reap it server-side."""
+    if old_token:
+        await db.user_sessions.delete_one({"session_token": old_token})
+    token = secrets.token_urlsafe(32)
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": token,
+        "expires_at": now_utc() + timedelta(days=7),
+        "created_at": now_utc().isoformat(),
+    })
+    response.set_cookie(
+        key="session_token", value=token, max_age=7 * 24 * 3600,
+        httponly=True, secure=COOKIE_SECURE, samesite=COOKIE_SAMESITE, path="/",
+    )
+    return token
+
+
+async def _log_consent(user_id: str, kind: str, granted: bool, request: Optional[Request], source: str):
+    await db.consent_log.insert_one({
+        "log_id": new_id("cst"),
+        "user_id": user_id,
+        "kind": kind,
+        "granted": bool(granted),
+        "at": now_utc().isoformat(),
+        "ip": _client_ip(request),
+        "policy_version": POLICY_VERSION,
+        "source": source,
+    })
+
+
+async def _audit(actor_id: str, action: str, target_type: str, target_id: str, meta: Optional[dict] = None):
+    """Append-only admin/action audit trail (role changes, refunds, cancellations,
+    deletions). Never blocks the caller."""
+    try:
+        await db.audit_log.insert_one({
+            "audit_id": new_id("aud"),
+            "actor_id": actor_id,
+            "action": action,
+            "target_type": target_type,
+            "target_id": target_id,
+            "meta": meta or {},
+            "at": now_utc().isoformat(),
+        })
+    except Exception:
+        logger.exception("audit write failed: %s %s", action, target_id)
+
+
+async def _get_or_create_user(email, *, name="", picture="", provider=None, sub=None, email_verified=False):
+    """OAuth identity resolution + the verified-email account-linking gate.
+
+    Match order: provider `sub` first (survives email changes / Apple private relay),
+    then email. Email-based auto-linking is allowed ONLY when the existing account's
+    email is already verified OR the incoming IdP asserts the email is verified —
+    otherwise a stranger who pre-registered the victim's address with a password could
+    be silently merged into. Returns (user_doc, created_bool). Raises 409 on a blocked
+    link so the frontend can tell the user to use their original method.
+    """
+    email = (email or "").strip().lower()
+    sub_field = {"google": "google_sub", "apple": "apple_sub"}.get(provider)
+
+    if sub_field and sub:
+        u = await db.users.find_one({sub_field: sub}, {"_id": 0})
+        if u:
+            upd = {}
+            if name and not u.get("name"):
+                upd["name"] = name
+            if picture:
+                upd["picture"] = picture
+            if upd:
+                await db.users.update_one({"user_id": u["user_id"]}, {"$set": upd})
+                u = await db.users.find_one({"user_id": u["user_id"]}, {"_id": 0})
+            return u, False
+
+    if email:
+        u = await db.users.find_one({"email": email}, {"_id": 0})
+        if u:
+            if not (u.get("email_verified_at") or email_verified):
+                raise HTTPException(409, {"reason": "use_existing_method", "email": email})
+            upd = {}
+            if sub_field and sub and not u.get(sub_field):
+                upd[sub_field] = sub
+            if email_verified and not u.get("email_verified_at"):
+                upd["email_verified_at"] = now_utc().isoformat()
+            if name and not u.get("name"):
+                upd["name"] = name
+            if picture:
+                upd["picture"] = picture
+            if upd:
+                await db.users.update_one({"user_id": u["user_id"]}, {"$set": upd})
+                u = await db.users.find_one({"user_id": u["user_id"]}, {"_id": 0})
+            return u, False
+
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    is_first = (await db.users.count_documents({})) == 0
+    doc = {
+        "user_id": user_id,
+        "email": email,
+        "name": name or "",
+        "picture": picture or "",
+        "phone": "",
+        "role": "admin" if is_first else "user",
+        "password_hash": None,
+        "email_verified_at": now_utc().isoformat() if email_verified else None,
+        "email_opt_in": False,
+        "news_opt_in": False,
+        "promo_opt_in": False,
+        "consent_at": None,
+        "tos_accepted_at": now_utc().isoformat(),  # accepting ToS is implied by OAuth sign-in
+        "policy_version": POLICY_VERSION,
+        "created_at": now_utc().isoformat(),
+    }
+    # Only store provider-sub keys when present, so the Phase E sparse-unique index works.
+    if sub_field and sub:
+        doc[sub_field] = sub
+    await db.users.insert_one(doc)
+    return await db.users.find_one({"user_id": user_id}, {"_id": 0}), True
+
+
 # ---------- Models (light-touch, we use dicts for storage) ----------
 
-class SessionBody(BaseModel):
-    session_id: str
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+    tos_accepted: bool = False
+    email_opt_in: bool = False
+    news_opt_in: bool = False
+    promo_opt_in: bool = False
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class ConsentsIn(BaseModel):
+    email_opt_in: Optional[bool] = None
+    news_opt_in: Optional[bool] = None
+    promo_opt_in: Optional[bool] = None
+
+
+class ForgotPasswordIn(BaseModel):
+    email: str
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str
 
 
 class ProfileUpdate(BaseModel):
@@ -231,62 +509,86 @@ class CheckoutIn(BaseModel):
 
 # ---------- Auth Endpoints ----------
 
-@api.post("/auth/session", dependencies=[Depends(rate_limit("auth_session", 15, 60))])
-async def create_session(body: SessionBody, response: Response):
-    """Exchange session_id from Emergent Auth for a session_token."""
-    async with httpx.AsyncClient(timeout=15.0) as hc:
-        r = await hc.get(EMERGENT_SESSION_URL, headers={"X-Session-ID": body.session_id})
-    if r.status_code != 200:
-        raise HTTPException(401, "Invalid session_id")
-    data = r.json()
+def _public_user(u: Optional[dict]) -> Optional[dict]:
+    """Strip secret-bearing fields before returning a user to the client."""
+    if not u:
+        return u
+    return {k: v for k, v in u.items() if k not in ("password_hash", "_id")}
 
-    email = data["email"]
-    existing = await db.users.find_one({"email": email}, {"_id": 0})
-    if existing:
-        user_id = existing["user_id"]
-        await db.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"name": data.get("name"), "picture": data.get("picture")}},
-        )
-    else:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        # First user becomes admin
-        is_first = (await db.users.count_documents({})) == 0
-        await db.users.insert_one({
-            "user_id": user_id,
-            "email": email,
-            "name": data.get("name"),
-            "picture": data.get("picture"),
-            "phone": "",
-            "role": "admin" if is_first else "user",
-            "created_at": now_utc().isoformat(),
-        })
 
-    session_token = data["session_token"]
-    expires_at = now_utc() + timedelta(days=7)
-    await db.user_sessions.insert_one({
+@api.post("/auth/register", dependencies=[Depends(rate_limit("auth_register", 5, 300))])
+async def register(body: RegisterIn, request: Request, response: Response):
+    email = body.email.strip().lower()
+    if not _valid_email(email):
+        raise HTTPException(400, "Enter a valid email address")
+    if len(body.password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+    if not body.tos_accepted:
+        raise HTTPException(400, "You must accept the Terms of Service")
+
+    # Generic message on collision — never reveal whether an email is registered.
+    if await db.users.find_one({"email": email}, {"_id": 1}):
+        raise HTTPException(400, "Unable to register with those details")
+
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    is_first = (await db.users.count_documents({})) == 0
+    now_iso = now_utc().isoformat()
+    doc = {
         "user_id": user_id,
-        "session_token": session_token,
-        "expires_at": expires_at.isoformat(),
-        "created_at": now_utc().isoformat(),
-    })
+        "email": email,
+        "name": body.name.strip(),
+        "picture": "",
+        "phone": "",
+        "role": "admin" if is_first else "user",
+        "password_hash": hash_password(body.password),
+        "email_verified_at": None,
+        "email_opt_in": bool(body.email_opt_in),
+        "news_opt_in": bool(body.news_opt_in),
+        "promo_opt_in": bool(body.promo_opt_in),
+        "consent_at": now_iso,
+        "tos_accepted_at": now_iso,
+        "policy_version": POLICY_VERSION,
+        "created_at": now_iso,
+    }
+    await db.users.insert_one(doc)
 
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        max_age=7 * 24 * 3600,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        path="/",
-    )
-    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    return {"user": user}
+    # Consent audit trail (one row per opt-in kind + the ToS acceptance).
+    await _log_consent(user_id, "tos", True, request, "register")
+    for kind in ("email_opt_in", "news_opt_in", "promo_opt_in"):
+        await _log_consent(user_id, kind, doc[kind], request, "register")
+
+    # Fire-and-forget verification email (outbox in dev).
+    token = make_token("email-verify", user_id)
+    await send_mail("verify_email", email, {"verify_url": f"{PUBLIC_APP_URL}/verify?token={token}"})
+
+    await _issue_session(response, user_id)
+    return {"user": _public_user(await db.users.find_one({"user_id": user_id}, {"_id": 0}))}
+
+
+@api.post("/auth/login", dependencies=[Depends(rate_limit("auth_login", 10, 300))])
+async def login(body: LoginIn, request: Request, response: Response, session_token: Optional[str] = Cookie(default=None)):
+    email = body.email.strip().lower()
+    _email_rate_check("auth_login_email", email, 10, 300)
+    u = await db.users.find_one({"email": email}, {"_id": 0})
+    # Same generic failure + verify-against-dummy timing for every failure mode:
+    # missing user, OAuth-only account (no password_hash), or wrong password.
+    if not u or not verify_password(body.password, u.get("password_hash")):
+        if not u:
+            verify_password(body.password, _DUMMY_HASH)
+        raise HTTPException(401, "Invalid email or password")
+    await _issue_session(response, u["user_id"], old_token=session_token)
+    return {"user": _public_user(u)}
+
+
+@api.get("/auth/methods")
+async def auth_methods():
+    """Which sign-in methods this deployment has configured — drives the login UI."""
+    return {"password": True, "google": GOOGLE_ENABLED, "apple": APPLE_ENABLED}
 
 
 @api.get("/auth/me")
 async def auth_me(user=Depends(get_current_user)):
-    return user
+    return _public_user(user)
 
 
 @api.post("/auth/logout")
@@ -302,7 +604,325 @@ async def update_profile(body: ProfileUpdate, user=Depends(get_current_user)):
     upd = {k: v for k, v in body.model_dump().items() if v is not None}
     if upd:
         await db.users.update_one({"user_id": user["user_id"]}, {"$set": upd})
-    return await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    return _public_user(await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0}))
+
+
+@api.post("/auth/consents")
+async def update_consents(body: ConsentsIn, request: Request, user=Depends(get_current_user)):
+    """Change marketing opt-ins. Separate from PATCH /auth/profile because each
+    change must be written to the consent audit log with ip + policy version."""
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    if changes:
+        changes["consent_at"] = now_utc().isoformat()
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": changes})
+        for kind, granted in changes.items():
+            if kind == "consent_at":
+                continue
+            await _log_consent(user["user_id"], kind, granted, request, "settings")
+    return _public_user(await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0}))
+
+
+# ----- Email verification + password reset -----
+
+@api.post("/auth/request-verify", dependencies=[Depends(rate_limit("auth_verify_req", 3, 900))])
+async def request_verify(user=Depends(get_current_user)):
+    if user.get("email_verified_at"):
+        return {"ok": True, "already_verified": True}
+    token = make_token("email-verify", user["user_id"])
+    await send_mail("verify_email", user["email"], {"verify_url": f"{PUBLIC_APP_URL}/verify?token={token}"})
+    return {"ok": True}
+
+
+@api.get("/auth/verify")
+async def verify_email(token: str):
+    try:
+        claims = read_token("email-verify", token)
+    except jwt.PyJWTError:
+        raise HTTPException(400, "This verification link is invalid or has expired")
+    await db.users.update_one(
+        {"user_id": claims["sub"]},
+        {"$set": {"email_verified_at": now_utc().isoformat()}},
+    )
+    return {"ok": True}
+
+
+@api.post("/auth/forgot-password", dependencies=[Depends(rate_limit("auth_forgot", 5, 900))])
+async def forgot_password(body: ForgotPasswordIn):
+    email = body.email.strip().lower()
+    u = await db.users.find_one({"email": email}, {"_id": 0})
+    # Only send when a password account actually exists, but ALWAYS return ok
+    # (no account enumeration).
+    if u and u.get("password_hash"):
+        token = make_token("pwd-reset", u["user_id"], {"ph": u["password_hash"][-12:]})
+        await send_mail("password_reset", email, {"reset_url": f"{PUBLIC_APP_URL}/reset-password?token={token}"})
+    return {"ok": True}
+
+
+@api.post("/auth/reset-password", dependencies=[Depends(rate_limit("auth_reset", 5, 900))])
+async def reset_password(body: ResetPasswordIn, response: Response):
+    if len(body.new_password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+    try:
+        claims = read_token("pwd-reset", body.token)
+    except jwt.PyJWTError:
+        raise HTTPException(400, "This reset link is invalid or has expired")
+    u = await db.users.find_one({"user_id": claims["sub"]}, {"_id": 0})
+    # Single-use: the token is bound to the password hash it was minted against, so
+    # any password change (or reuse of a spent token) invalidates it.
+    if not u or not u.get("password_hash") or u["password_hash"][-12:] != claims.get("ph"):
+        raise HTTPException(400, "This reset link is invalid or has expired")
+    await db.users.update_one(
+        {"user_id": u["user_id"]},
+        {"$set": {"password_hash": hash_password(body.new_password)}},
+    )
+    # Global logout — invalidate every existing session for this user.
+    await db.user_sessions.delete_many({"user_id": u["user_id"]})
+    response.delete_cookie("session_token", path="/")
+    return {"ok": True}
+
+
+# ----- OAuth (Google + Apple), direct clients -----
+
+_jwks_clients: dict = {}
+
+
+def _jwks(url: str) -> "jwt.PyJWKClient":
+    c = _jwks_clients.get(url)
+    if c is None:
+        c = jwt.PyJWKClient(url)
+        _jwks_clients[url] = c
+    return c
+
+
+def _verify_google_id_token(id_token: str) -> dict:
+    key = _jwks("https://www.googleapis.com/oauth2/v3/certs").get_signing_key_from_jwt(id_token)
+    return jwt.decode(
+        id_token, key.key, algorithms=["RS256"], audience=GOOGLE_CLIENT_ID,
+        issuer=["https://accounts.google.com", "accounts.google.com"],
+    )
+
+
+def _verify_apple_id_token(id_token: str) -> dict:
+    key = _jwks("https://appleid.apple.com/auth/keys").get_signing_key_from_jwt(id_token)
+    return jwt.decode(
+        id_token, key.key, algorithms=["RS256"], audience=APPLE_CLIENT_ID,
+        issuer="https://appleid.apple.com",
+    )
+
+
+def _safe_return(path: Optional[str]) -> str:
+    """Only allow same-site relative paths as post-login redirect targets —
+    blocks open-redirect via the `return` param."""
+    if not path or not path.startswith("/") or path.startswith("//"):
+        return "/"
+    return path
+
+
+async def _oauth_finish(request, *, provider, email, name, picture, sub, email_verified, return_path, clear_cookies):
+    try:
+        user, created = await _get_or_create_user(
+            email, name=name, picture=picture, provider=provider, sub=sub, email_verified=email_verified,
+        )
+    except HTTPException as e:
+        if e.status_code == 409:
+            resp = RedirectResponse(f"{PUBLIC_APP_URL}/login?error=use_existing_method", status_code=302)
+            for c in clear_cookies:
+                resp.delete_cookie(c, path="/")
+            return resp
+        raise
+    resp = RedirectResponse(f"{PUBLIC_APP_URL}{_safe_return(return_path)}", status_code=302)
+    await _issue_session(resp, user["user_id"])
+    for c in clear_cookies:
+        resp.delete_cookie(c, path="/")
+    if created:
+        await _log_consent(user["user_id"], "tos", True, request, f"oauth-{provider}")
+    return resp
+
+
+@api.get("/auth/google/start")
+async def google_start(return_: str = Query("/", alias="return")):
+    if not GOOGLE_ENABLED:
+        raise HTTPException(404, "Not found")
+    state = secrets.token_urlsafe(24)
+    params = urlencode({
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+    })
+    resp = RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}", status_code=302)
+    # Callback lands on our own origin, so SameSite=Lax is enough and survives the
+    # top-level redirect back from Google.
+    resp.set_cookie("g_state", state, max_age=600, httponly=True, secure=COOKIE_SECURE, samesite="lax", path="/")
+    resp.set_cookie("g_return", _safe_return(return_), max_age=600, httponly=True, secure=COOKIE_SECURE, samesite="lax", path="/")
+    return resp
+
+
+@api.get("/auth/google/callback", dependencies=[Depends(rate_limit("oauth_google_cb", 20, 60))])
+async def google_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    g_state: Optional[str] = Cookie(default=None),
+    g_return: Optional[str] = Cookie(default=None),
+):
+    if not GOOGLE_ENABLED:
+        raise HTTPException(404, "Not found")
+    if not code or not state or not g_state or not secrets.compare_digest(state, g_state):
+        raise HTTPException(400, "Invalid OAuth state")
+    async with httpx.AsyncClient(timeout=15.0) as hc:
+        tok = await hc.post("https://oauth2.googleapis.com/token", data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        })
+    if tok.status_code != 200:
+        raise HTTPException(400, "Google token exchange failed")
+    id_token = tok.json().get("id_token")
+    if not id_token:
+        raise HTTPException(400, "Google returned no id_token")
+    try:
+        claims = _verify_google_id_token(id_token)
+    except jwt.PyJWTError:
+        raise HTTPException(400, "Could not verify Google identity")
+    return await _oauth_finish(
+        request, provider="google",
+        email=claims.get("email", ""), name=claims.get("name", ""), picture=claims.get("picture", ""),
+        sub=claims.get("sub"), email_verified=bool(claims.get("email_verified")),
+        return_path=g_return or "/", clear_cookies=("g_state", "g_return"),
+    )
+
+
+@api.get("/auth/apple/start")
+async def apple_start(return_: str = Query("/", alias="return")):
+    if not APPLE_ENABLED:
+        raise HTTPException(404, "Not found")
+    state = secrets.token_urlsafe(24)
+    params = urlencode({
+        "client_id": APPLE_CLIENT_ID,
+        "redirect_uri": APPLE_REDIRECT_URI,
+        "response_type": "code id_token",
+        "response_mode": "form_post",
+        "scope": "name email",
+        "state": state,
+    })
+    resp = RedirectResponse(f"https://appleid.apple.com/auth/authorize?{params}", status_code=302)
+    # Apple's callback is a cross-site POST, so the state cookie MUST be
+    # SameSite=None; Secure (Apple only ever runs over HTTPS anyway).
+    resp.set_cookie("a_state", state, max_age=600, httponly=True, secure=True, samesite="none", path="/")
+    resp.set_cookie("a_return", _safe_return(return_), max_age=600, httponly=True, secure=True, samesite="none", path="/")
+    return resp
+
+
+@api.post("/auth/apple/callback", dependencies=[Depends(rate_limit("oauth_apple_cb", 20, 60))])
+async def apple_callback(
+    request: Request,
+    id_token: str = Form(""),
+    state: str = Form(""),
+    user: str = Form(""),  # JSON {name:{firstName,lastName}, email} — first authorization ONLY
+    a_state: Optional[str] = Cookie(default=None),
+    a_return: Optional[str] = Cookie(default=None),
+):
+    if not APPLE_ENABLED:
+        raise HTTPException(404, "Not found")
+    if not id_token or not state or not a_state or not secrets.compare_digest(state, a_state):
+        raise HTTPException(400, "Invalid OAuth state")
+    try:
+        claims = _verify_apple_id_token(id_token)
+    except jwt.PyJWTError:
+        raise HTTPException(400, "Could not verify Apple identity")
+    email = claims.get("email", "")
+    name = ""
+    # Apple sends name/email in the form body only on the very first authorization.
+    if user:
+        try:
+            u = json.loads(user)
+            nm = u.get("name") or {}
+            name = f"{nm.get('firstName', '')} {nm.get('lastName', '')}".strip()
+            email = email or u.get("email", "")
+        except (ValueError, TypeError):
+            pass
+    ev = claims.get("email_verified")
+    return await _oauth_finish(
+        request, provider="apple",
+        email=email, name=name, picture="",
+        sub=claims.get("sub"), email_verified=(ev is True or ev == "true"),
+        return_path=a_return or "/", clear_cookies=("a_state", "a_return"),
+    )
+
+
+# ----- Data rights (GDPR: export + erasure) -----
+
+@api.get("/auth/export", dependencies=[Depends(rate_limit("auth_export", 3, 3600))])
+async def export_my_data(user=Depends(get_current_user)):
+    """Machine-readable copy of everything tied to this account (GDPR art. 20)."""
+    uid = user["user_id"]
+    async def grab(coll, query):
+        return await coll.find(query, {"_id": 0}).to_list(5000)
+
+    bundle = {
+        "exported_at": now_utc().isoformat(),
+        "user": _public_user(user),
+        "reservations": await grab(db.reservations, {"user_id": uid}),
+        "tickets": await grab(db.tickets, {"user_id": uid}),
+        "invoices": await grab(db.invoices, {"user_id": uid}),
+        "payments": await grab(db.payment_transactions, {"user_id": uid}),
+        "consent_log": await grab(db.consent_log, {"user_id": uid}),
+        # session metadata only — tokens are omitted by the projection below
+        "sessions": [
+            {"created_at": s.get("created_at"), "expires_at": str(s.get("expires_at"))}
+            for s in await db.user_sessions.find({"user_id": uid}, {"_id": 0, "session_token": 0}).to_list(500)
+        ],
+        "newsletter": await grab(db.newsletter_subscriptions, {"email": user["email"]}),
+    }
+    return Response(
+        content=json.dumps(bundle, indent=2, default=str),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=supersanity-export.json"},
+    )
+
+
+@api.delete("/auth/account")
+async def delete_my_account(request: Request, response: Response, user=Depends(get_current_user)):
+    """Right to erasure. We anonymize rather than hard-delete: invoices and tickets
+    must survive for fiscal/audit retention, but every piece of personal data on the
+    account is scrubbed and all sessions killed."""
+    uid = user["user_id"]
+    if user.get("role") == "admin":
+        # Don't let the last admin lock everyone out by deleting themselves.
+        if await db.users.count_documents({"role": "admin"}) <= 1:
+            raise HTTPException(400, "You are the only admin — assign another admin before deleting your account")
+
+    await db.users.update_one(
+        {"user_id": uid},
+        {
+            "$set": {
+                "email": f"deleted+{uid}@anon.invalid",
+                "name": "",
+                "phone": "",
+                "picture": "",
+                "role": "user",
+                "email_opt_in": False,
+                "news_opt_in": False,
+                "promo_opt_in": False,
+                "deleted_at": now_utc().isoformat(),
+            },
+            "$unset": {"password_hash": "", "google_sub": "", "apple_sub": ""},
+        },
+    )
+    await db.user_sessions.delete_many({"user_id": uid})
+    await db.newsletter_subscriptions.update_many(
+        {"email": user["email"]},
+        {"$set": {"status": "unsubscribed", "unsubscribed_at": now_utc().isoformat()}},
+    )
+    await _log_consent(uid, "account_deleted", True, request, "self-service")
+    await _audit(uid, "account_deleted", "user", uid, None)
+    response.delete_cookie("session_token", path="/")
+    return {"ok": True}
 
 
 # ---------- Public content ----------
@@ -436,22 +1056,79 @@ class NewsletterIn(BaseModel):
     source: Optional[str] = None  # optional label ("home hero", "footer", …)
 
 
+class NewsletterUnsubIn(BaseModel):
+    token: str
+
+
+def _newsletter_status(s: dict) -> str:
+    """Legacy subscribers predate the status field — treat an existing row with no
+    status as already-confirmed so we don't silently drop them."""
+    if s.get("unsubscribed_at"):
+        return "unsubscribed"
+    return s.get("status") or "confirmed"
+
+
 @api.post("/newsletter", dependencies=[Depends(rate_limit("newsletter", 10, 60))])
 async def newsletter_subscribe(body: NewsletterIn):
     email = body.email.strip().lower()
-    if "@" not in email or len(email) > 254:
+    if not _valid_email(email):
         raise HTTPException(400, "Invalid email")
     existing = await db.newsletter_subscriptions.find_one({"email": email}, {"_id": 0})
-    if existing:
-        return {"ok": True, "already_subscribed": True}
-    await db.newsletter_subscriptions.insert_one({
-        "sub_id": new_id("sub"),
-        "email": email,
-        "source": body.source or "",
-        "created_at": now_utc().isoformat(),
-        "unsubscribed_at": None,
+    if existing and _newsletter_status(existing) == "confirmed":
+        return {"ok": True}  # never reveal subscription state
+    if not existing:
+        await db.newsletter_subscriptions.insert_one({
+            "sub_id": new_id("sub"),
+            "email": email,
+            "source": body.source or "",
+            "status": "pending",
+            "created_at": now_utc().isoformat(),
+            "confirmed_at": None,
+            "unsubscribed_at": None,
+        })
+    else:
+        # Re-subscribe / re-confirm a pending or previously unsubscribed address.
+        await db.newsletter_subscriptions.update_one(
+            {"email": email},
+            {"$set": {"status": "pending", "unsubscribed_at": None}},
+        )
+    # Double opt-in: nothing is "subscribed" until the confirm link is clicked.
+    token = make_token("news-confirm", email)
+    unsub = make_token("news-unsub", email)
+    unsub_url = f"{PUBLIC_APP_URL}/newsletter/unsubscribe?token={unsub}"
+    await send_mail("newsletter_confirm", email, {
+        "confirm_url": f"{PUBLIC_APP_URL}/newsletter/confirm?token={token}",
+        "headers": {"List-Unsubscribe": f"<{unsub_url}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"},
     })
-    return {"ok": True, "already_subscribed": False}
+    return {"ok": True}
+
+
+@api.get("/newsletter/confirm")
+async def newsletter_confirm(token: str):
+    try:
+        claims = read_token("news-confirm", token)
+    except jwt.PyJWTError:
+        raise HTTPException(400, "This confirmation link is invalid or has expired")
+    email = claims["sub"]
+    await db.newsletter_subscriptions.update_one(
+        {"email": email},
+        {"$set": {"status": "confirmed", "confirmed_at": now_utc().isoformat(), "unsubscribed_at": None}},
+    )
+    return {"ok": True}
+
+
+@api.post("/newsletter/unsubscribe", dependencies=[Depends(rate_limit("newsletter_unsub", 30, 60))])
+async def newsletter_unsubscribe(body: NewsletterUnsubIn):
+    try:
+        claims = read_token("news-unsub", body.token)
+    except jwt.PyJWTError:
+        raise HTTPException(400, "This unsubscribe link is invalid or has expired")
+    # Idempotent — safe to click twice.
+    await db.newsletter_subscriptions.update_one(
+        {"email": claims["sub"]},
+        {"$set": {"status": "unsubscribed", "unsubscribed_at": now_utc().isoformat()}},
+    )
+    return {"ok": True}
 
 
 @api.get("/admin/newsletter")
@@ -463,17 +1140,28 @@ async def admin_list_newsletter(user=Depends(require_admin_or_editor)):
 async def admin_export_newsletter(user=Depends(require_admin_or_editor)):
     from fastapi.responses import PlainTextResponse
     subs = await db.newsletter_subscriptions.find({}, {"_id": 0}).sort("created_at", 1).to_list(20000)
-    lines = ["email,source,created_at,unsubscribed_at"]
+    # Use the stdlib CSV writer so commas/quotes/newlines and spreadsheet formula
+    # injection (=, +, -, @) in the source field can't corrupt or weaponize the file.
+    buf = io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    w.writerow(["email", "source", "status", "created_at", "confirmed_at", "unsubscribed_at"])
     for s in subs:
-        lines.append(f"{s['email']},{s.get('source','')},{s['created_at']},{s.get('unsubscribed_at') or ''}")
-    return PlainTextResponse("\n".join(lines), headers={"Content-Disposition": "attachment; filename=newsletter.csv"})
+        src = s.get("source", "") or ""
+        if src and src[0] in ("=", "+", "-", "@"):
+            src = "'" + src  # neutralize spreadsheet formula injection
+        w.writerow([s.get("email", ""), src, _newsletter_status(s),
+                    s.get("created_at", ""), s.get("confirmed_at") or "", s.get("unsubscribed_at") or ""])
+    return PlainTextResponse(buf.getvalue(), headers={"Content-Disposition": "attachment; filename=newsletter.csv"})
 
 
 @api.delete("/admin/newsletter/{sub_id}")
-async def admin_delete_subscription(sub_id: str, user=Depends(require_admin_or_editor)):
+async def admin_delete_subscription(sub_id: str, user=Depends(get_current_user)):
+    if user.get("role") not in ("admin", "editor"):
+        raise HTTPException(403, "Editor access required")
     r = await db.newsletter_subscriptions.delete_one({"sub_id": sub_id})
     if r.deleted_count == 0:
         raise HTTPException(404, "Subscription not found")
+    await _audit(user["user_id"], "newsletter_delete", "newsletter", sub_id, None)
     return {"ok": True}
 
 
@@ -621,6 +1309,18 @@ async def get_reservation(reservation_id: str, user=Depends(get_current_user)):
     return r
 
 
+async def _stripe_customer_id(user: dict) -> str:
+    """Get-or-create the user's Stripe customer, persisting the id on the user doc."""
+    if user.get("stripe_customer_id"):
+        return user["stripe_customer_id"]
+    cust = await asyncio.to_thread(
+        stripe_sdk.Customer.create, email=user["email"], name=user.get("name") or None,
+        metadata={"user_id": user["user_id"]},
+    )
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"stripe_customer_id": cust.id}})
+    return cust.id
+
+
 @api.post("/checkout")
 async def create_checkout(body: CheckoutIn, request: Request, user=Depends(get_current_user)):
     r = await db.reservations.find_one({"reservation_id": body.reservation_id, "user_id": user["user_id"]}, {"_id": 0})
@@ -631,42 +1331,55 @@ async def create_checkout(body: CheckoutIn, request: Request, user=Depends(get_c
     if parse_dt(r["expires_at"]) < now_utc():
         raise HTTPException(400, "Reservation expired")
 
-    host_url = str(request.base_url)
-    webhook_url = f"{host_url}api/webhook/stripe"
-    stripe = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-
     origin = body.origin_url.rstrip("/")
     success_url = f"{origin}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{origin}/checkout/cancel?reservation_id={r['reservation_id']}"
+    metadata = {"reservation_id": r["reservation_id"], "user_id": user["user_id"], "event_id": r["event_id"]}
+    total = float(r["total_ron"])
+    customer_id = None
 
-    req = CheckoutSessionRequest(
-        amount=float(r["total_ron"]),
-        currency="ron",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "reservation_id": r["reservation_id"],
-            "user_id": user["user_id"],
-            "event_id": r["event_id"],
-        },
-    )
-    session = await stripe.create_checkout_session(req)
+    if PAYMENTS_MODE == "fake":
+        # Local simulation: no Stripe account needed. The success page then polls
+        # /payments/status, which finalizes the reservation.
+        session_id = f"cs_local_{uuid.uuid4().hex}"
+        checkout_url = f"{success_url.replace('{CHECKOUT_SESSION_ID}', session_id)}&mock=1"
+    else:
+        event = await db.events.find_one({"event_id": r["event_id"]}, {"_id": 0, "title": 1})
+        customer_id = await _stripe_customer_id(user)
+        session = await asyncio.to_thread(
+            stripe_sdk.checkout.Session.create,
+            mode="payment",
+            customer=customer_id,
+            line_items=[{
+                "price_data": {
+                    "currency": "ron",
+                    "unit_amount": int(round(total * 100)),
+                    "product_data": {"name": (event or {}).get("title", "Supersanity ticket")},
+                },
+                "quantity": 1,
+            }],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata=metadata,
+            payment_intent_data={"metadata": metadata},
+        )
+        session_id = session.id
+        checkout_url = session.url
 
     await db.payment_transactions.insert_one({
-        "session_id": session.session_id,
+        "session_id": session_id,
         "reservation_id": r["reservation_id"],
         "user_id": user["user_id"],
-        "amount": float(r["total_ron"]),
+        "amount": total,
         "currency": "ron",
         "payment_status": "initiated",
         "created_at": now_utc().isoformat(),
     })
-
     await db.reservations.update_one(
         {"reservation_id": r["reservation_id"]},
-        {"$set": {"stripe_session_id": session.session_id}},
+        {"$set": {"stripe_session_id": session_id, "stripe_customer_id": customer_id}},
     )
-    return {"url": session.url, "session_id": session.session_id}
+    return {"url": checkout_url, "session_id": session_id}
 
 
 async def _finalize_paid_reservation(reservation_id: str):
@@ -690,7 +1403,7 @@ async def _finalize_paid_reservation(reservation_id: str):
     # Create tickets
     tickets = []
     for i in range(r["quantity"]):
-        qr = f"UMB-{uuid.uuid4().hex[:20].upper()}"
+        qr = f"SNTY-{uuid.uuid4().hex[:20].upper()}"
         t = {
             "ticket_id": new_id("tkt"),
             "qr_code": qr,
@@ -727,7 +1440,7 @@ async def _finalize_paid_reservation(reservation_id: str):
     invoice = {
         "invoice_id": new_id("inv"),
         "number": next_num,
-        "series": "UMB",
+        "series": "SNTY",
         "reservation_id": reservation_id,
         "user_id": r["user_id"],
         "event_id": r["event_id"],
@@ -741,50 +1454,98 @@ async def _finalize_paid_reservation(reservation_id: str):
     }
     await db.invoices.insert_one(invoice)
 
+    # Deliver tickets by email (transactional — no marketing opt-in needed). QR PNGs
+    # are attached. Wrapped so a mail failure never rolls back a paid order.
+    try:
+        buyer = await db.users.find_one({"user_id": r["user_id"]}, {"_id": 0, "email": 1})
+        event = await db.events.find_one({"event_id": r["event_id"]}, {"_id": 0, "title": 1, "starts_at": 1, "venue": 1, "city": 1})
+        if buyer and buyer.get("email"):
+            attachments = []
+            for t in tickets:
+                img = qrcode.make(t["qr_code"])
+                b = io.BytesIO()
+                img.save(b, format="PNG")
+                attachments.append({"filename": f"{t['qr_code']}.png", "content": b.getvalue()})
+            await send_mail("ticket_delivery", buyer["email"], {
+                "tickets": [{"qr_code": t["qr_code"], "wave": t.get("wave_id", "")} for t in tickets],
+                "event": {
+                    "title": (event or {}).get("title", ""),
+                    "when": (event or {}).get("starts_at", ""),
+                    "where": ", ".join(filter(None, [(event or {}).get("venue"), (event or {}).get("city")])),
+                },
+                "invoice_no": next_num,
+                "attachments": attachments,
+            })
+    except Exception:
+        logger.exception("ticket delivery email failed for reservation %s", reservation_id)
+
 
 @api.get("/payments/status/{session_id}")
 async def payment_status(session_id: str, request: Request):
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
     if not tx:
         raise HTTPException(404, "Transaction not found")
-
     if tx["payment_status"] == "paid":
         return tx
 
-    host_url = str(request.base_url)
-    stripe = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=f"{host_url}api/webhook/stripe")
-    status = await stripe.get_checkout_status(session_id)
+    if PAYMENTS_MODE == "fake":
+        # Simulated success: mark paid and run the real finalize path.
+        new_status, session_status = "paid", "complete"
+    else:
+        session = await asyncio.to_thread(stripe_sdk.checkout.Session.retrieve, session_id)
+        new_status = "paid" if session.payment_status == "paid" else session.payment_status
+        session_status = session.status
 
-    new_status = status.payment_status
     await db.payment_transactions.update_one(
         {"session_id": session_id},
-        {"$set": {"payment_status": new_status, "status": status.status}},
+        {"$set": {"payment_status": new_status, "status": session_status}},
     )
     if new_status == "paid":
         await _finalize_paid_reservation(tx["reservation_id"])
+    return await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+
+
+async def _mark_paid_and_finalize(session_id: str):
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
-    return tx
+    if not tx:
+        return
+    await db.payment_transactions.update_one(
+        {"session_id": session_id}, {"$set": {"payment_status": "paid"}},
+    )
+    await _finalize_paid_reservation(tx["reservation_id"])
 
 
 @api.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
     body = await request.body()
+
+    if PAYMENTS_MODE == "fake":
+        # Dev-only shim so the webhook path is exercisable without Stripe. Accepts a
+        # plain JSON {session_id, payment_status}. Refused entirely in stripe mode.
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            raise HTTPException(400, "Invalid payload")
+        if payload.get("payment_status") == "paid" and payload.get("session_id"):
+            await _mark_paid_and_finalize(payload["session_id"])
+        return {"received": True}
+
     sig = request.headers.get("Stripe-Signature", "")
-    host_url = str(request.base_url)
-    stripe = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=f"{host_url}api/webhook/stripe")
     try:
-        evt = await stripe.handle_webhook(body, sig)
-    except Exception as e:
-        logger.exception("Webhook error")
-        raise HTTPException(400, str(e))
-    if evt.payment_status == "paid":
-        tx = await db.payment_transactions.find_one({"session_id": evt.session_id}, {"_id": 0})
-        if tx:
-            await db.payment_transactions.update_one(
-                {"session_id": evt.session_id},
-                {"$set": {"payment_status": "paid"}},
-            )
-            await _finalize_paid_reservation(tx["reservation_id"])
+        event = stripe_sdk.Webhook.construct_event(body, sig, STRIPE_WEBHOOK_SECRET)
+    except (ValueError, stripe_sdk.error.SignatureVerificationError):
+        raise HTTPException(400, "Invalid signature")
+
+    # Idempotency: a unique index on event_id makes replays a no-op.
+    try:
+        await db.processed_stripe_events.insert_one({"event_id": event["id"], "at": now_utc().isoformat()})
+    except Exception:
+        return {"received": True, "duplicate": True}
+
+    if event["type"] in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+        obj = event["data"]["object"]
+        if obj.get("payment_status") == "paid":
+            await _mark_paid_and_finalize(obj["id"])
     return {"received": True}
 
 
@@ -992,6 +1753,7 @@ async def admin_update_event(event_id: str, body: dict, user=Depends(require_adm
 @api.delete("/admin/events/{event_id}")
 async def admin_delete_event(event_id: str, user=Depends(require_admin)):
     await db.events.delete_one({"event_id": event_id})
+    await _audit(user["user_id"], "event_delete", "event", event_id, None)
     return {"ok": True}
 
 
@@ -1000,6 +1762,7 @@ async def admin_cancel_event(event_id: str, user=Depends(require_admin)):
     await db.events.update_one({"event_id": event_id}, {"$set": {"is_published": False, "cancelled": True}})
     # Refund policy: mark tickets as refunded (real refund via Stripe would happen out-of-band)
     await db.tickets.update_many({"event_id": event_id, "status": "issued"}, {"$set": {"status": "refunded"}})
+    await _audit(user["user_id"], "event_cancel", "event", event_id, None)
     return {"ok": True}
 
 
@@ -1012,6 +1775,7 @@ async def admin_orders(user=Depends(require_admin)):
 async def admin_refund(reservation_id: str, user=Depends(require_admin)):
     await db.reservations.update_one({"reservation_id": reservation_id}, {"$set": {"status": "refunded"}})
     await db.tickets.update_many({"reservation_id": reservation_id}, {"$set": {"status": "refunded"}})
+    await _audit(user["user_id"], "order_refund", "reservation", reservation_id, None)
     return {"ok": True}
 
 
@@ -1117,7 +1881,7 @@ async def get_special_link(token: str):
 
 @api.get("/admin/users")
 async def admin_users(user=Depends(require_admin)):
-    return await db.users.find({}, {"_id": 0}).to_list(500)
+    return await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
 
 
 @api.patch("/admin/users/{user_id}/role")
@@ -1125,8 +1889,21 @@ async def admin_set_role(user_id: str, body: dict, user=Depends(require_admin)):
     role = body.get("role")
     if role not in ("user", "admin", "door", "editor"):
         raise HTTPException(400, "Invalid role")
+    target = await db.users.find_one({"user_id": user_id}, {"_id": 0, "role": 1})
+    old_role = target.get("role") if target else None
+    # Guard against demoting the last admin into lockout.
+    if old_role == "admin" and role != "admin" and await db.users.count_documents({"role": "admin"}) <= 1:
+        raise HTTPException(400, "Cannot demote the only admin")
     await db.users.update_one({"user_id": user_id}, {"$set": {"role": role}})
+    await _audit(user["user_id"], "role_change", "user", user_id, {"from": old_role, "to": role})
     return {"ok": True}
+
+
+@api.get("/admin/audit")
+async def admin_audit(limit: int = 100, skip: int = 0, user=Depends(require_admin)):
+    limit = max(1, min(limit, 500))
+    items = await db.audit_log.find({}, {"_id": 0}).sort("at", -1).skip(skip).limit(limit).to_list(limit)
+    return items
 
 
 @api.get("/admin/gallery")
@@ -1310,12 +2087,26 @@ async def seed_demo(user=Depends(require_admin)):
 from cms_routes import register_cms_routes  # noqa: E402
 register_cms_routes(api, db, require_admin, require_admin_or_editor)
 
+from mailer import init_mailer, send_mail  # noqa: E402
+init_mailer(db, logger)
+
 app.include_router(api)
+
+# CORS. Credentialed requests (cookies) can NEVER be paired with a wildcard origin —
+# browsers reject it, and silently-broken auth is worse than a loud failure. In
+# production we refuse to start on a wildcard/empty origin list; in dev we fall back
+# to the known frontend origin.
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+if "*" in _cors_origins or not _cors_origins:
+    if APP_ENV == "production":
+        raise RuntimeError("CORS_ORIGINS must be an explicit allowlist in production (no '*') when cookies are used")
+    _cors_origins = [PUBLIC_APP_URL]
+    logger.warning("CORS_ORIGINS not pinned — defaulting to %s for dev", PUBLIC_APP_URL)
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",")],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1334,6 +2125,33 @@ async def bootstrap_admin():
     )
     if result.matched_count:
         logger.info("Bootstrapped %s to admin", INITIAL_ADMIN_EMAIL)
+
+
+@app.on_event("startup")
+async def init_indexes():
+    """Create indexes idempotently on boot.
+
+    The session TTL index needs expires_at stored as a real BSON date; older sessions
+    wrote ISO strings, so migrate those first or the TTL monitor silently ignores them.
+    """
+    try:
+        async for s in db.user_sessions.find({"expires_at": {"$type": "string"}}, {"session_token": 1, "expires_at": 1}):
+            dt = parse_dt(s["expires_at"])
+            if dt:
+                await db.user_sessions.update_one({"_id": s["_id"]}, {"$set": {"expires_at": dt}})
+
+        await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
+        await db.user_sessions.create_index("session_token", unique=True)
+        await db.users.create_index("email", unique=True)
+        # Partial (not sparse) unique: only enforce uniqueness on docs that actually
+        # have a provider sub, so many null/absent values don't collide.
+        await db.users.create_index("google_sub", unique=True, partialFilterExpression={"google_sub": {"$type": "string"}})
+        await db.users.create_index("apple_sub", unique=True, partialFilterExpression={"apple_sub": {"$type": "string"}})
+        await db.processed_stripe_events.create_index("event_id", unique=True)
+        await db.newsletter_subscriptions.create_index("email", unique=True)
+        logger.info("Indexes ensured")
+    except Exception:
+        logger.exception("init_indexes failed")
 
 
 @app.on_event("shutdown")

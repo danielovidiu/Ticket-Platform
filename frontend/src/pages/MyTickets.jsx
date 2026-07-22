@@ -21,7 +21,7 @@ export default function MyTickets() {
   if (!user) return (
     <div className="max-w-xl mx-auto px-6 py-24 text-center">
       <h1 className="font-display text-4xl uppercase font-black tracking-tighter">Sign in to view your tickets</h1>
-      <button onClick={() => startLogin("/my-tickets")} data-testid="mytickets-login" className="btn-accent mt-8">SIGN IN WITH GOOGLE</button>
+      <button onClick={() => startLogin("/my-tickets")} data-testid="mytickets-login" className="btn-accent mt-8">SIGN IN</button>
     </div>
   );
 

@@ -434,7 +434,18 @@ function Users() {
   const [items, setItems] = useState([]);
   const load = () => http.get("/admin/users").then((r) => setItems(r.data));
   useEffect(() => { load(); }, []);
-  const setRole = async (uid, role) => { await http.patch(`/admin/users/${uid}/role`, { role }); load(); };
+  const setRole = async (u, role) => {
+    if (u.role === role) return; // no-op: already this role
+    // Role changes grant/revoke privileges — confirm the exact change first.
+    if (!window.confirm(`Change ${u.email || u.name} from "${u.role}" to "${role}"?`)) return;
+    try {
+      await http.patch(`/admin/users/${u.user_id}/role`, { role });
+      toast.success(`${u.email || u.name} is now ${role}`);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to change role");
+    }
+  };
   return (
     <div className="space-y-2">
       {items.map((u) => (
@@ -444,7 +455,7 @@ function Users() {
           <div className="col-span-2 font-mono-x text-xs uppercase">{u.role}</div>
           <div className="col-span-2 flex gap-1 justify-end">
             {["user", "editor", "door", "admin"].map((r) => (
-              <button key={r} onClick={() => setRole(u.user_id, r)} className={`px-2 py-1 border text-[10px] uppercase tracking-[0.2em] ${u.role===r ? "bg-white text-black border-white" : "border-white/20"}`}>{r}</button>
+              <button key={r} onClick={() => setRole(u, r)} className={`px-2 py-1 border text-[10px] uppercase tracking-[0.2em] ${u.role===r ? "bg-white text-black border-white" : "border-white/20"}`}>{r}</button>
             ))}
           </div>
         </div>

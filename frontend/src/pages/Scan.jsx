@@ -70,7 +70,7 @@ export default function Scan() {
         <div className="border-2 border-current p-6">
           <div className="font-mono-x text-xs uppercase tracking-[0.3em]">Manual code</div>
           <form onSubmit={(e) => { e.preventDefault(); submit(manual.trim()); }}>
-            <input value={manual} onChange={(e) => setManual(e.target.value)} placeholder="UMB-XXXXXXX" data-testid="manual-code-input"
+            <input value={manual} onChange={(e) => setManual(e.target.value)} placeholder="SNTY-XXXXXXX" data-testid="manual-code-input"
                    className="w-full bg-transparent border-2 border-current p-4 font-mono-x uppercase text-lg mt-3 outline-none" />
             <button data-testid="scan-submit" className="btn-accent w-full mt-3">SCAN</button>
           </form>

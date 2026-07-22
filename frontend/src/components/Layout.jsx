@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import { useAuth, startLogin } from "../auth";
 import { http } from "../api";
 import { Menu, X } from "lucide-react";
@@ -39,6 +39,7 @@ const Header = ({ cmsNav }) => {
           {user ? (
             <>
               <Link to="/my-tickets" data-testid="my-tickets-link" className="btn-primary !py-2 !px-3 !text-[10px]">My Tickets</Link>
+              <Link to="/settings" data-testid="settings-link" className="btn-primary !py-2 !px-3 !text-[10px]">Account</Link>
               {user.role === "admin" && <Link to="/admin" data-testid="admin-link" className="btn-primary !py-2 !px-3 !text-[10px]">Admin</Link>}
               {(user.role === "admin" || user.role === "editor") && <Link to="/cms" data-testid="cms-link" className="btn-primary !py-2 !px-3 !text-[10px]">CMS</Link>}
               {(user.role === "admin" || user.role === "door") && <Link to="/scan" data-testid="scan-link" className="btn-primary !py-2 !px-3 !text-[10px]">Scan</Link>}
@@ -59,6 +60,7 @@ const Header = ({ cmsNav }) => {
             {user ? (
               <>
                 <Link to="/my-tickets" onClick={() => setOpen(false)}>My Tickets</Link>
+                <Link to="/settings" onClick={() => setOpen(false)}>Account</Link>
                 {user.role === "admin" && <Link to="/admin" onClick={() => setOpen(false)}>Admin</Link>}
                 {(user.role === "admin" || user.role === "editor") && <Link to="/cms" onClick={() => setOpen(false)}>CMS</Link>}
                 {(user.role === "admin" || user.role === "door") && <Link to="/scan" onClick={() => setOpen(false)}>Scan</Link>}
@@ -84,9 +86,9 @@ const Footer = () => (
       <div>
         <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-500 mb-4">Legal</div>
         <ul className="space-y-2 text-sm text-zinc-300">
-          <li>All sales final unless event cancelled.</li>
-          <li>Romanian VAT invoices auto-issued.</li>
-          <li>Prices in RON.</li>
+          <li><Link to="/terms" className="hover:text-white">Terms &amp; Conditions</Link></li>
+          <li><Link to="/privacy" className="hover:text-white">Privacy Policy</Link></li>
+          <li><Link to="/cookie-policy" className="hover:text-white">Cookie Policy</Link></li>
         </ul>
       </div>
       <div>
@@ -99,21 +101,18 @@ const Footer = () => (
 );
 
 export default function Layout({ children }) {
-  const location = useLocation();
   const [cmsNav, setCmsNav] = useState([]);
   useEffect(() => {
     http.get("/cms/nav").then((r) => setCmsNav(r.data)).catch(() => setCmsNav([]));
   }, []);
-  // Scan and CMS are full-screen tools — the top nav still needs to stay
-  // reachable, but a page footer below a camera view or the CMS editor
-  // canvas doesn't make sense.
-  const noFooter = location.pathname === "/scan" || location.pathname === "/cms";
+  // The header and footer are common to every page — including full-screen tools
+  // like Scan and the CMS editor.
   return (
     <div className="min-h-screen flex flex-col">
       <div className="grain-overlay" />
       <Header cmsNav={cmsNav} />
       <main className="flex-1 min-h-0">{children}</main>
-      {!noFooter && <Footer />}
+      <Footer />
     </div>
   );
 }

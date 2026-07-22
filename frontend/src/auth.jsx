@@ -19,11 +19,6 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    // If returning from OAuth callback, skip /me – AuthCallback will handle it
-    if (typeof window !== "undefined" && window.location.hash?.includes("session_id=")) {
-      setLoading(false);
-      return;
-    }
     refresh();
   }, [refresh]);
 
@@ -41,8 +36,8 @@ export const AuthProvider = ({ children }) => {
 
 export const useAuth = () => useContext(AuthCtx);
 
-// REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+// Sends the user to our own /login page, preserving where they came from so we can
+// return them there after sign-in. (Replaces the old Emergent hosted-OAuth redirect.)
 export const startLogin = (returnPath = "/my-tickets") => {
-  const redirectUrl = window.location.origin + returnPath;
-  window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  window.location.assign("/login?return=" + encodeURIComponent(returnPath));
 };

@@ -259,9 +259,25 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             _mk_page("mission", "Mission", "Mission", 1, mission_blocks),
             _mk_page("contact", "Contact", "Contact", 2, contact_blocks),
         ]
+        # Legal pages: editable in the CMS like any other page, but kept out of the
+        # top nav (in_nav=False) — they live in the footer instead.
+        for slug, title, blocks in _legal_pages():
+            pages.append(_mk_page(slug, title, title, 100, blocks, in_nav=False))
         for pg in pages:
             await db.cms_pages.insert_one(pg)
         return {"seeded": True, "pages": len(pages)}
+
+    @api.post("/admin/cms/seed-legal")
+    async def cms_seed_legal(user=Depends(require_admin_or_editor)):
+        """Idempotently create the legal pages (terms / privacy / cookies) if they
+        don't already exist. Safe to re-run; never overwrites edited content."""
+        created = []
+        for slug, title, blocks in _legal_pages():
+            if await db.cms_pages.find_one({"slug": slug}):
+                continue
+            await db.cms_pages.insert_one(_mk_page(slug, title, title, 100, blocks, in_nav=False))
+            created.append(slug)
+        return {"created": created}
 
 
 def _default_theme():
@@ -288,7 +304,7 @@ def _default_theme():
     }
 
 
-def _mk_page(slug, title, nav_label, order, blocks):
+def _mk_page(slug, title, nav_label, order, blocks, in_nav=True):
     now = datetime.now(timezone.utc).isoformat()
     return {
         "page_id": f"pg_{uuid.uuid4().hex[:16]}",
@@ -296,7 +312,7 @@ def _mk_page(slug, title, nav_label, order, blocks):
         "title": title,
         "nav_label": nav_label,
         "nav_order": order,
-        "in_nav": True,
+        "in_nav": in_nav,
         "draft": {"blocks": blocks},
         "published": {"blocks": blocks},
         "versions": [],
@@ -353,3 +369,107 @@ def _seed_contact_blocks():
         _bk("contact_form", heading="Say hello", success_message="Message sent. We'll be in touch."),
         _bk("newsletter", heading="No promoter. Just us.", body="Two emails a season, tops.", cta_label="Subscribe"),
     ]
+
+
+# ---------- Legal pages ----------
+# Starter templates only — the operator must review these with qualified counsel and
+# fill the [bracketed] placeholders before relying on them. They're normal CMS pages,
+# so all of this can be edited and re-published from the CMS editor.
+
+def _legal_pages():
+    return [
+        ("terms", "Terms & Conditions", _seed_terms_blocks()),
+        ("privacy", "Privacy Policy", _seed_privacy_blocks()),
+        ("cookie-policy", "Cookie Policy", _seed_cookie_blocks()),
+    ]
+
+
+def _seed_terms_blocks():
+    return [_bk("rich_text", content=(
+        "LEGAL · TERMS\n\n"
+        "# Terms & Conditions\n\n"
+        "Last updated: [DATE]. This is a starter template and must be reviewed by "
+        "qualified counsel before you rely on it.\n\n"
+        "## 1. Who we are\n\n"
+        "Supersanity (\"we\", \"us\") operates this site and sells tickets to events we "
+        "programme. [Legal entity name, registration number, and registered address.]\n\n"
+        "## 2. Tickets & orders\n\n"
+        "Placing an order creates a binding contract once payment is confirmed. Tickets "
+        "are personal to the buyer. We may refuse entry for invalid, duplicated, or "
+        "resold tickets.\n\n"
+        "## 3. Pricing & payment\n\n"
+        "Prices are shown in RON and include applicable VAT. Payment is handled by our "
+        "payment provider; we never store your full card details.\n\n"
+        "## 4. Refunds & cancellations\n\n"
+        "All sales are final unless an event is cancelled by us, in which case tickets "
+        "are refunded to the original payment method. [Insert your rescheduling policy.]\n\n"
+        "## 5. Conduct at events\n\n"
+        "Entry is subject to venue rules and the law. We may refuse or revoke entry for "
+        "unsafe or unlawful behaviour.\n\n"
+        "## 6. Liability\n\n"
+        "To the extent permitted by law, our liability is limited to the ticket price "
+        "paid. Nothing here excludes liability that cannot be excluded by law.\n\n"
+        "## 7. Changes\n\n"
+        "We may update these terms. Material changes are posted here with a new "
+        "\"last updated\" date.\n\n"
+        "## 8. Contact\n\n"
+        "Questions about these terms: bookings@supersanity.collective"
+    ))]
+
+
+def _seed_privacy_blocks():
+    return [_bk("rich_text", content=(
+        "LEGAL · PRIVACY\n\n"
+        "# Privacy Policy\n\n"
+        "Last updated: [DATE]. Starter template — review with counsel before publishing.\n\n"
+        "## Who is responsible\n\n"
+        "Supersanity is the data controller for personal data processed through this "
+        "site. [Legal entity + contact for data requests.]\n\n"
+        "## What we collect\n\n"
+        "Account data (name, email, and optionally phone), order and ticket history, "
+        "invoices, marketing preferences with a consent log, and payment metadata — "
+        "never full card numbers, which go straight to our payment provider.\n\n"
+        "## Why we process it\n\n"
+        "To create your account and issue tickets, process payments, send transactional "
+        "emails (order and ticket confirmations), and — only with your opt-in — send "
+        "newsletters and promotions.\n\n"
+        "## Legal bases\n\n"
+        "Performance of a contract (tickets), legal obligation (invoice retention), and "
+        "consent (marketing).\n\n"
+        "## Sharing\n\n"
+        "With our payment provider (Stripe), our email provider, and the identity "
+        "providers you choose to sign in with (Google, Apple). We do not run "
+        "third-party advertising trackers.\n\n"
+        "## Retention\n\n"
+        "Invoices and tickets are kept for the period required by tax law (approx. 10 "
+        "years). Sessions expire after 7 days. Consent records are kept as evidence of "
+        "compliance.\n\n"
+        "## Your rights\n\n"
+        "You can access, export, correct, or delete your data, and withdraw marketing "
+        "consent at any time from your [account settings](/settings). Deletion "
+        "anonymizes your account while retaining invoices as legally required.\n\n"
+        "## Contact\n\n"
+        "Data requests: bookings@supersanity.collective"
+    ))]
+
+
+def _seed_cookie_blocks():
+    return [_bk("rich_text", content=(
+        "LEGAL · COOKIES\n\n"
+        "# Cookie Policy\n\n"
+        "Last updated: [DATE]. Starter template — review with counsel before publishing.\n\n"
+        "## Cookies we use\n\n"
+        "We use only **strictly necessary** cookies.\n\n"
+        "## Session cookie\n\n"
+        "A single `session_token` cookie keeps you signed in and lets you complete a "
+        "ticket purchase. It is essential — the site cannot function without it — and is "
+        "not used for tracking or advertising.\n\n"
+        "## What we don't use\n\n"
+        "We do not run third-party analytics, advertising, or session-recording "
+        "cookies. There is nothing to opt out of beyond the essential session cookie, "
+        "which is cleared when you sign out.\n\n"
+        "## Managing cookies\n\n"
+        "You can clear cookies in your browser at any time; doing so signs you out.\n\n"
+        "## Contact\n\n"
+        "Questions: bookings@supersanity.collective"
+    ))]
