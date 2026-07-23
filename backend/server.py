@@ -31,6 +31,17 @@ from reportlab.pdfgen import canvas
 from starlette.middleware.cors import CORSMiddleware
 # Simple in-memory sliding-window rate limiter. Enough for a single-node MVP.
 # For multi-node prod, swap for a Redis-backed limiter.
+#
+# SECURITY [H1/H2 — see SECURITY_AUDIT.md]: this limiter is currently the ONLY brake on
+# login brute force, newsletter/reset mail bombing, and reservation spam, and it has two
+# known holes:
+#   1. The client IP below is read straight from `X-Forwarded-For` with no trusted-proxy
+#      check, so any caller can pick its own bucket and bypass every limit outright
+#      (reproduced: 14/14 requests accepted against a 10/60s limit by rotating the
+#      header). Fix = only honour the header from a configured proxy CIDR.
+#   2. `_rate_buckets` never evicts. Empty deques and their keys are retained forever, so
+#      an attacker who controls the key (see 1) can grow this dict until the worker OOMs.
+# Do not treat these limits as a security control until both are fixed.
 from collections import defaultdict, deque
 from threading import Lock
 _rate_buckets: dict = defaultdict(lambda: defaultdict(deque))
@@ -39,6 +50,7 @@ _rate_lock = Lock()
 def rate_limit(key: str, max_calls: int, window_seconds: int):
     """Returns a FastAPI dependency that raises 429 when exceeded."""
     async def _dep(request: Request):
+        # SECURITY: untrusted header — see the H1 note above.
         ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
         now = datetime.now(timezone.utc).timestamp()
         with _rate_lock:
@@ -67,16 +79,6 @@ STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "").strip()
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
 INITIAL_ADMIN_EMAIL = os.environ.get("INITIAL_ADMIN_EMAIL", "").strip().lower()
 
-# Payments run in one of two modes. "fake" (the out-of-box default) simulates the
-# whole reserve→pay→finalize loop locally with no Stripe account, so the app is fully
-# usable in dev. "stripe" uses the real SDK and REQUIRES a webhook signing secret.
-_force_fake = os.environ.get("LOCAL_FAKE_PAYMENTS", "").strip() == "1"
-PAYMENTS_MODE = "stripe" if (STRIPE_API_KEY.startswith("sk_") and not _force_fake) else "fake"
-if PAYMENTS_MODE == "stripe":
-    stripe_sdk.api_key = STRIPE_API_KEY
-    if not STRIPE_WEBHOOK_SECRET:
-        raise RuntimeError("STRIPE_WEBHOOK_SECRET is required when running live Stripe payments")
-
 APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
 # Public origin of the FRONTEND (where OAuth callbacks and email links send users
 # back to). Its scheme also decides how session cookies are scoped (below).
@@ -85,6 +87,50 @@ POLICY_VERSION = os.environ.get("POLICY_VERSION", "2026-07-22")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("supersanity")
+
+# ---------- Payment mode (fails closed) ----------
+# Two modes. "stripe" uses the real SDK and requires a webhook signing secret. "fake"
+# simulates the whole reserve→pay→finalize loop with no Stripe account, so a fresh
+# checkout is usable immediately.
+#
+# SECURITY [C1]: the fake simulator finalizes orders through two UNAUTHENTICATED
+# endpoints (`payment_status` and `stripe_webhook`), so reaching it in production means
+# giving away tickets. It used to be selected silently whenever STRIPE_API_KEY was
+# absent or malformed — a typo in the key was enough. It is now opt-in only:
+#
+#   LOCAL_FAKE_PAYMENTS=1   -> fake, and refused outright under APP_ENV=production
+#   STRIPE_API_KEY=sk_...   -> stripe (STRIPE_WEBHOOK_SECRET then mandatory)
+#   neither                 -> hard startup failure in production; loud warning in dev
+#
+# There is deliberately no path where a missing or malformed key quietly downgrades a
+# production deployment to the simulator.
+if os.environ.get("LOCAL_FAKE_PAYMENTS", "").strip() == "1":
+    if APP_ENV == "production":
+        raise RuntimeError(
+            "LOCAL_FAKE_PAYMENTS=1 is a development-only simulator that issues tickets "
+            "without payment, and it exposes unauthenticated order-finalizing endpoints. "
+            "It cannot be used with APP_ENV=production."
+        )
+    PAYMENTS_MODE = "fake"
+elif STRIPE_API_KEY.startswith("sk_"):
+    PAYMENTS_MODE = "stripe"
+elif APP_ENV == "production":
+    raise RuntimeError(
+        "STRIPE_API_KEY must be a live 'sk_...' key when APP_ENV=production. Refusing to "
+        "start: without one the app would fall back to the fake payment simulator and "
+        "hand out tickets for free."
+    )
+else:
+    PAYMENTS_MODE = "fake"
+    logger.warning(
+        "No STRIPE_API_KEY set — using the FAKE payment simulator. Orders finalize with "
+        "no payment and no authentication. Development only; this is refused in production."
+    )
+
+if PAYMENTS_MODE == "stripe":
+    stripe_sdk.api_key = STRIPE_API_KEY
+    if not STRIPE_WEBHOOK_SECRET:
+        raise RuntimeError("STRIPE_WEBHOOK_SECRET is required when running live Stripe payments")
 
 # SESSION_SECRET signs all our stateless tokens (email verification, password reset,
 # newsletter confirm/unsubscribe). It is REQUIRED in production; in dev we fall back to
@@ -98,6 +144,17 @@ if not SESSION_SECRET:
 
 # Session cookie scoping is derived from the frontend scheme. Cross-site HTTPS needs
 # SameSite=None; Secure; plain-http localhost needs Lax + insecure or browsers drop it.
+#
+# SECURITY [M3]: SameSite=None means the session cookie IS sent on cross-site requests,
+# and there is no CSRF token or Origin check anywhere in this app. JSON bodies are
+# protected only incidentally (they force a CORS preflight the allowlist rejects), but
+# multipart/form-data is CORS-safelisted and needs no preflight — see /admin/uploads.
+# Prefer SameSite=Lax whenever the frontend is same-site, and add an Origin check on
+# state-changing routes regardless.
+#
+# SECURITY [M1]: no security response headers are set anywhere in this app — no HSTS,
+# CSP, X-Frame-Options, nosniff, or Referrer-Policy. The Referrer-Policy gap matters most
+# because email-verification and password-reset tokens travel in the URL query string.
 COOKIE_SECURE = PUBLIC_APP_URL.startswith("https://")
 COOKIE_SAMESITE = "none" if COOKIE_SECURE else "lax"
 
@@ -109,6 +166,11 @@ GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
 GOOGLE_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI)
 
 APPLE_CLIENT_ID = os.environ.get("APPLE_CLIENT_ID", "").strip()      # Services ID
+# STALE: TEAM_ID / KEY_ID / PRIVATE_KEY exist to sign the client-secret JWT for Apple's
+# token endpoint, but this flow uses response_type="code id_token" and only ever verifies
+# the id_token — the code is never exchanged, so none of these three are used anywhere.
+# They are required-but-inert: they gate APPLE_ENABLED below and nothing else. Either
+# drop them from the gate, or implement the code exchange that needs them.
 APPLE_TEAM_ID = os.environ.get("APPLE_TEAM_ID", "").strip()
 APPLE_KEY_ID = os.environ.get("APPLE_KEY_ID", "").strip()
 APPLE_PRIVATE_KEY = os.environ.get("APPLE_PRIVATE_KEY", "").strip()  # .p8 contents
@@ -181,6 +243,11 @@ def read_token(purpose: str, token: str) -> dict:
 
 
 # ---------- Auth ----------
+# SECURITY — TRUST BOUNDARY. Everything below this line decides *who the caller is* and
+# *what they may do*. `get_current_user` is the only place a request becomes an identity;
+# the three `require_*` helpers are the only authorization gates in the application. A
+# route with none of them as a dependency is public by definition — check that this is
+# intended before adding one.
 
 
 async def get_current_user(
@@ -250,12 +317,34 @@ def verify_password(pw: str, hashed: Optional[str]) -> bool:
 _DUMMY_HASH = hash_password("timing-equalizer-not-a-real-password")
 
 
+def _initial_role(email: str) -> str:
+    """Role a brand-new account starts with.
+
+    SECURITY [H3 — fixed]: this used to be "admin if you are the first row in the users
+    collection". On a fresh public deploy that handed full admin to whoever registered
+    first, and the INITIAL_ADMIN_EMAIL startup bootstrap re-promoted the intended
+    operator WITHOUT demoting the squatter. Arrival order is now irrelevant: admin comes
+    only from configuration, and every other account starts as "user". Do not reintroduce
+    a count-based rule here.
+    """
+    if INITIAL_ADMIN_EMAIL and (email or "").strip().lower() == INITIAL_ADMIN_EMAIL:
+        return "admin"
+    return "user"
+
+
 def _valid_email(email: str) -> bool:
+    # SECURITY [M12]: deliberately loose, but it does NOT reject CR/LF. That is safe only
+    # because the mailer talks JSON to Resend; it would become header injection the moment
+    # anything builds SMTP headers from this value. Reject \r and \n here rather than
+    # relying on the transport.
     email = (email or "").strip()
     return "@" in email and "." in email.split("@")[-1] and 3 <= len(email) <= 254
 
 
 def _client_ip(request: Optional[Request]) -> str:
+    # SECURITY [H1]: same untrusted-header problem as rate_limit(). Here the consequence
+    # is weaker but not nil — this value is written to the consent log as the evidence of
+    # where consent came from, so a spoofed header makes that audit record unreliable.
     if request is None:
         return ""
     return request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
@@ -280,7 +369,14 @@ def _email_rate_check(bucket: str, email: str, max_calls: int, window: int):
 async def _issue_session(response: Response, user_id: str, old_token: Optional[str] = None) -> str:
     """Create a fresh opaque session, set the cookie, and rotate out any prior
     session token (defeats fixation). expires_at is a real datetime so the Phase E
-    TTL index can reap it server-side."""
+    TTL index can reap it server-side.
+
+    SECURITY [M2 — see SECURITY_AUDIT.md]: the token is stored in Mongo in PLAINTEXT and
+    matched by equality in `get_current_user`. Any read-only exposure of `user_sessions`
+    (a backup, a dump, an injection) therefore hands over directly usable sessions for
+    every logged-in user, admins included. Store sha256(token) and look up by hash — the
+    cookie stays a bearer secret, the database stops being a credential store.
+    """
     if old_token:
         await db.user_sessions.delete_one({"session_token": old_token})
     token = secrets.token_urlsafe(32)
@@ -373,14 +469,13 @@ async def _get_or_create_user(email, *, name="", picture="", provider=None, sub=
             return u, False
 
     user_id = f"user_{uuid.uuid4().hex[:12]}"
-    is_first = (await db.users.count_documents({})) == 0
     doc = {
         "user_id": user_id,
         "email": email,
         "name": name or "",
         "picture": picture or "",
         "phone": "",
-        "role": "admin" if is_first else "user",
+        "role": _initial_role(email),  # SECURITY [H3]: config, never arrival order
         "password_hash": None,
         "email_verified_at": now_utc().isoformat() if email_verified else None,
         "email_opt_in": False,
@@ -534,7 +629,6 @@ async def register(body: RegisterIn, request: Request, response: Response):
         raise HTTPException(400, "Unable to register with those details")
 
     user_id = f"user_{uuid.uuid4().hex[:12]}"
-    is_first = (await db.users.count_documents({})) == 0
     now_iso = now_utc().isoformat()
     doc = {
         "user_id": user_id,
@@ -542,7 +636,7 @@ async def register(body: RegisterIn, request: Request, response: Response):
         "name": body.name.strip(),
         "picture": "",
         "phone": "",
-        "role": "admin" if is_first else "user",
+        "role": _initial_role(email),  # SECURITY [H3]: config, never arrival order
         "password_hash": hash_password(body.password),
         "email_verified_at": None,
         "email_opt_in": bool(body.email_opt_in),
@@ -1241,7 +1335,12 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
 
 
 async def _enforce_user_ticket_cap(event, user_id: str, quantity: int):
-    """Raise 400 if adding `quantity` tickets would exceed the event's per-user cap."""
+    """Raise 400 if adding `quantity` tickets would exceed the event's per-user cap.
+
+    SECURITY [M5 — TOCTOU]: the count below and the reservation insert that follows are
+    not atomic, so concurrent requests all observe the same pre-state and all pass. The
+    anti-scalping cap is therefore advisory under concurrency.
+    """
     max_per_user = event.get("max_tickets_per_user", 4)
     existing = await db.tickets.count_documents({"event_id": event["event_id"], "user_id": user_id})
     pending_docs = await db.reservations.find(
@@ -1268,6 +1367,11 @@ async def _resolve_pricing_source(body: "ReserveIn", event, wave):
         )
         if not special:
             raise HTTPException(400, "Invalid special link")
+        # SECURITY [M4 — TOCTOU]: this reads `used`, but `used` is only incremented in
+        # _finalize_paid_reservation. Nothing holds capacity across the reserve→pay window,
+        # so N concurrent reservations all pass this check and can all be paid — the link
+        # oversells. Contrast _atomic_hold_wave_stock() below, which does this correctly
+        # with a conditional $inc. This path needs the same treatment.
         if special.get("used", 0) + body.quantity > special["capacity"]:
             raise HTTPException(400, "Special link capacity exceeded")
         return float(special["price_ron"]), special
@@ -1339,6 +1443,9 @@ async def create_checkout(body: CheckoutIn, request: Request, user=Depends(get_c
     if parse_dt(r["expires_at"]) < now_utc():
         raise HTTPException(400, "Reservation expired")
 
+    # SECURITY [M7]: origin_url is client-supplied and unvalidated, then handed to Stripe
+    # as the success/cancel redirect. The client has no legitimate reason to choose this —
+    # derive it from PUBLIC_APP_URL server-side and drop the field from CheckoutIn.
     origin = body.origin_url.rstrip("/")
     success_url = f"{origin}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{origin}/checkout/cancel?reservation_id={r['reservation_id']}"
@@ -1490,6 +1597,14 @@ async def _finalize_paid_reservation(reservation_id: str):
 
 @api.get("/payments/status/{session_id}")
 async def payment_status(session_id: str, request: Request):
+    # SECURITY [C1 fixed / L2 open]: deliberately unauthenticated so the post-Stripe
+    # success page can poll before its session cookie is re-established.
+    #   * The fake branch below MARKS THE ORDER PAID and issues real tickets. That is now
+    #     reachable only under an explicit LOCAL_FAKE_PAYMENTS=1, which the startup guard
+    #     refuses under APP_ENV=production — so it cannot exist on a production host.
+    #   * STILL OPEN (L2): this returns the full transaction doc (user_id, amount) to
+    #     anyone holding the session id. Unguessable, but an unauthenticated read of
+    #     order data. Narrow the response to {payment_status, status}.
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
     if not tx:
         raise HTTPException(404, "Transaction not found")
@@ -1530,6 +1645,13 @@ async def stripe_webhook(request: Request):
     if PAYMENTS_MODE == "fake":
         # Dev-only shim so the webhook path is exercisable without Stripe. Accepts a
         # plain JSON {session_id, payment_status}. Refused entirely in stripe mode.
+        #
+        # SECURITY [C1 — fixed]: this branch is unauthenticated and unsigned. Anyone who
+        # reaches it can finalize any reservation whose session_id they know (their own,
+        # returned by /api/checkout) and receive real tickets and a real invoice without
+        # paying. It is now gated on PAYMENTS_MODE == "fake", which requires an explicit
+        # LOCAL_FAKE_PAYMENTS=1 and is refused at startup under APP_ENV=production. Do not
+        # reintroduce a path where an absent or malformed Stripe key selects this mode.
         try:
             payload = json.loads(body)
         except ValueError:
@@ -1767,6 +1889,11 @@ async def admin_create_event(body: EventIn, user=Depends(require_admin)):
 
 @api.patch("/admin/events/{event_id}")
 async def admin_update_event(event_id: str, body: dict, user=Depends(require_admin)):
+    # SECURITY [M6 — mass assignment]: `body` is an untyped dict $set wholesale, so every
+    # EventIn validator is bypassed and ANY field name can be written — including dotted
+    # paths that reach into nested docs (e.g. "waves.0.available"). Admin-only, so this is
+    # privilege use rather than escalation, but it turns a hijacked admin session into
+    # arbitrary document mutation. Replace with a typed patch model.
     body.pop("event_id", None)
     body.pop("_id", None)
     if "waves" in body:
@@ -2060,6 +2187,17 @@ async def admin_upload_media(
     poster: Optional[UploadFile] = File(None),
     user=Depends(require_admin),
 ):
+    # SECURITY [M3/M8/M9 — see SECURITY_AUDIT.md]. Three things to know about this route:
+    #   * The media type is decided by the CLIENT-DECLARED Content-Type below; nothing
+    #     sniffs the actual bytes. The extension allowlist contains no HTML or SVG type
+    #     and names are server-generated UUIDs, which is what keeps this from being stored
+    #     XSS today — it stops being true if SVG is ever added, or if /uploads is served
+    #     without `X-Content-Type-Options: nosniff` (currently it is: no headers are set).
+    #   * Only the *thumbnail* is re-encoded through Pillow. The original bytes are
+    #     written verbatim, and videos are never re-encoded at all.
+    #   * The size cap is enforced AFTER the whole body is read into memory, and because
+    #     multipart is a CORS-safelisted content type this POST needs no preflight — so
+    #     with SameSite=None it is reachable cross-site against a logged-in admin.
     content_type = file.content_type or ""
     if content_type in IMAGE_CONTENT_TYPES:
         media_type, ext = "image", IMAGE_CONTENT_TYPES[content_type]
@@ -2114,7 +2252,8 @@ async def admin_upload_media(
 
 @api.post("/seed")
 async def seed_demo(user=Depends(require_admin)):
-    """Seed demo data if empty. Public for MVP convenience."""
+    """Seed demo data if empty. Admin-only (the docstring here used to claim it was
+    public — it never is; the dependency above is the authority)."""
     if await db.events.count_documents({}) > 0:
         return {"seeded": False, "reason": "already has data"}
 
@@ -2252,17 +2391,37 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def bootstrap_admin():
-    """Promote INITIAL_ADMIN_EMAIL (if set) to admin role on every startup.
-    Kills the 'first-user-becomes-admin' race that hit us when test users
-    were seeded before the real admin signed in."""
-    if not INITIAL_ADMIN_EMAIL:
-        return
-    result = await db.users.update_one(
-        {"email": INITIAL_ADMIN_EMAIL},
-        {"$set": {"role": "admin"}},
-    )
-    if result.matched_count:
-        logger.info("Bootstrapped %s to admin", INITIAL_ADMIN_EMAIL)
+    """Promote INITIAL_ADMIN_EMAIL to admin, and warn when nobody can administer.
+
+    SECURITY [H3]: this is now the ONLY way an account becomes admin without an existing
+    admin granting it — `_initial_role` covers accounts created after the env var is set,
+    and this covers one that already existed before it was. Registration order confers
+    nothing.
+
+    The trade-off is that a deployment with no INITIAL_ADMIN_EMAIL has no admin at all
+    and no way to make one through the API, so say so loudly rather than leaving an
+    operator to discover it through 403s.
+    """
+    if INITIAL_ADMIN_EMAIL:
+        result = await db.users.update_one(
+            {"email": INITIAL_ADMIN_EMAIL},
+            {"$set": {"role": "admin"}},
+        )
+        if result.matched_count:
+            logger.info("Bootstrapped %s to admin", INITIAL_ADMIN_EMAIL)
+        else:
+            logger.info(
+                "INITIAL_ADMIN_EMAIL=%s has no account yet — it will be created with the "
+                "admin role when that address registers", INITIAL_ADMIN_EMAIL,
+            )
+
+    if not await db.users.count_documents({"role": "admin"}):
+        logger.warning(
+            "No admin account exists. Nothing grants admin except INITIAL_ADMIN_EMAIL "
+            "(currently %s) — set it and restart, or promote a user directly in the "
+            "database. The admin UI is unreachable until then.",
+            INITIAL_ADMIN_EMAIL or "unset",
+        )
 
 
 @app.on_event("startup")

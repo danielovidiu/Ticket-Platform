@@ -42,6 +42,13 @@ export function renderRich(md, opts = {}) {
 export function renderInline(t) {
   const parts = [];
   let i = 0;
+  // SECURITY: the `[text](url)` branch below puts an author-supplied URL straight into
+  // `href` with no scheme validation. This was audited and is NOT an XSS vector: React 19
+  // replaces `javascript:` URLs with a throwing stub (verified in the shipped react-dom
+  // build), and the authors here are admins/editors who can already post links. Two
+  // things would change that, so check them before altering this: rendering this markdown
+  // outside React (an email template, SSR-to-string), or moving to a React version whose
+  // URL scrubbing no longer applies. See SECURITY_AUDIT.md → "False alarms".
   // Bold/strike/underline before italic so `**`/`~~`/`__` aren't swallowed by the single-`*` pattern.
   const re = /\*\*(.+?)\*\*|~~(.+?)~~|__(.+?)__|\*(.+?)\*|\[(.+?)\]\((.+?)\)/g;
   let m;

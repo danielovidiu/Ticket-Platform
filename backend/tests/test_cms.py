@@ -9,36 +9,41 @@ Covers:
   - Theme flow (draft → publish → public reflects)
   - Nav filtering (in_nav=false excluded)
 """
-import os
 import uuid
-import subprocess
 import pytest
 import requests
 
-BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
-API = f"{BASE_URL}/api"
+from support import API, bearer, mint_user
 
-ADMIN_TOKEN = os.environ.get("UMB_ADMIN_TOKEN")
-EDITOR_TOKEN = os.environ.get("UMB_EDITOR_TOKEN")
-USER_TOKEN = os.environ.get("UMB_USER_TOKEN")
+# These used to be UMB_*_TOKEN environment variables injected by the Emergent runner, and
+# `_mint` used to shell out to mongosh with the database name hardcoded as
+# 'test_database'. Both are gone.
+#
+# They are now ROLE SENTINELS, not tokens: `_b()` resolves one to a real session token on
+# first use and caches it for the module. Resolving lazily matters — minting at import
+# time would hit the network during collection, which is precisely how the old suite
+# turned "server not running" into an unreadable wall of collection errors.
+ADMIN_TOKEN = "admin"
+EDITOR_TOKEN = "editor"
+USER_TOKEN = "user"
 
-
-def _b(t):
-    return {"Authorization": f"Bearer {t}"}
+_ROLES = ("admin", "editor", "user", "door")
+_token_cache: dict = {}
 
 
 def _mint(role):
-    tok = f"test_{role}_{uuid.uuid4().hex[:12]}"
-    uid = f"test-{role}-{uuid.uuid4().hex[:12]}"
-    email = f"{role}.{uuid.uuid4().hex[:8]}@umbra.test"
-    js = f"""
-    use('test_database');
-    db.users.insertOne({{user_id:'{uid}',email:'{email}',name:'{role}',picture:'',phone:'',role:'{role}',created_at:new Date().toISOString()}});
-    db.user_sessions.insertOne({{user_id:'{uid}',session_token:'{tok}',expires_at:new Date(Date.now()+7*24*3600*1000).toISOString(),created_at:new Date().toISOString()}});
-    """
-    p = subprocess.run(["mongosh", "--quiet", "--eval", js], capture_output=True, text=True, timeout=15)
-    assert p.returncode == 0, p.stderr
-    return tok
+    """Register a throwaway account with `role` and return its session token."""
+    headers, _uid, _email = mint_user(role)
+    return headers["Authorization"].split(" ", 1)[1]
+
+
+def _b(role_or_token):
+    """Bearer header from either a role sentinel above or a literal session token."""
+    if role_or_token in _ROLES:
+        if role_or_token not in _token_cache:
+            _token_cache[role_or_token] = _mint(role_or_token)
+        return bearer(_token_cache[role_or_token])
+    return bearer(role_or_token)
 
 
 # ---------- Public ----------

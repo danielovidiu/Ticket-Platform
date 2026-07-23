@@ -1,0 +1,22 @@
+# Development and test dependencies ONLY — the runtime set lives in requirements.in.
+# The previous single requirements.txt shipped black/flake8/mypy/pytest to production.
+#
+# Compile (dev is constrained by the runtime lockfile so the two can never disagree on a
+# shared transitive dependency — installing dev must not silently change a runtime pin):
+#
+#   pip-compile --upgrade requirements.in     -o requirements.txt
+#   pip-compile --upgrade requirements-dev.in -o requirements-dev.txt -c requirements.txt
+#
+# Install for development:
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Install for production:
+#
+#   pip install -r requirements.txt
+
+# The suite is integration-style: it drives a live server over HTTP and talks to Mongo
+# directly for role fixtures. `pymongo` arrives via motor in the runtime set.
+pytest>=8
+pytest-xdist>=3
+requests>=2.32

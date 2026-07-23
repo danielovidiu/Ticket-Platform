@@ -1,8 +1,17 @@
 """
-Iteration 7 — Security hardening tests
- - Rate limiting on /api/newsletter, /api/contact, /api/auth/session, /api/reservations
+Security hardening regression tests.
+
+ - Rate limiting on /api/newsletter, /api/contact, /api/auth/login, /api/reservations
  - Admin gating on /api/seed and /api/cms/seed
- - INITIAL_ADMIN_EMAIL bootstrap on startup
+ - Admin bootstrap: registration order must confer nothing (audit H3)
+ - Payment mode must fail closed rather than downgrade to the simulator (audit C1)
+ - Known-unfixed findings are recorded as xfail so they surface without breaking the run
+
+Rewritten from the Emergent-era original, which read /app/frontend/.env, shelled out to
+mongosh with the database name hardcoded to 'test_database', asserted that one specific
+personal Gmail address was an admin, and grepped /var/log/supervisor for a log line.
+It also claimed to rate-limit /api/auth/session — an endpoint deleted in the auth
+rewrite.
 """
 import os
 import time
@@ -11,44 +20,13 @@ import json
 import pytest
 import requests
 
-# Load REACT_APP_BACKEND_URL from frontend/.env
-def _load_base():
-    v = os.environ.get("REACT_APP_BACKEND_URL")
-    if v:
-        return v.rstrip("/")
-    try:
-        with open("/app/frontend/.env") as f:
-            for line in f:
-                if line.startswith("REACT_APP_BACKEND_URL="):
-                    return line.split("=", 1)[1].strip().rstrip("/")
-    except FileNotFoundError:
-        pass
-    raise RuntimeError("REACT_APP_BACKEND_URL not set")
-
-BASE_URL = _load_base()
+from support import BASE_URL, API, db, mint_user, register_user, TEST_EMAIL_DOMAIN
 
 
 def _mint_session(role: str):
-    """Insert a user + session for the given role using mongosh; returns token."""
-    js = f"""
-use('test_database');
-var uid='test-{role}-'+Date.now();
-var tok='test_{role}_'+Date.now();
-db.users.insertOne({{user_id:uid,email:'{role}.'+Date.now()+'@umbra.test',name:'{role.title()} Test',picture:'',phone:'',role:'{role}',created_at:new Date().toISOString()}});
-db.user_sessions.insertOne({{user_id:uid,session_token:tok,expires_at:new Date(Date.now()+7*24*3600*1000).toISOString(),created_at:new Date().toISOString()}});
-print('TOKEN='+tok);
-print('UID='+uid);
-"""
-    out = subprocess.check_output(["mongosh", "--quiet", "--eval", js], text=True)
-    tok = None
-    uid = None
-    for line in out.splitlines():
-        if line.startswith("TOKEN="):
-            tok = line.split("=", 1)[1].strip()
-        if line.startswith("UID="):
-            uid = line.split("=", 1)[1].strip()
-    assert tok, f"no token minted: {out}"
-    return tok, uid
+    """(token, user_id) for a throwaway account with the given role."""
+    headers, uid, _email = mint_user(role)
+    return headers["Authorization"].split(" ", 1)[1], uid
 
 
 @pytest.fixture(scope="module")
@@ -65,30 +43,94 @@ def user_session():
 
 # ---------- Bootstrap ----------
 
-class TestInitialAdminBootstrap:
-    def test_daniel_is_admin(self):
-        """daniel.ovidiu@gmail.com must have role='admin' after startup."""
-        # Ensure the user exists (create if missing so the bootstrap can promote)
-        js = """
-use('test_database');
-var u = db.users.findOne({email:'daniel.ovidiu@gmail.com'});
-if (u) { print('ROLE='+u.role); } else { print('ROLE=missing'); }
-"""
-        out = subprocess.check_output(["mongosh", "--quiet", "--eval", js], text=True)
-        assert "ROLE=admin" in out, f"daniel not admin in DB: {out}"
+class TestAdminBootstrap:
+    """Audit H3. Admin must come from configuration, never from registration order.
 
-    def test_bootstrap_log_present(self):
-        """Verify 'Bootstrapped daniel.ovidiu@gmail.com to admin' appears in supervisor logs."""
-        found = False
-        for path in ["/var/log/supervisor/backend.out.log", "/var/log/supervisor/backend.err.log"]:
-            try:
-                with open(path) as f:
-                    if "Bootstrapped daniel.ovidiu@gmail.com to admin" in f.read():
-                        found = True
-                        break
-            except FileNotFoundError:
-                continue
-        assert found, "bootstrap log line not found in backend supervisor logs"
+    The originals here asserted that one specific personal Gmail address held the admin
+    role and that a matching line appeared in /var/log/supervisor — a snapshot of one
+    machine's state, not a property of the code. These test the actual rule instead.
+    """
+
+    def test_registration_never_grants_admin(self):
+        """A newly registered account is a plain user regardless of who got there first.
+
+        Uses the real endpoint (register_user tracks the account for teardown), because
+        the point is what /api/auth/register itself assigns.
+        """
+        r = register_user()
+        assert r.status_code == 200, r.text
+        assert r.json()["user"]["role"] == "user", "registration granted a privileged role"
+
+    def test_no_count_based_admin_rule_remains(self):
+        """Guard the regression directly: nothing may key a role off the user count."""
+        src = (__import__("pathlib").Path(__file__).resolve().parent.parent / "server.py").read_text()
+        assert 'is_first' not in src, "first-user-becomes-admin logic reintroduced (audit H3)"
+
+    def test_admin_role_is_reachable(self, admin_session):
+        """The fixture's promoted account really can use an admin route."""
+        tok, _ = admin_session
+        r = requests.get(f"{API}/admin/stats", headers={"Authorization": f"Bearer {tok}"}, timeout=15)
+        assert r.status_code == 200, r.text
+
+
+class TestPaymentModeFailsClosed:
+    """Audit C1. A missing/malformed Stripe key must not silently select the simulator,
+    in which unauthenticated endpoints finalize orders and issue real tickets."""
+
+    @pytest.mark.parametrize("env,expect_start", [
+        ({}, False),                                          # production, no key
+        ({"LOCAL_FAKE_PAYMENTS": "1"}, False),                # explicit simulator in prod
+        ({"STRIPE_API_KEY": "sk_test_x"}, False),             # key but no webhook secret
+        ({"STRIPE_API_KEY": "sk_test_x",
+          "STRIPE_WEBHOOK_SECRET": "whsec_x"}, True),         # correctly configured
+    ])
+    def test_production_startup_matrix(self, env, expect_start):
+        import sys
+        from support import BACKEND_DIR
+        base = {
+            **os.environ, "APP_ENV": "production", "SESSION_SECRET": "x" * 64,
+            "CORS_ORIGINS": "https://example.test",
+        }
+        for k in ("STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET", "LOCAL_FAKE_PAYMENTS"):
+            base.pop(k, None)
+        base.update(env)
+        p = subprocess.run(
+            [sys.executable, "-c", "import server; print('MODE=' + server.PAYMENTS_MODE)"],
+            capture_output=True, text=True, timeout=60, cwd=str(BACKEND_DIR), env=base,
+        )
+        started = p.returncode == 0
+        assert started is expect_start, (
+            f"env={env} expected {'start' if expect_start else 'refusal'}; "
+            f"rc={p.returncode} out={p.stdout[-200:]} err={p.stderr[-300:]}"
+        )
+        if started:
+            assert "MODE=stripe" in p.stdout, f"production started in fake mode: {p.stdout}"
+
+
+class TestKnownUnfixedFindings:
+    """Findings from SECURITY_AUDIT.md that are documented but NOT yet fixed. They are
+    xfail(strict) so that fixing one turns the suite red until the marker is removed —
+    the gap can't be quietly forgotten, and can't be quietly closed either."""
+
+    @pytest.mark.xfail(strict=True, reason="Audit H1: X-Forwarded-For is trusted with no "
+                                           "proxy allowlist, so rotating it bypasses every rate limit")
+    def test_xff_spoofing_does_not_bypass_rate_limit(self):
+        codes = []
+        for i in range(14):
+            r = requests.post(f"{API}/contact",
+                              headers={"X-Forwarded-For": f"198.51.100.{i}"},
+                              json={"name": f"TEST_rl_xff_{i}", "email": "xff@t.dev",
+                                    "message": "xff bypass probe"}, timeout=15)
+            codes.append(r.status_code)
+        db.contact_messages.delete_many({"name": {"$regex": "^TEST_rl_xff_"}})
+        assert 429 in codes, f"rate limit never engaged across spoofed IPs: {codes}"
+
+    @pytest.mark.xfail(strict=True, reason="Audit M1: no security response headers are set")
+    def test_security_headers_present(self):
+        h = requests.get(f"{API}/auth/methods", timeout=15).headers
+        missing = [k for k in ("X-Content-Type-Options", "Referrer-Policy",
+                               "X-Frame-Options", "Strict-Transport-Security") if k not in h]
+        assert not missing, f"missing security headers: {missing}"
 
 
 # ---------- Admin gating for seed endpoints ----------
@@ -145,13 +187,9 @@ class TestRateLimitNewsletter:
         assert codes[:10].count(200) == 10, f"expected first 10 to be 200, got {codes}"
         assert codes[-1] == 429, f"expected 11th to be 429, got {codes}"
         assert retry_after is not None, "Retry-After header missing on 429"
-        # Cleanup inserted rows
-        js = f"""
-use('test_database');
-db.newsletter_subscriptions.deleteMany({{email:/^TEST_rl_nl_/}});
-print('CLEANED');
-"""
-        subprocess.check_output(["mongosh", "--quiet", "--eval", js], text=True)
+        # Cleanup inserted rows (and the confirmation mails they queued).
+        db.newsletter_subscriptions.delete_many({"email": {"$regex": "^TEST_rl_nl_"}})
+        db.outbox.delete_many({"to": {"$regex": "^TEST_rl_nl_"}})
 
 
 class TestRateLimitContact:
@@ -169,12 +207,7 @@ class TestRateLimitContact:
         assert codes[:5].count(200) == 5, f"first 5 should be 200: {codes}"
         assert codes[-1] == 429, f"6th should be 429: {codes}"
         # Cleanup contact messages
-        js = """
-use('test_database');
-db.contact_messages.deleteMany({name:/^TEST_rl_/});
-print('CLEANED');
-"""
-        subprocess.check_output(["mongosh", "--quiet", "--eval", js], text=True)
+        db.contact_messages.delete_many({"name": {"$regex": "^TEST_rl_"}})
 
 
 class TestRateLimitAuthLogin:

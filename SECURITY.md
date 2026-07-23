@@ -3,6 +3,50 @@
 How authentication, payments, and personal-data handling work in this platform, and
 what each piece guarantees. Env var reference lives in `backend/.env.example`.
 
+> This document describes the **design**. For what is actually wrong with the current
+> implementation — one critical and three high-severity findings, with reproductions —
+> read **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)** first. A short summary of the gaps is
+> in [Known gaps](#known-gaps) below. Where the two documents disagree, the audit wins:
+> it was written against the running code.
+
+## Reporting a vulnerability
+
+Email the maintainer rather than opening a public issue, and allow a reasonable window
+before disclosure. If you have a finding in the ticketing or payment flow, include the
+`PAYMENTS_MODE` the instance was running.
+
+## Known gaps
+
+The design below is largely sound; the exposure is concentrated in deployment defaults
+and the perimeter.
+
+**Fixed:**
+
+| Id | Was | Now |
+|---|---|---|
+| C1 | `PAYMENTS_MODE` silently fell back to the simulator when `STRIPE_API_KEY` was unset — two unauthenticated endpoints then finalized orders, so tickets were free | Startup refuses `APP_ENV=production` with fake payments, from either a missing key or an explicit `LOCAL_FAKE_PAYMENTS=1` |
+| H3 | The first account to register became admin, and the `INITIAL_ADMIN_EMAIL` bootstrap re-promoted the operator without demoting a squatter | Registration order confers nothing; admin comes only from `INITIAL_ADMIN_EMAIL` |
+
+**Still open:**
+
+| Id | Gap | Effect |
+|---|---|---|
+| H1 | `X-Forwarded-For` trusted with no proxy allowlist | Every rate limit bypassable; mail bombing; brute force |
+| H2 | Rate-limiter buckets never evict | Memory-exhaustion DoS |
+| M1 | No security response headers | Clickjacking; reset tokens leak via referrer and logs |
+| M2 | Session tokens stored in plaintext | A database read yields live sessions for every user |
+| M3 | `SameSite=None` with no CSRF token | Cross-site writes to `/admin/uploads` |
+| M4/M5 | Special-link capacity and per-user cap are TOCTOU | Oversell under concurrency |
+
+H1 and M1 are pinned by `xfail(strict=True)` tests in `backend/tests/test_security_hardening.py`,
+so the suite goes red the moment either is fixed without removing the marker.
+
+Code at each of these points carries a `SECURITY [id]` comment keyed to the audit:
+
+```bash
+grep -rn "SECURITY \[" backend frontend/src
+```
+
 ## Authentication
 
 Three sign-in methods, all issuing the same first-party opaque session cookie:
@@ -28,6 +72,9 @@ pre-registration account-takeover hole that silent merge-by-email would open.
 
 - `session_token`: opaque 256-bit random, `HttpOnly`, `Secure`+`SameSite=None` on HTTPS
   (or `Lax`+insecure on http dev, derived from `PUBLIC_APP_URL`), 7-day lifetime.
+  Stored in Mongo **in plaintext** and matched by equality — a database read is a
+  session compromise (audit M2). `SameSite=None` plus the absence of any CSRF token
+  leaves multipart POSTs cross-site reachable (M3).
 - Rotated on every login (old token deleted) — defeats fixation.
 - Stored with a real `expires_at` datetime and reaped by a MongoDB **TTL index**
   (`expireAfterSeconds=0`). The TTL monitor is best-effort (~60s); `get_current_user`
@@ -50,6 +97,11 @@ token from one flow can't be replayed against another:
 
 - Two modes (`PAYMENTS_MODE`): **fake** (default, no Stripe account — full local
   simulation) and **stripe** (real SDK, requires `STRIPE_WEBHOOK_SECRET`).
+  > Fake mode is a development facility with **no authentication on its finalizing
+  > endpoints**. It is now opt-in only: `LOCAL_FAKE_PAYMENTS=1` selects it and is refused
+  > outright under `APP_ENV=production`, an `sk_...` key selects live Stripe, and anything
+  > else is a hard startup failure in production. A missing or mistyped key can no longer
+  > downgrade a deployment to free tickets. *(Audit C1 — fixed.)*
 - Webhooks verify the Stripe signature via `Webhook.construct_event`; a bad/absent
   signature is `400`.
 - **Idempotency**: each processed event id is inserted into `processed_stripe_events`
@@ -91,6 +143,11 @@ token from one flow can't be replayed against another:
 | Invoices / tickets | ~10 years (Romanian fiscal law) — kept through account deletion, anonymized |
 | Sessions | 7 days (TTL) |
 | Consent log / audit log | Indefinite (compliance evidence) |
+
+**Only the session row is actually enforced** (by the MongoDB TTL index). The rest of
+this table is a stated policy with no job behind it: `outbox`, `contact_messages`, and
+`payment_transactions` grow without bound and have no documented retention at all. A
+retention job is audit item P3.18.
 
 ## Out of scope for code (operational follow-ups)
 

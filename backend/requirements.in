@@ -1,0 +1,52 @@
+# Direct runtime dependencies — the intended source of truth.
+#
+# `requirements.txt` next to this file is an unfiltered `pip freeze` inherited from the
+# original scaffold: 126 packages, of which roughly 60 are never imported by any module
+# in this backend (AI SDKs, AWS, pandas/numpy, and the dev toolchain). See
+# SECURITY_AUDIT.md → "Stale code and dependencies" for the itemised list.
+#
+# Regenerate the lockfile from this file rather than from a freeze of a working venv:
+#
+#   pip install pip-tools
+#   pip-compile requirements.in -o requirements.txt
+#   pip-sync requirements.txt
+#
+# Verify afterwards with `python -c "import server"` and the test suite.
+
+# --- Web framework ---
+# starlette < 0.40 is affected by CVE-2024-47874 (unbounded multipart parts -> DoS),
+# reachable through POST /api/admin/uploads. fastapi's own floor is >=0.37.2, and the
+# resolver will happily pick that floor, so starlette is constrained explicitly here —
+# do not drop this line when bumping fastapi.
+fastapi>=0.115
+starlette>=0.40
+uvicorn[standard]>=0.30
+python-multipart>=0.0.18
+
+# --- Data layer ---
+motor>=3.3.1
+pymongo>=4.6.3
+pydantic>=2.13
+
+# --- Auth & crypto ---
+# PyJWT provides both our own HS256 tokens and the RS256 OAuth id_token verification
+# (PyJWKClient). `cryptography` is required by PyJWT for RS256 and is used directly by
+# tests/test_oauth_verify.py to sign fake Apple tokens.
+PyJWT[crypto]>=2.8
+cryptography>=42
+bcrypt>=4.1.3
+
+# --- Integrations ---
+stripe>=14.4.1
+httpx>=0.27
+
+# --- Media & documents ---
+pillow>=11
+qrcode>=8
+reportlab>=4
+
+# --- Config ---
+python-dotenv>=1.0
+
+# Test and lint dependencies live in requirements-dev.in and are deliberately NOT part of
+# the production image.

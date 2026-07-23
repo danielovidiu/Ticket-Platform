@@ -91,3 +91,6 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+
+# Generated knowledge graph (graphify) — regenerable, 3.4MB, not source
+graphify-out/

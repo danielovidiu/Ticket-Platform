@@ -13,51 +13,29 @@ Scenarios explicitly requested by main agent:
   - Special link bypasses wave decrement + wave window checks
   - Happy-path expires_at ~10min in future
 """
-import os
 import uuid
-import subprocess
 from datetime import datetime, timezone, timedelta
 
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8000").rstrip("/")
-API = f"{BASE_URL}/api"
+from support import API, bearer as _bearer, mint_user, temp_discount, patient
 
-ADMIN_TOKEN = os.environ.get("UMB_ADMIN_TOKEN")
-
-
-def _bearer(t):
-    return {"Authorization": f"Bearer {t}"}
-
-
-def _mongo_run(js: str) -> str:
-    p = subprocess.run(["mongosh", "--quiet", "--eval", js], capture_output=True, text=True, timeout=15)
-    assert p.returncode == 0, p.stderr
-    return p.stdout
+# `admin_headers` now comes from conftest.py (a real registered+promoted account) rather
+# than a UMB_ADMIN_TOKEN environment variable the Emergent runner used to inject.
 
 
 def _mint_user(role="user"):
-    tok = f"test_{role}_{uuid.uuid4().hex[:12]}"
-    uid = f"test-{role}-{uuid.uuid4().hex[:12]}"
-    email = f"{role}.{uuid.uuid4().hex[:8]}@umbra.test"
-    _mongo_run(
-        "use('test_database');"
-        f"db.users.insertOne({{user_id:'{uid}',email:'{email}',name:'r',picture:'',phone:'',role:'{role}',created_at:new Date().toISOString()}});"
-        f"db.user_sessions.insertOne({{user_id:'{uid}',session_token:'{tok}',expires_at:new Date(Date.now()+7*24*3600*1000).toISOString(),created_at:new Date().toISOString()}});"
-    )
-    return tok
+    """Token-only shim: these tests only ever want headers for a throwaway identity."""
+    headers, _uid, _email = mint_user(role)
+    return headers["Authorization"].split(" ", 1)[1]
 
 
 @pytest.fixture(scope="module")
-def admin_headers():
-    assert ADMIN_TOKEN, "Missing admin token"
-    return _bearer(ADMIN_TOKEN)
-
-
-@pytest.fixture(scope="module")
-def obsidian():
-    requests.post(f"{API}/seed", timeout=15)
+def obsidian(seeded):
+    # The unauthenticated POST /api/seed this used to make has always been a 401; it only
+    # appeared to work because the database was already populated. The `seeded` fixture
+    # (conftest) does it properly with admin credentials.
     r = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15)
     assert r.status_code == 200
     return r.json()
@@ -69,7 +47,7 @@ def test_reservation_happy_path_expires_in_10_min(obsidian):
     user_h = _bearer(_mint_user())
     ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
     gen = next(w for w in ev["waves"] if w["tier"] == "general")
-    r = requests.post(f"{API}/reservations",
+    r = patient.post(f"{API}/reservations",
                       json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1},
                       headers=user_h, timeout=15)
     assert r.status_code == 200, r.text
@@ -112,12 +90,12 @@ def test_max_per_user_cap_enforced(admin_headers):
 
     user_h = _bearer(_mint_user())
     # 1st reservation of 2 succeeds
-    r1 = requests.post(f"{API}/reservations",
+    r1 = patient.post(f"{API}/reservations",
                        json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 2},
                        headers=user_h, timeout=15)
     assert r1.status_code == 200, r1.text
     # 2nd reservation of 1 -> already at cap, must 400
-    r2 = requests.post(f"{API}/reservations",
+    r2 = patient.post(f"{API}/reservations",
                        json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 1},
                        headers=user_h, timeout=15)
     assert r2.status_code == 400, r2.text
@@ -148,7 +126,7 @@ def test_single_request_over_cap_rejected(admin_headers):
     ev = r.json()
     wid = ev["waves"][0]["wave_id"]
     user_h = _bearer(_mint_user())
-    r2 = requests.post(f"{API}/reservations",
+    r2 = patient.post(f"{API}/reservations",
                        json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 3},
                        headers=user_h, timeout=15)
     assert r2.status_code == 400, r2.text
@@ -180,7 +158,7 @@ def test_wave_not_active_before_window(admin_headers):
     wid = ev["waves"][0]["wave_id"]
 
     user_h = _bearer(_mint_user())
-    r2 = requests.post(f"{API}/reservations",
+    r2 = patient.post(f"{API}/reservations",
                        json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 1},
                        headers=user_h, timeout=15)
     assert r2.status_code == 400, r2.text
@@ -210,7 +188,7 @@ def test_wave_not_active_after_window(admin_headers):
     wid = ev["waves"][0]["wave_id"]
 
     user_h = _bearer(_mint_user())
-    r2 = requests.post(f"{API}/reservations",
+    r2 = patient.post(f"{API}/reservations",
                        json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 1},
                        headers=user_h, timeout=15)
     assert r2.status_code == 400, r2.text
@@ -224,7 +202,7 @@ def test_discount_invalid_code(obsidian):
     user_h = _bearer(_mint_user())
     ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
     gen = next(w for w in ev["waves"] if w["tier"] == "general")
-    r = requests.post(f"{API}/reservations",
+    r = patient.post(f"{API}/reservations",
                       json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1,
                             "discount_code": "NOPE_" + uuid.uuid4().hex[:6]},
                       headers=user_h, timeout=15)
@@ -258,7 +236,7 @@ def test_discount_wrong_event_scope(admin_headers, obsidian):
     user_h = _bearer(_mint_user())
     ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
     gen = next(w for w in ev["waves"] if w["tier"] == "general")
-    r = requests.post(f"{API}/reservations",
+    r = patient.post(f"{API}/reservations",
                       json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1, "discount_code": code},
                       headers=user_h, timeout=15)
     assert r.status_code == 400, r.text
@@ -273,46 +251,33 @@ def test_discount_expired(admin_headers, obsidian):
     """Insert a discount with expires_at in the past directly in Mongo -> 400."""
     code = f"TESTEXP{uuid.uuid4().hex[:4].upper()}"
     past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    _mongo_run(
-        "use('test_database');"
-        f"db.discounts.insertOne({{discount_id:'test-disc-{uuid.uuid4().hex[:8]}',"
-        f"code:'{code}',percent_off:15,max_uses:0,uses:0,"
-        f"expires_at:'{past}',created_at:new Date().toISOString()}});"
-    )
-    try:
+    with temp_discount(code=code, percent_off=15, expires_at=past,
+                       created_at=datetime.now(timezone.utc).isoformat()):
         user_h = _bearer(_mint_user())
         ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
         gen = next(w for w in ev["waves"] if w["tier"] == "general")
-        r = requests.post(f"{API}/reservations",
+        r = patient.post(f"{API}/reservations",
                           json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1,
                                 "discount_code": code},
                           headers=user_h, timeout=15)
         assert r.status_code == 400, r.text
         assert "expired" in r.text.lower()
-    finally:
-        _mongo_run(f"use('test_database');db.discounts.deleteOne({{code:'{code}'}});")
 
 
 def test_discount_exhausted(admin_headers, obsidian):
     """Discount with uses>=max_uses -> 400."""
     code = f"TESTEXH{uuid.uuid4().hex[:4].upper()}"
-    _mongo_run(
-        "use('test_database');"
-        f"db.discounts.insertOne({{discount_id:'test-disc-{uuid.uuid4().hex[:8]}',"
-        f"code:'{code}',percent_off:15,max_uses:2,uses:2,created_at:new Date().toISOString()}});"
-    )
-    try:
+    with temp_discount(code=code, percent_off=15, max_uses=2, uses=2,
+                       created_at=datetime.now(timezone.utc).isoformat()):
         user_h = _bearer(_mint_user())
         ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
         gen = next(w for w in ev["waves"] if w["tier"] == "general")
-        r = requests.post(f"{API}/reservations",
+        r = patient.post(f"{API}/reservations",
                           json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1,
                                 "discount_code": code},
                           headers=user_h, timeout=15)
         assert r.status_code == 400, r.text
         assert "exhausted" in r.text.lower()
-    finally:
-        _mongo_run(f"use('test_database');db.discounts.deleteOne({{code:'{code}'}});")
 
 
 # ---------- Special link over-capacity ----------
@@ -330,7 +295,7 @@ def test_special_link_over_capacity(admin_headers, obsidian):
     user_h = _bearer(_mint_user())
     # Ask for 3 tickets — special link capacity is 2 -> must 400
     payload = {"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 3, "special_link_token": token}
-    rr = requests.post(f"{API}/reservations", json=payload, headers=user_h, timeout=15)
+    rr = patient.post(f"{API}/reservations", json=payload, headers=user_h, timeout=15)
     assert rr.status_code == 400, rr.text
     assert "Special link capacity exceeded" in rr.text
 
@@ -366,7 +331,7 @@ def test_special_link_bypasses_wave_window(admin_headers):
                        headers=admin_headers, timeout=15).json()
 
     user_h = _bearer(_mint_user())
-    rr = requests.post(f"{API}/reservations",
+    rr = patient.post(f"{API}/reservations",
                        json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 1,
                              "special_link_token": sl["token"]},
                        headers=user_h, timeout=15)

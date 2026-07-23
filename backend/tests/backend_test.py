@@ -22,70 +22,48 @@ import subprocess
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8000").rstrip("/")
-API = f"{BASE_URL}/api"
+from support import API, BASE_URL, BACKEND_DIR, DB_NAME, bearer as _bearer, mint_user, patient
 
-sys.path.insert(0, "/app/backend")
-
-# Global tokens injected by conftest via env vars
-ADMIN_TOKEN = os.environ.get("UMB_ADMIN_TOKEN")
-DOOR_TOKEN = os.environ.get("UMB_DOOR_TOKEN")
-USER_TOKEN = os.environ.get("UMB_USER_TOKEN")
-USER2_TOKEN = os.environ.get("UMB_USER2_TOKEN")
-
-
-def _bearer(token):
-    return {"Authorization": f"Bearer {token}"}
+# Was: sys.path.insert(0, "/app/backend") plus UMB_*_TOKEN env vars injected by the
+# Emergent runner. conftest.py now puts the real backend directory on sys.path, and the
+# admin/door/user/user2 fixtures below come from conftest.
 
 
 def _mint_fresh_user_token(role="user"):
-    """Insert a new user + session via mongosh and return the token."""
-    import subprocess as _sp
-    tok = f"test_{role}_{uuid.uuid4().hex[:12]}"
-    uid = f"test-{role}-{uuid.uuid4().hex[:12]}"
-    email = f"{role}.{uuid.uuid4().hex[:8]}@umbra.test"
-    js = f"""
-    use('test_database');
-    db.users.insertOne({{user_id:'{uid}',email:'{email}',name:'{role} fresh',picture:'',phone:'',role:'{role}',created_at:new Date().toISOString()}});
-    db.user_sessions.insertOne({{user_id:'{uid}',session_token:'{tok}',expires_at:new Date(Date.now()+7*24*3600*1000).toISOString(),created_at:new Date().toISOString()}});
-    """
-    p = _sp.run(["mongosh", "--quiet", "--eval", js], capture_output=True, text=True, timeout=15)
-    assert p.returncode == 0, p.stderr
-    return tok
+    """Register a throwaway account and return its session token."""
+    headers, _uid, _email = mint_user(role)
+    return headers["Authorization"].split(" ", 1)[1]
 
 
 def _fresh_user_headers(role="user"):
     return _bearer(_mint_fresh_user_token(role))
 
 
+def _run_in_backend(code: str, timeout: int = 30):
+    """Run a snippet against the real server module in a separate interpreter.
+
+    Used by tests that need to await an internal coroutine (finalize, cleanup) outside
+    the running app's event loop. Two things were wrong before: it hardcoded
+    '/app/backend', and it invoked `python3`, which on this machine resolves to the
+    system 3.9 rather than the venv the suite is running in.
+    """
+    prelude = f"import sys; sys.path.insert(0, {str(BACKEND_DIR)!r}); "
+    return subprocess.run(
+        [sys.executable, "-c", prelude + code],
+        capture_output=True, text=True, timeout=timeout, cwd=str(BACKEND_DIR),
+    )
+
+
 # ---------------- Fixtures ----------------
-
-@pytest.fixture(scope="session")
-def admin_headers():
-    assert ADMIN_TOKEN, "Missing admin token"
-    return _bearer(ADMIN_TOKEN)
-
-
-@pytest.fixture(scope="session")
-def door_headers():
-    return _bearer(DOOR_TOKEN)
-
-
-@pytest.fixture(scope="session")
-def user_headers():
-    return _bearer(USER_TOKEN)
-
-
-@pytest.fixture(scope="session")
-def user2_headers():
-    return _bearer(USER2_TOKEN)
+# admin_headers / door_headers / user_headers / user2_headers all live in conftest.py now.
 
 
 @pytest.fixture(scope="session")
 def obsidian_event(admin_headers):
     """Get seeded OBSIDIAN event with 3 waves."""
-    # Ensure seed
-    requests.post(f"{API}/seed", timeout=15)
+    # /api/seed is admin-gated (it always was — the old call passed no auth and silently
+    # relied on the database already being seeded).
+    requests.post(f"{API}/seed", headers=admin_headers, timeout=15)
     r = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15)
     assert r.status_code == 200, r.text
     ev = r.json()
@@ -128,7 +106,7 @@ def test_reservation_decrements_correct_wave(obsidian_event):
         "wave_id": general_wave["wave_id"],
         "quantity": 2,
     }
-    r = requests.post(f"{API}/reservations", json=payload, headers=user_headers, timeout=15)
+    r = patient.post(f"{API}/reservations", json=payload, headers=user_headers, timeout=15)
     assert r.status_code == 200, r.text
     res = r.json()
     assert res["quantity"] == 2
@@ -167,7 +145,7 @@ def test_reserve_more_than_available_returns_400(obsidian_event):
         "wave_id": vip_wave["wave_id"],
         "quantity": available_before + 100,
     }
-    r = requests.post(f"{API}/reservations", json=payload, headers=user2_headers, timeout=15)
+    r = patient.post(f"{API}/reservations", json=payload, headers=user2_headers, timeout=15)
     assert r.status_code == 400, r.text
 
     # Verify no decrement
@@ -189,7 +167,7 @@ def test_discount_welcome10_applied(obsidian_event):
         "quantity": qty,
         "discount_code": "WELCOME10",
     }
-    r = requests.post(f"{API}/reservations", json=payload, headers=user2_headers, timeout=15)
+    r = patient.post(f"{API}/reservations", json=payload, headers=user2_headers, timeout=15)
     assert r.status_code == 200, r.text
     res = r.json()
     unit = float(general["price_ron"])
@@ -209,7 +187,7 @@ def _create_reservation_for(user_headers, quantity=1):
         "wave_id": general["wave_id"],
         "quantity": quantity,
     }
-    r = requests.post(f"{API}/reservations", json=payload, headers=user_headers, timeout=15)
+    r = patient.post(f"{API}/reservations", json=payload, headers=user_headers, timeout=15)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -230,7 +208,7 @@ def test_checkout_returns_url_and_creates_txn():
     # Verify persistence
     from motor.motor_asyncio import AsyncIOMotorClient
     mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-    dbname = os.environ.get("DB_NAME", "test_database")
+    dbname = DB_NAME
 
     async def check():
         c = AsyncIOMotorClient(mongo_url)
@@ -248,21 +226,6 @@ def test_checkout_returns_url_and_creates_txn():
 
 # ---------------- 5. Finalize idempotency ----------------
 
-def _mint_fresh_user_token(role="user"):
-    """Insert a new user + session via mongosh and return the token."""
-    tok = f"test_{role}_{uuid.uuid4().hex[:12]}"
-    uid = f"test-{role}-{uuid.uuid4().hex[:12]}"
-    email = f"{role}.{uuid.uuid4().hex[:8]}@umbra.test"
-    js = f"""
-    use('test_database');
-    db.users.insertOne({{user_id:'{uid}',email:'{email}',name:'{role} fresh',picture:'',phone:'',role:'{role}',created_at:new Date().toISOString()}});
-    db.user_sessions.insertOne({{user_id:'{uid}',session_token:'{tok}',expires_at:new Date(Date.now()+7*24*3600*1000).toISOString(),created_at:new Date().toISOString()}});
-    """
-    p = subprocess.run(["mongosh", "--quiet", "--eval", js], capture_output=True, text=True, timeout=15)
-    assert p.returncode == 0, p.stderr
-    return tok
-
-
 def test_finalize_idempotency():
     """Create pending reservation as fresh user, call _finalize_paid_reservation twice."""
     fresh_headers = _fresh_user_headers()
@@ -273,11 +236,11 @@ def test_finalize_idempotency():
     # Call finalize twice via subprocess (fresh event loop each call)
     def finalize(rid):
         code = (
-            "import asyncio, sys; sys.path.insert(0,'/app/backend'); "
+            "import asyncio; "
             "from server import _finalize_paid_reservation; "
             f"asyncio.run(_finalize_paid_reservation('{rid}'))"
         )
-        return subprocess.run(["python3", "-c", code], capture_output=True, text=True, timeout=30)
+        return _run_in_backend(code)
 
     p1 = finalize(rid)
     assert p1.returncode == 0, f"finalize 1 failed: {p1.stderr}"
@@ -287,7 +250,7 @@ def test_finalize_idempotency():
     # Verify
     from motor.motor_asyncio import AsyncIOMotorClient
     mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-    dbname = os.environ.get("DB_NAME", "test_database")
+    dbname = DB_NAME
 
     async def check():
         c = AsyncIOMotorClient(mongo_url)
@@ -386,17 +349,17 @@ def scannable_event(admin_headers):
 
     # Reserve 1 ticket
     rp = {"event_id": ev["event_id"], "wave_id": wave["wave_id"], "quantity": 1}
-    rr = requests.post(f"{API}/reservations", json=rp, headers=user_headers, timeout=15)
+    rr = patient.post(f"{API}/reservations", json=rp, headers=user_headers, timeout=15)
     assert rr.status_code == 200, rr.text
     rid = rr.json()["reservation_id"]
 
     # Finalize
     code = (
-        "import asyncio, sys; sys.path.insert(0,'/app/backend'); "
+        "import asyncio; "
         "from server import _finalize_paid_reservation; "
         f"asyncio.run(_finalize_paid_reservation('{rid}'))"
     )
-    p = subprocess.run(["python3", "-c", code], capture_output=True, text=True, timeout=30)
+    p = _run_in_backend(code)
     assert p.returncode == 0, p.stderr
 
     # Fetch ticket
@@ -557,7 +520,7 @@ def test_special_link_flow(admin_headers):
         "quantity": 2,
         "special_link_token": token,
     }
-    rr = requests.post(f"{API}/reservations", json=payload, headers=user2_headers, timeout=15)
+    rr = patient.post(f"{API}/reservations", json=payload, headers=user2_headers, timeout=15)
     assert rr.status_code == 200, rr.text
     res = rr.json()
     assert res["unit_price_ron"] == 5.0, f"price should be from special link: {res}"
@@ -571,11 +534,11 @@ def test_special_link_flow(admin_headers):
     # Finalize
     rid = res["reservation_id"]
     code = (
-        "import asyncio, sys; sys.path.insert(0,'/app/backend'); "
+        "import asyncio; "
         "from server import _finalize_paid_reservation; "
         f"asyncio.run(_finalize_paid_reservation('{rid}'))"
     )
-    p = subprocess.run(["python3", "-c", code], capture_output=True, text=True, timeout=30)
+    p = _run_in_backend(code)
     assert p.returncode == 0, p.stderr
 
     # Verify special_links.used incremented by quantity
@@ -615,15 +578,15 @@ def test_event_cancel_refunds_tickets(admin_headers):
 
     # Reserve
     rp = {"event_id": ev["event_id"], "wave_id": wid, "quantity": 1}
-    rr = requests.post(f"{API}/reservations", json=rp, headers=user_headers, timeout=15)
+    rr = patient.post(f"{API}/reservations", json=rp, headers=user_headers, timeout=15)
     assert rr.status_code == 200
     rid = rr.json()["reservation_id"]
     code = (
-        "import asyncio, sys; sys.path.insert(0,'/app/backend'); "
+        "import asyncio; "
         "from server import _finalize_paid_reservation; "
         f"asyncio.run(_finalize_paid_reservation('{rid}'))"
     )
-    subprocess.run(["python3", "-c", code], capture_output=True, text=True, timeout=30)
+    _run_in_backend(code)
 
     # Cancel event
     rc = requests.post(f"{API}/admin/events/{ev['event_id']}/cancel", headers=admin_headers, timeout=15)
@@ -632,7 +595,7 @@ def test_event_cancel_refunds_tickets(admin_headers):
     # Verify tickets marked refunded
     from motor.motor_asyncio import AsyncIOMotorClient
     mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-    dbname = os.environ.get("DB_NAME", "test_database")
+    dbname = DB_NAME
 
     async def check():
         c = AsyncIOMotorClient(mongo_url)
@@ -656,18 +619,18 @@ def test_order_refund(admin_headers):
     res = _create_reservation_for(user_headers, quantity=1)
     rid = res["reservation_id"]
     code = (
-        "import asyncio, sys; sys.path.insert(0,'/app/backend'); "
+        "import asyncio; "
         "from server import _finalize_paid_reservation; "
         f"asyncio.run(_finalize_paid_reservation('{rid}'))"
     )
-    subprocess.run(["python3", "-c", code], capture_output=True, text=True, timeout=30)
+    _run_in_backend(code)
 
     rr = requests.post(f"{API}/admin/orders/{rid}/refund", headers=admin_headers, timeout=15)
     assert rr.status_code == 200
 
     from motor.motor_asyncio import AsyncIOMotorClient
     mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-    dbname = os.environ.get("DB_NAME", "test_database")
+    dbname = DB_NAME
 
     async def check():
         c = AsyncIOMotorClient(mongo_url)

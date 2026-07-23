@@ -273,6 +273,12 @@ function VideoEmbed({ props }) {
   let src = props.url;
   if (ytMatch) src = `https://www.youtube.com/embed/${ytMatch[1]}`;
   else if (vimeoMatch) src = `https://player.vimeo.com/video/${vimeoMatch[1]}`;
+  // SECURITY [M11 — see SECURITY_AUDIT.md]: anything that is neither YouTube nor Vimeo
+  // falls through to the raw author-supplied URL, rendered in an <iframe> with no
+  // `sandbox` and no origin allowlist. React 19 neutralizes javascript: URLs, so this is
+  // not script execution — but an *editor* (a lower-privileged role than admin) can frame
+  // any third-party page inside a real Supersanity URL, which is convincing credential
+  // phishing. Restrict to an embed-host allowlist and add a sandbox attribute.
   return (
     <section className="py-10"><Container>
       <div className="aspect-video border border-white/10"><iframe src={src} title={props.caption || "video"} className="w-full h-full" allowFullScreen /></div>
@@ -285,6 +291,13 @@ function CustomHTML({ props }) {
   // XSS guard: sanitize any HTML entered via the CMS. Strips <script>,
   // event handlers, and javascript: URIs. Runs on both editors' preview
   // and public visitors.
+  //
+  // SECURITY [M10 — see SECURITY_AUDIT.md]: this is the ONLY sanitization step — the raw
+  // HTML is stored server-side untouched, so any consumer that is not this component (an
+  // email, a future SSR pass, a direct API read) gets the unsanitized string. Sanitize on
+  // write too. Also note `svg: true` widens the mXSS surface for no benefit visible in
+  // the block set, and the explicit FORBID_* lists below are redundant with DOMPurify's
+  // defaults — they read as the protection but are not doing the work.
   const safe = DOMPurify.sanitize(props.html || "", {
     USE_PROFILES: { html: true, svg: true },
     FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
