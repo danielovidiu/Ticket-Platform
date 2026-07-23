@@ -107,7 +107,14 @@ export default function EventDetail() {
                 >
                   {g.media_type === "video" ? (
                     <>
-                      <video src={mediaUrl(g.image_url)} className="w-full object-cover" muted preload="metadata" />
+                      {/* Prefer the poster captured at upload: it renders at the same
+                          size as a photo and costs one image request instead of a
+                          video decode per tile. Items without a poster fall back. */}
+                      {g.thumbnail_url && g.thumbnail_url !== g.image_url ? (
+                        <img src={mediaUrl(g.thumbnail_url)} alt={g.caption || ""} loading="lazy" className="w-full object-cover" />
+                      ) : (
+                        <video src={mediaUrl(g.image_url)} className="w-full object-cover" muted preload="metadata" />
+                      )}
                       <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/10 transition-colors">
                         <Play size={28} className="text-white" fill="white" />
                       </div>

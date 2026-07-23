@@ -23,11 +23,14 @@ const Header = ({ cmsNav }) => {
   ];
   return (
     <header className="sticky top-0 z-40 bg-[color:var(--bg,#050505)] hairline-b">
-      <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-5 flex items-center justify-between">
+      {/* Wraps rather than overflows: the nav grows with every CMS page added and a
+          logged-in admin carries six action buttons, which together exceed the
+          viewport well before the burger menu takes over at lg. */}
+      <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <Link to="/" data-testid="logo-link" className="font-display text-xl md:text-2xl font-bold tracking-tighter uppercase">
           SUPERSANITY
         </Link>
-        <nav className="hidden lg:flex items-center gap-5 font-mono-x text-[11px] uppercase tracking-[0.18em]">
+        <nav className="hidden lg:flex flex-wrap items-center gap-x-5 gap-y-2 min-w-0 font-mono-x text-[11px] uppercase tracking-[0.18em]">
           {nav.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === "/"} data-testid={`nav-${n.label.toLowerCase()}`}
               className={({ isActive }) => isActive ? "text-white" : "text-zinc-400 hover:text-white transition-colors"}>
@@ -35,7 +38,7 @@ const Header = ({ cmsNav }) => {
             </NavLink>
           ))}
         </nav>
-        <div className="hidden lg:flex items-center gap-2">
+        <div className="hidden lg:flex flex-wrap items-center gap-2">
           {user ? (
             <>
               <Link to="/my-tickets" data-testid="my-tickets-link" className="btn-primary !py-2 !px-3 !text-[10px]">My Tickets</Link>
@@ -78,7 +81,9 @@ const Header = ({ cmsNav }) => {
 
 const Footer = () => (
   <footer className="hairline mt-24">
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-14 grid grid-cols-1 md:grid-cols-4 gap-10">
+    {/* Two columns before four: at md, quarter-width columns are narrower than
+        the wordmark itself, which then spills into its neighbour. */}
+    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-14 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
       <div>
         <div className="font-display text-2xl uppercase tracking-tighter">SUPERSANITY</div>
         <p className="mt-4 text-zinc-400 text-sm max-w-xs">A Bucharest music &amp; performance collective. Programming, artists, box office — one door.</p>
@@ -93,7 +98,9 @@ const Footer = () => (
       </div>
       <div>
         <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-500 mb-4">Contact</div>
-        <p className="text-zinc-300 text-sm">bookings@supersanity.collective</p>
+        {/* An address has no spaces to break at, so it needs an explicit rule
+            to wrap instead of running past its column. */}
+        <p className="text-zinc-300 text-sm break-words">bookings@supersanity.collective</p>
       </div>
       <div className="font-mono-x text-xs text-zinc-500">© {new Date().getFullYear()} Supersanity</div>
     </div>

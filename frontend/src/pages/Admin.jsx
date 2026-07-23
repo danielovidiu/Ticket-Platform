@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import { DateTimePicker } from "../components/ui/datetime-picker";
 import { FormatToolbar } from "../lib/richText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
-import { mediaUrl } from "../lib/media";
+import AlbumManager from "../components/AlbumManager";
 
 const TABS = ["stats", "events", "orders", "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
 
@@ -43,25 +43,88 @@ export default function Admin() {
   );
 }
 
+// Quick ranges are resolved at click time (not module load) so a long-open
+// admin tab doesn't keep filtering against the day it was opened.
+const STAT_PRESETS = [
+  ["7 days", () => 7],
+  ["30 days", () => 30],
+  ["90 days", () => 90],
+];
+const isoDay = (d) => d.toISOString().slice(0, 10);
+
 function Stats() {
   const [s, setS] = useState(null);
-  useEffect(() => { http.get("/admin/stats").then((r) => setS(r.data)); }, []);
-  if (!s) return <div>Loading</div>;
-  const cards = [
+  const [events, setEvents] = useState([]);
+  const [eventId, setEventId] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  useEffect(() => { http.get("/admin/events").then((r) => setEvents(r.data)).catch(() => setEvents([])); }, []);
+  useEffect(() => {
+    const p = new URLSearchParams();
+    if (eventId) p.set("event_id", eventId);
+    if (dateFrom) p.set("date_from", dateFrom);
+    if (dateTo) p.set("date_to", dateTo);
+    const qs = p.toString();
+    http.get(`/admin/stats${qs ? `?${qs}` : ""}`).then((r) => setS(r.data));
+  }, [eventId, dateFrom, dateTo]);
+
+  const setLastDays = (n) => {
+    const to = new Date();
+    const from = new Date(to.getTime() - n * 864e5);
+    setDateFrom(isoDay(from));
+    setDateTo(isoDay(to));
+  };
+  const clear = () => { setEventId(""); setDateFrom(""); setDateTo(""); };
+  const filtered = eventId || dateFrom || dateTo;
+
+  const cards = s && [
     ["Revenue", `${s.revenue_ron.toFixed(2)} RON`],
     ["Orders", s.total_orders],
     ["Tickets issued", s.total_tickets],
     ["Scanned", s.scanned],
-    ["Events", s.events],
+    [filtered ? "Events with sales" : "Events", s.events],
   ];
+
   return (
-    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-      {cards.map(([k, v]) => (
-        <div key={k} className="border border-white/10 bg-[#0F0F0F] p-6">
-          <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">{k}</div>
-          <div className="font-display text-3xl font-black mt-2">{v}</div>
+    <div>
+      <div className="border border-white/10 bg-[#0F0F0F] p-4 mb-4" data-testid="stats-filters">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Field label="Event">
+            <select value={eventId} onChange={(e) => setEventId(e.target.value)} className="input-x w-full" data-testid="stats-event-filter">
+              <option value="">All events</option>
+              {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
+            </select>
+          </Field>
+          <Field label="From">
+            <input type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => setDateFrom(e.target.value)} className="input-x w-full" data-testid="stats-date-from" />
+          </Field>
+          <Field label="To">
+            <input type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => setDateTo(e.target.value)} className="input-x w-full" data-testid="stats-date-to" />
+          </Field>
         </div>
-      ))}
+        <div className="flex flex-wrap gap-2 items-center mt-3">
+          {STAT_PRESETS.map(([label, days]) => (
+            <button key={label} onClick={() => setLastDays(days())} className="btn-primary text-xs">Last {label}</button>
+          ))}
+          {filtered && <button onClick={clear} className="btn-primary text-xs" data-testid="stats-clear">Clear</button>}
+          <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 ml-auto">
+            {filtered ? "Filtered" : "All time · all events"}
+          </span>
+        </div>
+      </div>
+      {!s ? <div>Loading</div> : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          {cards.map(([k, v]) => (
+            <div key={k} className="border border-white/10 bg-[#0F0F0F] p-4 lg:p-6 min-w-0">
+              <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 break-words">{k}</div>
+              {/* Revenue can run to six figures plus a currency suffix — it must be
+                  free to shrink and wrap rather than push past the card. */}
+              <div className="font-display text-2xl lg:text-3xl font-black mt-2 break-words">{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -80,12 +143,31 @@ const STATUS_CLASS = {
   DRAFT: "text-[color:var(--accent)]",
 };
 
+// Ticket tiers read as full words in the admin form — the abbreviated values
+// ("gen", "early") are storage detail, not something an editor should decode.
+const TIER_LABEL = { early_bird: "Early Bird", general: "General", vip: "VIP" };
+const TIER_BADGE = {
+  early_bird: "border-[color:var(--success)] text-[color:var(--success)]",
+  general: "border-white/50 text-white",
+  vip: "border-[color:var(--accent)] text-[color:var(--accent)]",
+};
+
+// Small labelled wrapper so every field in the tier card says what it is.
+function Field({ label, className = "", children }) {
+  return (
+    <label className={`block min-w-0 ${className}`}>
+      <div className="text-[10px] text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">{label}</div>
+      {children}
+    </label>
+  );
+}
+
 function Events() {
   const [events, setEvents] = useState([]);
   const [form, setForm] = useState(null);
   const load = () => http.get("/admin/events").then((r) => setEvents(r.data));
   useEffect(() => { load(); }, []);
-  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general" }] });
+  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_from: "" }] });
   const save = async () => {
     try {
       if (form.event_id) {
@@ -103,12 +185,16 @@ function Events() {
       <button onClick={() => setForm(emptyForm())} data-testid="new-event-btn" className="btn-accent">+ NEW EVENT</button>
       <div className="mt-6 space-y-2">
         {events.map((e) => (
-          <div key={e.event_id} className="border border-white/10 bg-[#0F0F0F] p-4 grid grid-cols-12 gap-2 items-center">
-            <div className="col-span-4 font-display font-bold uppercase truncate">{e.title}</div>
-            <div className="col-span-3 font-mono-x text-xs text-zinc-400">{new Date(e.starts_at).toLocaleString("en-GB")}</div>
-            <div className="col-span-2 font-mono-x text-xs">{[e.venue, e.city].filter(Boolean).join(", ")}</div>
-            <div className={`col-span-1 font-mono-x text-xs ${STATUS_CLASS[eventStatus(e)]}`}>{eventStatus(e)}</div>
-            <div className="col-span-2 flex gap-2 justify-end">
+          // Stacked rows on narrow screens; the dense 12-column layout only kicks
+          // in at lg, where there is actually room for five columns of text.
+          // `min-w-0` lets each cell shrink below its content width, without which
+          // grid children refuse to shrink and spill over their neighbours.
+          <div key={e.event_id} className="border border-white/10 bg-[#0F0F0F] p-4 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
+            <div className="lg:col-span-4 min-w-0 font-display font-bold uppercase break-words lg:truncate">{e.title}</div>
+            <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-zinc-400">{new Date(e.starts_at).toLocaleString("en-GB")}</div>
+            <div className="lg:col-span-2 min-w-0 font-mono-x text-xs break-words">{[e.venue, e.city].filter(Boolean).join(", ")}</div>
+            <div className={`lg:col-span-1 min-w-0 font-mono-x text-xs ${STATUS_CLASS[eventStatus(e)]}`}>{eventStatus(e)}</div>
+            <div className="lg:col-span-3 min-w-0 flex flex-wrap gap-2 lg:justify-end">
               <button onClick={() => setForm(e)} className="btn-primary text-xs">Edit</button>
               <button onClick={() => cancel(e.event_id)} className="btn-primary text-xs">Cancel</button>
               <button onClick={() => del(e.event_id)} className="btn-primary text-xs">Del</button>
@@ -126,13 +212,19 @@ function EventForm({ form, setForm, onSave, onClose }) {
   const setWave = (i, k, v) => { const w = [...form.waves]; w[i] = { ...w[i], [k]: v }; setForm({...form, waves: w}); };
   const descRef = useRef(null);
   return (
-    <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4 overflow-auto">
-      <div className="border border-white/20 bg-[#0F0F0F] p-6 w-full max-w-3xl max-h-[90vh] overflow-auto">
-        <div className="flex justify-between items-center hairline-b pb-3">
+    <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4">
+      {/* Column layout: the action bar stays pinned while only the body scrolls,
+          so Save/Close are reachable from anywhere in a long event form. */}
+      <div className="border border-white/20 bg-[#0F0F0F] w-full max-w-3xl max-h-[90vh] flex flex-col">
+        <div className="shrink-0 flex flex-wrap gap-3 justify-between items-center hairline-b px-6 py-4">
           <div className="font-display text-2xl uppercase font-bold">{form.event_id ? "Edit" : "New"} Event</div>
-          <button onClick={onClose} className="btn-primary">Close</button>
+          <div className="flex gap-2">
+            <button onClick={onSave} data-testid="save-event-btn" className="btn-accent">SAVE</button>
+            <button onClick={onClose} data-testid="close-event-btn" className="btn-primary">CLOSE</button>
+          </div>
         </div>
-        <div className="grid grid-cols-2 gap-3 mt-4">
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
+        <div className="grid grid-cols-2 gap-3">
           <input placeholder="Title" value={form.title} onChange={(e) => setF("title", e.target.value)} className="input-x col-span-2" />
           <input placeholder="Slug" value={form.slug} onChange={(e) => setF("slug", e.target.value)} className="input-x col-span-2" />
           <input placeholder="Venue" value={form.venue} onChange={(e) => setF("venue", e.target.value)} className="input-x" />
@@ -152,27 +244,34 @@ function EventForm({ form, setForm, onSave, onClose }) {
           </label>
           <label className="col-span-2 flex gap-2 items-center"><input type="checkbox" checked={form.is_published} onChange={(e) => setF("is_published", e.target.checked)} /> <span className="text-sm">Published</span></label>
         </div>
-        <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-zinc-500">Waves</div>
-        <div className="mt-3 space-y-2">
-          <div className="hidden md:grid grid-cols-12 gap-2 px-3 font-mono-x uppercase tracking-[0.2em] text-[10px] text-zinc-500">
-            <div className="col-span-3">Name</div>
-            <div className="col-span-2">Price (RON)</div>
-            <div className="col-span-2">Tickets (capacity)</div>
-            <div className="col-span-2">Sale starts</div>
-            <div className="col-span-2">Sale ends</div>
-            <div className="col-span-1">Tier</div>
-          </div>
+        <div className="mt-8 hairline-b pb-3 flex items-baseline gap-3">
+          <div className="font-display text-xl uppercase font-bold">Ticket tiers</div>
+          <div className="font-mono-x uppercase tracking-[0.2em] text-[10px] text-zinc-500">{form.waves.length} tier{form.waves.length === 1 ? "" : "s"}</div>
+        </div>
+        <div className="mt-4 space-y-4">
           {form.waves.map((w, i) => (
-            <div key={w.wave_id || w._key || `new-${i}`} className="grid grid-cols-12 gap-2 border border-white/10 p-3">
-              <input placeholder="Name" value={w.name} onChange={(e) => setWave(i, "name", e.target.value)} className="input-x col-span-3 min-w-0" />
-              <input type="number" step="0.01" placeholder="Price RON" value={w.price_ron} onChange={(e) => setWave(i, "price_ron", Number(e.target.value))} className="input-x col-span-2 min-w-0" />
-              <input type="number" placeholder="Tickets" value={w.capacity} onChange={(e) => setWave(i, "capacity", Number(e.target.value))} className="input-x col-span-2 min-w-0" />
-              <div className="col-span-2 min-w-0"><DateTimePicker value={w.starts_at} onChange={(v) => setWave(i, "starts_at", v)} /></div>
-              <div className="col-span-2 min-w-0"><DateTimePicker value={w.ends_at} onChange={(v) => setWave(i, "ends_at", v)} /></div>
-              <select value={w.tier} onChange={(e) => setWave(i, "tier", e.target.value)} className="input-x col-span-1 min-w-0"><option value="early_bird">early</option><option value="general">gen</option><option value="vip">vip</option></select>
+            <div key={w.wave_id || w._key || `new-${i}`} className="border border-white/15 bg-white/[0.02] p-4" data-testid={`wave-row-${i}`}>
+              <div className="flex flex-wrap items-center gap-3 pb-3 hairline-b">
+                <span className={`shrink-0 px-2 py-1 border font-mono-x uppercase tracking-[0.2em] text-[10px] ${TIER_BADGE[w.tier] || TIER_BADGE.general}`}>
+                  {TIER_LABEL[w.tier] || w.tier}
+                </span>
+                <input placeholder="Tier name" value={w.name} onChange={(e) => setWave(i, "name", e.target.value)} className="input-x flex-1 min-w-[8rem] font-display uppercase font-bold" />
+                <select value={w.tier} onChange={(e) => setWave(i, "tier", e.target.value)} className="input-x shrink-0 w-auto">
+                  <option value="early_bird">Early Bird</option>
+                  <option value="general">General</option>
+                  <option value="vip">VIP</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                <Field label="Price (RON)"><input type="number" step="0.01" value={w.price_ron} onChange={(e) => setWave(i, "price_ron", Number(e.target.value))} className="input-x w-full" /></Field>
+                <Field label="Tickets"><input type="number" value={w.capacity} onChange={(e) => setWave(i, "capacity", Number(e.target.value))} className="input-x w-full" /></Field>
+                <Field label="Sale starts"><DateTimePicker value={w.starts_at} onChange={(v) => setWave(i, "starts_at", v)} /></Field>
+                <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => setWave(i, "ends_at", v)} /></Field>
+                <Field label="Access from" className="col-span-2 md:col-span-1"><DateTimePicker value={w.access_from} onChange={(v) => setWave(i, "access_from", v)} /></Field>
+              </div>
             </div>
           ))}
-          <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general" }]})} className="btn-primary">+ Add wave</button>
+          <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_from: "" }]})} className="btn-primary">+ Add tier</button>
         </div>
         <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-zinc-500">Album</div>
         <div className="mt-3">
@@ -180,64 +279,16 @@ function EventForm({ form, setForm, onSave, onClose }) {
             ? <EventAlbum eventId={form.event_id} />
             : <div className="text-xs text-zinc-500 font-mono-x uppercase tracking-[0.2em]">Save the event once first to upload its album.</div>}
         </div>
-        <button onClick={onSave} data-testid="save-event-btn" className="btn-accent w-full mt-6">SAVE</button>
+        </div>
       </div>
     </div>
   );
 }
 
+// The event form and the Gallery tab now drive the same album manager, so
+// ordering, cover choice and multi-upload behave identically in both places.
 function EventAlbum({ eventId }) {
-  const [items, setItems] = useState([]);
-  const [uploading, setUploading] = useState(false);
-  const load = () => http.get(`/admin/gallery?event_id=${eventId}`).then((r) => setItems(r.data));
-  useEffect(() => { load(); }, [eventId]);
-
-  const upload = async (files) => {
-    setUploading(true);
-    try {
-      for (const file of files) {
-        const fd = new FormData();
-        fd.append("file", file);
-        const { data } = await http.post("/admin/uploads", fd);
-        await http.post("/admin/gallery", {
-          image_url: data.url, thumbnail_url: data.thumbnail_url, media_type: data.media_type, event_id: eventId,
-        });
-      }
-      await load();
-      toast.success("Uploaded");
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const del = async (id) => { await http.delete(`/admin/gallery/${id}`); load(); };
-
-  return (
-    <div>
-      <label className="btn-primary inline-flex items-center gap-2 cursor-pointer !text-xs">
-        {uploading ? "UPLOADING…" : "+ UPLOAD PHOTOS / VIDEO"}
-        <input type="file" accept="image/*,video/*" multiple className="hidden" data-testid="album-upload-input"
-               onChange={(e) => { if (e.target.files.length) upload([...e.target.files]); e.target.value = ""; }} />
-      </label>
-      {items.length > 0 && (
-        <div className="mt-3 grid grid-cols-4 md:grid-cols-6 gap-2">
-          {items.map((g) => (
-            <div key={g.gallery_id} className="relative group border border-white/10">
-              {g.media_type === "video"
-                ? <video src={mediaUrl(g.image_url)} className="w-full aspect-square object-cover" muted />
-                : <img src={mediaUrl(g.thumbnail_url || g.image_url)} alt="" className="w-full aspect-square object-cover" />}
-              <button onClick={() => del(g.gallery_id)}
-                      className="absolute inset-0 bg-black/70 text-white text-xs font-mono-x uppercase tracking-[0.2em] opacity-0 group-hover:opacity-100 transition-opacity">
-                Del
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  return <AlbumManager eventId={eventId} emptyHint="No photos or videos in this event album yet." />;
 }
 
 function Orders() {
@@ -248,13 +299,13 @@ function Orders() {
   return (
     <div className="space-y-2">
       {orders.map((o) => (
-        <div key={o.reservation_id} className="border border-white/10 bg-[#0F0F0F] p-3 grid grid-cols-12 gap-2 text-sm">
-          <div className="col-span-3 font-mono-x text-xs truncate">{o.reservation_id}</div>
-          <div className="col-span-2 font-mono-x">{o.total_ron?.toFixed(2)} RON</div>
-          <div className="col-span-1">{o.quantity}×</div>
-          <div className="col-span-2"><span className="border border-white/20 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em]">{o.status}</span></div>
-          <div className="col-span-2 font-mono-x text-xs text-zinc-400">{new Date(o.created_at).toLocaleString("en-GB")}</div>
-          <div className="col-span-2 text-right">{o.status === "paid" && <button onClick={() => refund(o.reservation_id)} className="btn-primary text-xs">Refund</button>}</div>
+        <div key={o.reservation_id} className="border border-white/10 bg-[#0F0F0F] p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center text-sm">
+          <div className="lg:col-span-3 min-w-0 font-mono-x text-xs break-words lg:truncate">{o.reservation_id}</div>
+          <div className="lg:col-span-2 min-w-0 font-mono-x">{o.total_ron?.toFixed(2)} RON</div>
+          <div className="lg:col-span-1 min-w-0">{o.quantity}×</div>
+          <div className="lg:col-span-2 min-w-0"><span className="inline-block border border-white/20 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em]">{o.status}</span></div>
+          <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-zinc-400">{new Date(o.created_at).toLocaleString("en-GB")}</div>
+          <div className="lg:col-span-2 min-w-0 lg:text-right">{o.status === "paid" && <button onClick={() => refund(o.reservation_id)} className="btn-primary text-xs">Refund</button>}</div>
         </div>
       ))}
     </div>
@@ -449,11 +500,12 @@ function Users() {
   return (
     <div className="space-y-2">
       {items.map((u) => (
-        <div key={u.user_id} className="border border-white/10 p-3 grid grid-cols-12 gap-2 items-center">
-          <div className="col-span-4">{u.name}</div>
-          <div className="col-span-4 text-zinc-400 text-sm">{u.email}</div>
-          <div className="col-span-2 font-mono-x text-xs uppercase">{u.role}</div>
-          <div className="col-span-2 flex gap-1 justify-end">
+        <div key={u.user_id} className="border border-white/10 p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
+          <div className="lg:col-span-3 min-w-0 break-words">{u.name}</div>
+          <div className="lg:col-span-4 min-w-0 text-zinc-400 text-sm break-words">{u.email}</div>
+          <div className="lg:col-span-1 min-w-0 font-mono-x text-xs uppercase">{u.role}</div>
+          {/* Four role buttons need real room — they were sharing two columns. */}
+          <div className="lg:col-span-4 min-w-0 flex flex-wrap gap-1 lg:justify-end">
             {["user", "editor", "door", "admin"].map((r) => (
               <button key={r} onClick={() => setRole(u, r)} className={`px-2 py-1 border text-[10px] uppercase tracking-[0.2em] ${u.role===r ? "bg-white text-black border-white" : "border-white/20"}`}>{r}</button>
             ))}
@@ -465,51 +517,37 @@ function Users() {
 }
 
 function GalleryAdmin() {
-  const [items, setItems] = useState([]);
-  const [caption, setCaption] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const load = () => http.get("/admin/gallery").then((r) => setItems(r.data));
-  useEffect(() => { load(); }, []);
+  const [events, setEvents] = useState([]);
+  // "" is the sitewide Documentation gallery; any other value is an event album.
+  const [albumId, setAlbumId] = useState("");
 
-  const upload = async (files) => {
-    setUploading(true);
-    try {
-      for (const file of files) {
-        const fd = new FormData();
-        fd.append("file", file);
-        const { data } = await http.post("/admin/uploads", fd);
-        await http.post("/admin/gallery", { image_url: data.url, thumbnail_url: data.thumbnail_url, media_type: data.media_type, caption });
-      }
-      setCaption("");
-      await load();
-      toast.success("Uploaded");
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  };
+  useEffect(() => {
+    http.get("/admin/events").then((r) => setEvents(r.data)).catch(() => setEvents([]));
+  }, []);
+
+  const current = events.find((e) => e.event_id === albumId);
 
   return (
     <div>
-      <div className="border border-white/10 p-4 grid grid-cols-2 gap-3">
-        <input placeholder="Caption (applies to next upload)" value={caption} onChange={(e) => setCaption(e.target.value)} className="input-x col-span-2" />
-        <label className="btn-accent col-span-2 text-center cursor-pointer">
-          {uploading ? "UPLOADING…" : "+ UPLOAD PHOTOS / VIDEO"}
-          <input type="file" accept="image/*,video/*" multiple className="hidden" data-testid="sitewide-gallery-upload-input"
-                 onChange={(e) => { if (e.target.files.length) upload([...e.target.files]); e.target.value = ""; }} />
-        </label>
+      <div className="border border-white/10 bg-[#0F0F0F] p-4 mb-4">
+        <Field label="Album">
+          <select value={albumId} onChange={(e) => setAlbumId(e.target.value)} className="input-x w-full" data-testid="gallery-album-select">
+            <option value="">Sitewide gallery (Documentation)</option>
+            {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
+          </select>
+        </Field>
+        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-2">
+          {current
+            ? "Shown on this event's page and as its tile on the Gallery page."
+            : "Shown directly in the main Gallery grid, alongside event album tiles."}
+        </div>
       </div>
-      <div className="mt-4 grid grid-cols-3 md:grid-cols-6 gap-2">
-        {items.map((g) => (
-          <div key={g.gallery_id} className="border border-white/10">
-            {g.media_type === "video"
-              ? <video src={mediaUrl(g.image_url)} className="w-full aspect-square object-cover" muted />
-              : <img src={mediaUrl(g.thumbnail_url || g.image_url)} alt={g.caption} className="w-full aspect-square object-cover" />}
-            <button onClick={async () => { await http.delete(`/admin/gallery/${g.gallery_id}`); load(); }} className="btn-primary text-[10px] w-full">Del</button>
-          </div>
-        ))}
-      </div>
+      {/* Remount on album change so upload queue and drag state never leak across albums. */}
+      <AlbumManager
+        key={albumId || "sitewide"}
+        eventId={albumId || null}
+        emptyHint={current ? `No media in "${current.title}" yet.` : "No sitewide gallery items yet."}
+      />
     </div>
   );
 }
@@ -528,11 +566,12 @@ function NewsletterAdmin() {
       </div>
       <div className="space-y-2">
         {items.map((s) => (
-          <div key={s.sub_id} className="border border-white/10 p-3 grid grid-cols-12 gap-2 items-center text-sm">
-            <div className="col-span-5 font-mono-x">{s.email}</div>
-            <div className="col-span-3 text-zinc-400 text-xs">{s.source || "—"}</div>
-            <div className="col-span-3 font-mono-x text-xs text-zinc-400">{new Date(s.created_at).toLocaleString("en-GB")}</div>
-            <div className="col-span-1 text-right">
+          <div key={s.sub_id} className="border border-white/10 p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center text-sm">
+            {/* Addresses have no spaces to wrap at, so they need break-words. */}
+            <div className="lg:col-span-5 min-w-0 font-mono-x break-words">{s.email}</div>
+            <div className="lg:col-span-2 min-w-0 text-zinc-400 text-xs break-words">{s.source || "—"}</div>
+            <div className="lg:col-span-3 min-w-0 font-mono-x text-xs text-zinc-400">{new Date(s.created_at).toLocaleString("en-GB")}</div>
+            <div className="lg:col-span-2 min-w-0 lg:text-right">
               <button onClick={() => del(s.sub_id)} className="btn-primary text-[10px]" data-testid={`newsletter-del-${s.sub_id}`}>Del</button>
             </div>
           </div>

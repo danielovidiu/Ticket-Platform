@@ -460,6 +460,9 @@ class WaveIn(BaseModel):
     starts_at: str
     ends_at: str
     tier: str = "general"  # early_bird, general, vip
+    # When holders of *this* tier may start entering. Per-tier rather than
+    # per-event, so VIP/early-bird can be granted earlier access than general.
+    access_from: Optional[str] = None
 
 
 class EventIn(BaseModel):
@@ -969,7 +972,7 @@ async def list_events(upcoming: bool = True):
     # Batch-fetch albums for every listed event in one query instead of N+1,
     # so cards can show a cover photo without a per-event round trip.
     event_ids = [e["event_id"] for e in items]
-    gallery_items = await db.gallery.find({"event_id": {"$in": event_ids}}, {"_id": 0}).sort("created_at", 1).to_list(2000)
+    gallery_items = await db.gallery.find({"event_id": {"$in": event_ids}}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(2000)
     gallery_by_event = {}
     for g in gallery_items:
         gallery_by_event.setdefault(g["event_id"], []).append(g)
@@ -991,7 +994,7 @@ async def get_event(slug: str):
         w["available"] = max(0, w.get("available", w.get("capacity", 0)))
         active_waves.append(w)
     e["waves"] = active_waves
-    e["gallery"] = await db.gallery.find({"event_id": e["event_id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    e["gallery"] = await db.gallery.find({"event_id": e["event_id"]}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(200)
     return e
 
 
@@ -999,16 +1002,21 @@ async def get_event(slug: str):
 async def gallery():
     # Sitewide "Documentation" gallery only — event albums (event_id set) live
     # on their own event page instead.
-    return await db.gallery.find({"event_id": None}, {"_id": 0}).to_list(200)
+    return await db.gallery.find({"event_id": None}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(200)
+
+
+def _album_cover(items: List[dict]) -> dict:
+    """The explicitly chosen cover, else the first item in the album's order."""
+    return next((g for g in items if g.get("is_cover")), items[0])
 
 
 @api.get("/gallery/clusters")
 async def gallery_clusters():
     """Powers the public Gallery page: standalone photos plus one cover tile
     per event album, so 100s of event photos don't flood the main grid."""
-    standalone = await db.gallery.find({"event_id": None}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    standalone = await db.gallery.find({"event_id": None}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(200)
 
-    event_items = await db.gallery.find({"event_id": {"$ne": None}}, {"_id": 0}).sort("created_at", 1).to_list(5000)
+    event_items = await db.gallery.find({"event_id": {"$ne": None}}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(5000)
     by_event = {}
     for g in event_items:
         by_event.setdefault(g["event_id"], []).append(g)
@@ -1025,7 +1033,7 @@ async def gallery_clusters():
             continue
         event_albums.append({
             "event_id": ev["event_id"], "title": ev["title"], "slug": ev["slug"],
-            "cover": items[0], "count": len(items), "items": items,
+            "cover": _album_cover(items), "count": len(items), "items": items,
         })
 
     return {"standalone": standalone, "event_albums": event_albums}
@@ -1691,14 +1699,43 @@ async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
 
 # ---------- Admin ----------
 
+def _created_range(date_from: Optional[str], date_to: Optional[str]) -> dict:
+    """Range filter on the ISO-8601 `created_at` strings. Those carry a fixed
+    +00:00 offset, so lexical comparison is chronological. A bare YYYY-MM-DD
+    `date_to` is widened to cover that whole day rather than midnight."""
+    rng = {}
+    if date_from:
+        rng["$gte"] = date_from
+    if date_to:
+        rng["$lte"] = (date_to + "T23:59:59.999999") if len(date_to) == 10 else date_to
+    return {"created_at": rng} if rng else {}
+
+
 @api.get("/admin/stats")
-async def admin_stats(user=Depends(require_admin)):
-    total_orders = await db.reservations.count_documents({"status": "paid"})
-    total_tickets = await db.tickets.count_documents({})
-    scanned = await db.tickets.count_documents({"status": "used"})
-    revenue_docs = await db.reservations.find({"status": "paid"}, {"_id": 0, "total_ron": 1}).to_list(5000)
+async def admin_stats(
+    event_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user=Depends(require_admin),
+):
+    # Same scope applied to every metric so the cards stay mutually consistent.
+    scope = _created_range(date_from, date_to)
+    if event_id:
+        scope["event_id"] = event_id
+
+    total_orders = await db.reservations.count_documents({**scope, "status": "paid"})
+    total_tickets = await db.tickets.count_documents(scope)
+    scanned = await db.tickets.count_documents({**scope, "status": "used"})
+    revenue_docs = await db.reservations.find({**scope, "status": "paid"}, {"_id": 0, "total_ron": 1}).to_list(5000)
     revenue = sum(r["total_ron"] for r in revenue_docs)
-    events = await db.events.count_documents({})
+    # Unfiltered this is the catalogue size. Once any filter is on, counting the
+    # whole catalogue (or events *scheduled* in the window, which reads as 0 for a
+    # backward-looking range) would be the odd one out among four sales metrics —
+    # so it becomes "how many events actually sold in this slice".
+    if event_id or date_from or date_to:
+        events = len(await db.reservations.distinct("event_id", {**scope, "status": "paid"}))
+    else:
+        events = await db.events.count_documents({})
     return {
         "revenue_ron": round(revenue, 2),
         "total_orders": total_orders,
@@ -1910,7 +1947,7 @@ async def admin_audit(limit: int = 100, skip: int = 0, user=Depends(require_admi
 async def admin_gallery(event_id: Optional[str] = None, user=Depends(require_admin)):
     # No event_id -> the sitewide "Documentation" gallery tab; with one -> that event's album.
     query = {"event_id": event_id if event_id else None}
-    return await db.gallery.find(query, {"_id": 0}).sort("created_at", 1).to_list(500)
+    return await db.gallery.find(query, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(500)
 
 
 class GalleryIn(BaseModel):
@@ -1926,18 +1963,103 @@ async def admin_add_gallery(body: GalleryIn, user=Depends(require_admin)):
     g = body.model_dump()
     g["gallery_id"] = new_id("gal")
     g["created_at"] = now_utc().isoformat()
+    # New items land at the end of their own bucket.
+    last = await db.gallery.find({"event_id": g["event_id"]}).sort("sort_order", -1).limit(1).to_list(1)
+    g["sort_order"] = (last[0].get("sort_order", -1) + 1) if last else 0
+    g["is_cover"] = False
     await db.gallery.insert_one(g)
     return {k: v for k, v in g.items() if k != "_id"}
 
 
+class GalleryReorderIn(BaseModel):
+    event_id: Optional[str] = None
+    ordered_ids: List[str]
+
+
+@api.patch("/admin/gallery/reorder")
+async def admin_reorder_gallery(body: GalleryReorderIn, user=Depends(require_admin)):
+    """Rewrite sort_order to match ordered_ids. Every id must belong to the named
+    bucket — otherwise a stale client could drag an item out of its own album."""
+    bucket = body.event_id or None
+    owned = await db.gallery.find({"event_id": bucket}, {"_id": 0, "gallery_id": 1}).to_list(5000)
+    owned_ids = {g["gallery_id"] for g in owned}
+    unknown = [i for i in body.ordered_ids if i not in owned_ids]
+    if unknown:
+        raise HTTPException(400, f"{len(unknown)} item(s) do not belong to this album")
+
+    for i, gid in enumerate(body.ordered_ids):
+        await db.gallery.update_one({"gallery_id": gid}, {"$set": {"sort_order": i}})
+    return {"ok": True, "count": len(body.ordered_ids)}
+
+
+class GalleryPatchIn(BaseModel):
+    caption: Optional[str] = None
+    is_cover: Optional[bool] = None
+
+
+@api.patch("/admin/gallery/{gallery_id}")
+async def admin_update_gallery(gallery_id: str, body: GalleryPatchIn, user=Depends(require_admin)):
+    item = await db.gallery.find_one({"gallery_id": gallery_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "Not found")
+
+    updates = {}
+    if body.caption is not None:
+        updates["caption"] = body.caption
+    if body.is_cover is not None:
+        if body.is_cover:
+            # Exactly one cover per bucket.
+            await db.gallery.update_many({"event_id": item.get("event_id")}, {"$set": {"is_cover": False}})
+        updates["is_cover"] = body.is_cover
+    if updates:
+        await db.gallery.update_one({"gallery_id": gallery_id}, {"$set": updates})
+    return await db.gallery.find_one({"gallery_id": gallery_id}, {"_id": 0})
+
+
+def _delete_upload_file(url: Optional[str]):
+    """Remove a file this app stored. Only ever touches names directly inside
+    UPLOAD_DIR — remote URLs (seeded Unsplash items) and any path trying to climb
+    out of the directory are ignored."""
+    if not url or not url.startswith("/uploads/"):
+        return
+    name = url.split("/uploads/", 1)[1]
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        return
+    target = (UPLOAD_DIR / name).resolve()
+    if target.parent != UPLOAD_DIR.resolve() or not target.is_file():
+        return
+    try:
+        target.unlink()
+    except OSError:
+        logger.exception("Could not delete upload %s", name)
+
+
 @api.delete("/admin/gallery/{gallery_id}")
 async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
+    item = await db.gallery.find_one({"gallery_id": gallery_id}, {"_id": 0})
+    if not item:
+        return {"ok": True}
     await db.gallery.delete_one({"gallery_id": gallery_id})
+    # Drop the bytes too, or uploads accumulate forever. The thumbnail may be the
+    # same URL as the original (videos without a poster), so guard against that.
+    _delete_upload_file(item.get("image_url"))
+    thumb = item.get("thumbnail_url")
+    if thumb and thumb != item.get("image_url"):
+        _delete_upload_file(thumb)
+    # Promote a new cover if this was it, so the album never loses its cover.
+    if item.get("is_cover"):
+        nxt = await db.gallery.find({"event_id": item.get("event_id")}).sort([("sort_order", 1)]).limit(1).to_list(1)
+        if nxt:
+            await db.gallery.update_one({"gallery_id": nxt[0]["gallery_id"]}, {"$set": {"is_cover": True}})
     return {"ok": True}
 
 
 @api.post("/admin/uploads")
-async def admin_upload_media(file: UploadFile = File(...), user=Depends(require_admin)):
+async def admin_upload_media(
+    file: UploadFile = File(...),
+    poster: Optional[UploadFile] = File(None),
+    user=Depends(require_admin),
+):
     content_type = file.content_type or ""
     if content_type in IMAGE_CONTENT_TYPES:
         media_type, ext = "image", IMAGE_CONTENT_TYPES[content_type]
@@ -1964,11 +2086,27 @@ async def admin_upload_media(file: UploadFile = File(...), user=Depends(require_
             thumbnail_url = f"/uploads/{thumb_name}"
         except Exception:
             logger.exception("Thumbnail generation failed for upload %s", file_id)
+    elif poster is not None:
+        # ffmpeg isn't a dependency here, so video posters are captured in the
+        # browser at upload time and sent alongside. Treated as untrusted image
+        # bytes: re-encoded through Pillow rather than written through as-is.
+        try:
+            pdata = await poster.read()
+            if len(pdata) > MAX_UPLOAD_BYTES:
+                raise ValueError("poster too large")
+            pimg = Image.open(io.BytesIO(pdata)).convert("RGB")
+            pimg.thumbnail((640, 640))
+            thumb_name = f"{file_id}_poster.jpg"
+            pimg.save(UPLOAD_DIR / thumb_name, "JPEG", quality=82)
+            thumbnail_url = f"/uploads/{thumb_name}"
+        except Exception:
+            logger.exception("Poster processing failed for upload %s", file_id)
 
     return {
         "url": f"/uploads/{file_id}{ext}",
         "thumbnail_url": thumbnail_url or f"/uploads/{file_id}{ext}",
         "media_type": media_type,
+        "has_poster": bool(thumbnail_url) if media_type == "video" else True,
     }
 
 
@@ -2149,9 +2287,44 @@ async def init_indexes():
         await db.users.create_index("apple_sub", unique=True, partialFilterExpression={"apple_sub": {"$type": "string"}})
         await db.processed_stripe_events.create_index("event_id", unique=True)
         await db.newsletter_subscriptions.create_index("email", unique=True)
+        await db.gallery.create_index([("event_id", 1), ("sort_order", 1)])
         logger.info("Indexes ensured")
     except Exception:
         logger.exception("init_indexes failed")
+
+    try:
+        await migrate_gallery_ordering()
+    except Exception:
+        logger.exception("migrate_gallery_ordering failed")
+
+
+async def migrate_gallery_ordering():
+    """Backfill the fields the album manager relies on.
+
+    Pre-existing rows predate ordering entirely, and the earliest seeded ones also
+    lack media_type/event_id. Ordering is assigned per bucket (each event album and
+    the sitewide one are independent sequences) following the old created_at order,
+    so existing albums keep exactly the order they already displayed in.
+    """
+    await db.gallery.update_many({"media_type": {"$exists": False}}, {"$set": {"media_type": "image"}})
+    await db.gallery.update_many({"event_id": {"$exists": False}}, {"$set": {"event_id": None}})
+
+    buckets = await db.gallery.distinct("event_id")
+    fixed = 0
+    for bucket in buckets:
+        items = await db.gallery.find(
+            {"event_id": bucket, "sort_order": {"$exists": False}}, {"_id": 0, "gallery_id": 1}
+        ).sort("created_at", 1).to_list(5000)
+        if not items:
+            continue
+        # Append after anything already ordered in this bucket.
+        ordered = await db.gallery.find({"event_id": bucket, "sort_order": {"$exists": True}}).to_list(5000)
+        base = max((o.get("sort_order", 0) for o in ordered), default=-1) + 1
+        for i, g in enumerate(items):
+            await db.gallery.update_one({"gallery_id": g["gallery_id"]}, {"$set": {"sort_order": base + i}})
+            fixed += 1
+    if fixed:
+        logger.info("Gallery ordering backfilled for %d item(s)", fixed)
 
 
 @app.on_event("shutdown")

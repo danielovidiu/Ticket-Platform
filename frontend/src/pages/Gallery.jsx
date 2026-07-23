@@ -3,18 +3,29 @@ import { http } from "../api";
 import { mediaUrl } from "../lib/media";
 import { Lightbox } from "../components/ui/lightbox";
 
+/** A video row carries a real poster only when its thumbnail differs from the
+ * video URL — the upload endpoint reuses the video URL when no frame could be
+ * captured. */
+const hasPoster = (g) => g.media_type === "video" && g.thumbnail_url && g.thumbnail_url !== g.image_url;
+
 /** Card shape shared by event-cluster covers and standalone photos: a fixed
  * square cover (uniform across the grid) plus a title area that's part of
  * the same CSS Grid row — so a longer title just grows that row's height for
  * every card in it, instead of truncating or breaking alignment. */
-function Card({ testId, coverUrl, mediaType, title, badge, onClick }) {
+function Card({ testId, coverUrl, isVideo, isPoster, title, badge, onClick }) {
   return (
     <button onClick={onClick} data-testid={testId} className="group flex flex-col h-full border border-white/10 text-left hover:border-white transition-colors">
       <div className="aspect-square overflow-hidden relative shrink-0">
-        {mediaType === "video" ? (
+        {/* `coverUrl` is already a still when a poster exists, so it must render as
+            an <img> even though the item is a video — feeding a JPEG to <video>
+            would just show an empty box. */}
+        {isVideo && !isPoster ? (
           <video src={coverUrl} className="w-full h-full object-cover" muted preload="metadata" />
         ) : (
           <img src={coverUrl} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover group-hover:opacity-80 transition-opacity" />
+        )}
+        {isVideo && (
+          <div className="absolute top-2 left-2 bg-black/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-white">▶ Video</div>
         )}
         {badge && (
           <div className="absolute bottom-2 right-2 bg-black/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-white">{badge}</div>
@@ -53,7 +64,8 @@ export default function Gallery() {
             key={a.event_id}
             testId={`gallery-event-${a.slug}`}
             coverUrl={mediaUrl(a.cover.thumbnail_url || a.cover.image_url)}
-            mediaType={a.cover.media_type}
+            isVideo={a.cover.media_type === "video"}
+            isPoster={hasPoster(a.cover)}
             title={a.title}
             badge={`${a.count} photo${a.count === 1 ? "" : "s"}`}
             onClick={() => setActive({ items: toItems(a.items), index: 0 })}
@@ -64,7 +76,8 @@ export default function Gallery() {
             key={g.gallery_id}
             testId={`gallery-standalone-${i}`}
             coverUrl={mediaUrl(g.thumbnail_url || g.image_url)}
-            mediaType={g.media_type}
+            isVideo={g.media_type === "video"}
+            isPoster={hasPoster(g)}
             title={g.caption}
             onClick={() => setActive({ items: toItems(standalone), index: i })}
           />

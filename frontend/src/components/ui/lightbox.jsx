@@ -114,7 +114,9 @@ export function Lightbox({ items, index, onClose, onIndexChange }) {
                   i === index ? "border-white opacity-100" : "border-transparent opacity-50 hover:opacity-90"
                 }`}
               >
-                {it.media_type === "video" ? (
+                {it.media_type === "video" && (!it.thumbnail_url || it.thumbnail_url === it.url) ? (
+                  // Only fall back to a video element when no poster exists —
+                  // a ribbon of decoding videos is expensive on long albums.
                   <video src={mediaUrl(it.url)} className="w-full h-full object-cover" muted preload="metadata" />
                 ) : (
                   <img
@@ -124,6 +126,9 @@ export function Lightbox({ items, index, onClose, onIndexChange }) {
                     decoding="async"
                     className="w-full h-full object-cover"
                   />
+                )}
+                {it.media_type === "video" && (
+                  <span className="absolute bottom-1 right-1 bg-black/75 px-1.5 py-0.5 font-mono-x text-[9px] uppercase tracking-[0.15em] text-white">▶</span>
                 )}
               </button>
             ))}
