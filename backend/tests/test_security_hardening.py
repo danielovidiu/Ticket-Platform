@@ -20,7 +20,8 @@ import json
 import pytest
 import requests
 
-from support import BASE_URL, API, db, mint_user, register_user, TEST_EMAIL_DOMAIN
+from support import (BASE_URL, API, db, mint_user, register_user, hash_token,
+                     TEST_EMAIL_DOMAIN)
 
 
 def _mint_session(role: str):
@@ -107,10 +108,126 @@ class TestPaymentModeFailsClosed:
             assert "MODE=stripe" in p.stdout, f"production started in fake mode: {p.stdout}"
 
 
+class TestSecurityHeaders:
+    """Audit M1 — fixed. Every response carries the baseline set."""
+
+    def test_baseline_headers_on_api_responses(self):
+        h = requests.get(f"{API}/auth/methods", timeout=15).headers
+        assert h.get("X-Content-Type-Options") == "nosniff"
+        assert h.get("X-Frame-Options") == "DENY"
+        # Verification and reset tokens ride in query strings, so the referrer must not
+        # carry them to third parties or into logs.
+        assert h.get("Referrer-Policy") == "no-referrer"
+        assert "Permissions-Policy" in h
+        assert "frame-ancestors 'none'" in h.get("Content-Security-Policy", "")
+
+    def test_headers_present_on_error_responses_too(self):
+        """Middleware runs on the 401/404 paths, not just the happy one."""
+        for url, expect in ((f"{API}/auth/me", 401), (f"{API}/nope", 404)):
+            r = requests.get(url, timeout=15)
+            assert r.status_code == expect
+            assert r.headers.get("X-Content-Type-Options") == "nosniff", url
+
+    def test_uploads_get_a_sandboxed_csp(self):
+        """/uploads serves user-supplied bytes from the app origin: nosniff stops a
+        polyglot being sniffed as HTML, the sandbox CSP neuters it if it ever is."""
+        r = requests.get(f"{BASE_URL}/uploads/does-not-exist.jpg", timeout=15)
+        csp = r.headers.get("Content-Security-Policy", "")
+        assert r.headers.get("X-Content-Type-Options") == "nosniff"
+        assert "sandbox" in csp, csp
+
+    def test_hsts_only_when_serving_https(self):
+        """The dev server is http, so HSTS must be absent — pinning localhost to a scheme
+        it doesn't serve would be self-inflicted downtime."""
+        h = requests.get(f"{API}/auth/methods", timeout=15).headers
+        if BASE_URL.startswith("https://"):
+            assert "Strict-Transport-Security" in h
+        else:
+            assert "Strict-Transport-Security" not in h
+
+
+class TestSessionTokensHashedAtRest:
+    """Audit M2 — fixed. The database must not hold anything replayable."""
+
+    def test_stored_token_is_a_hash_not_the_bearer_value(self):
+        headers, user_id, _email = mint_user("user")
+        presented = headers["Authorization"].split(" ", 1)[1]
+        row = db.user_sessions.find_one({"user_id": user_id})
+        assert row is not None
+        stored = row["session_token"]
+        assert stored != presented, "session token stored in plaintext"
+        assert stored == hash_token(presented)
+        assert len(stored) == 64 and all(c in "0123456789abcdef" for c in stored)
+
+    def test_hashed_session_still_authenticates(self):
+        headers, _uid, _email = mint_user("user")
+        r = requests.get(f"{API}/auth/me", headers=headers, timeout=15)
+        assert r.status_code == 200, r.text
+
+    def test_no_plaintext_tokens_remain_anywhere(self):
+        """The startup migration must have converted every pre-existing row."""
+        bad = [s["session_token"] for s in db.user_sessions.find({}, {"session_token": 1})
+               if not (len(s.get("session_token") or "") == 64
+                       and all(c in "0123456789abcdef" for c in s["session_token"]))]
+        assert not bad, f"{len(bad)} session row(s) still hold a non-hashed token"
+
+    def test_logout_revokes_the_hashed_row(self):
+        headers, user_id, _email = mint_user("user")
+        assert requests.post(f"{API}/auth/logout", headers=headers, timeout=15).status_code == 200
+        assert db.user_sessions.count_documents({"user_id": user_id}) == 0
+        assert requests.get(f"{API}/auth/me", headers=headers, timeout=15).status_code == 401
+
+
+class TestRateLimiterIsBounded:
+    """Audit H2 — fixed. The limiter's key table must not grow without bound."""
+
+    def test_expired_keys_are_evicted(self):
+        """Drive many distinct keys through a short-window bucket, then confirm the
+        server's table isn't still holding them all. Uses the in-process limiter directly:
+        it is process-local state, so an HTTP test could only infer it."""
+        import sys
+        from support import BACKEND_DIR
+        code = (
+            "import server, time\n"
+            "server.RATE_LIMIT_SWEEP_SECONDS = 0\n"
+            "now = time.time()\n"
+            "for i in range(500):\n"
+            "    with server._rate_lock:\n"
+            "        server._rate_check('probe', f'k{i}', 100, 1)\n"
+            "time.sleep(1.2)\n"
+            "with server._rate_lock:\n"
+            "    server._rate_check('probe', 'trigger-sweep', 100, 1)\n"
+            "print('REMAINING=%d' % len(server._rate_buckets['probe']))\n"
+        )
+        p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                           timeout=90, cwd=str(BACKEND_DIR))
+        assert p.returncode == 0, p.stderr[-500:]
+        remaining = int(p.stdout.split("REMAINING=")[1].split()[0])
+        assert remaining <= 2, f"sweep left {remaining} expired keys behind"
+
+    def test_key_count_is_capped(self):
+        """A burst faster than the sweep must still be bounded, by LRU eviction."""
+        import sys
+        from support import BACKEND_DIR
+        code = (
+            "import server\n"
+            "server.RATE_LIMIT_MAX_KEYS = 50\n"
+            "for i in range(500):\n"
+            "    with server._rate_lock:\n"
+            "        server._rate_check('burst', f'k{i}', 100, 3600)\n"
+            "print('SIZE=%d' % len(server._rate_buckets['burst']))\n"
+        )
+        p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                           timeout=90, cwd=str(BACKEND_DIR))
+        assert p.returncode == 0, p.stderr[-500:]
+        size = int(p.stdout.split("SIZE=")[1].split()[0])
+        assert size <= 50, f"key table grew to {size} despite a cap of 50"
+
+
 class TestKnownUnfixedFindings:
-    """Findings from SECURITY_AUDIT.md that are documented but NOT yet fixed. They are
-    xfail(strict) so that fixing one turns the suite red until the marker is removed —
-    the gap can't be quietly forgotten, and can't be quietly closed either."""
+    """Findings from SECURITY_AUDIT.md that are documented but NOT yet fixed. xfail(strict)
+    so the gap can't be quietly forgotten, and can't be quietly closed either — fixing one
+    turns the suite red until the marker is removed."""
 
     @pytest.mark.xfail(strict=True, reason="Audit H1: X-Forwarded-For is trusted with no "
                                            "proxy allowlist, so rotating it bypasses every rate limit")
@@ -124,13 +241,6 @@ class TestKnownUnfixedFindings:
             codes.append(r.status_code)
         db.contact_messages.delete_many({"name": {"$regex": "^TEST_rl_xff_"}})
         assert 429 in codes, f"rate limit never engaged across spoofed IPs: {codes}"
-
-    @pytest.mark.xfail(strict=True, reason="Audit M1: no security response headers are set")
-    def test_security_headers_present(self):
-        h = requests.get(f"{API}/auth/methods", timeout=15).headers
-        missing = [k for k in ("X-Content-Type-Options", "Referrer-Policy",
-                               "X-Frame-Options", "Strict-Transport-Security") if k not in h]
-        assert not missing, f"missing security headers: {missing}"
 
 
 # ---------- Admin gating for seed endpoints ----------

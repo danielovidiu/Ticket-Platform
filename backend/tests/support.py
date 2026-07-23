@@ -15,6 +15,7 @@ faking its output.
 import os
 import time
 import uuid
+import hashlib
 import contextlib
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -83,6 +84,14 @@ def server_is_up() -> tuple:
     return True, ""
 
 
+def hash_token(token: str) -> str:
+    """Mirror of server._hash_token. Duplicated rather than imported so the tests keep
+    working if they're ever pointed at a remote server (TICKET_PLATFORM_URL) whose module
+    isn't importable here — and so a change to the server's hashing is caught as a test
+    failure instead of silently followed."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def bearer(token: str) -> dict:
     """`get_current_user` accepts the session token as a Bearer header as well as a
     cookie, which is what lets these tests hold several identities at once."""
@@ -101,6 +110,9 @@ def mint_user(role: str = "user") -> tuple:
 
     `expires_at` is written as a real datetime: that is what the session TTL index needs,
     and `parse_dt` in the server accepts either form.
+
+    The session row stores sha256(token), matching what `_issue_session` writes since the
+    M2 fix — the plaintext goes in the Authorization header and nowhere else.
     """
     email = f"pytest-{uuid.uuid4().hex[:12]}@{TEST_EMAIL_DOMAIN}"
     user_id = f"user_pytest_{uuid.uuid4().hex[:12]}"
@@ -115,7 +127,7 @@ def mint_user(role: str = "user") -> tuple:
         "tos_accepted_at": now.isoformat(), "created_at": now.isoformat(),
     })
     db.user_sessions.insert_one({
-        "user_id": user_id, "session_token": token,
+        "user_id": user_id, "session_token": hash_token(token),
         "expires_at": now + timedelta(days=7), "created_at": now.isoformat(),
     })
 

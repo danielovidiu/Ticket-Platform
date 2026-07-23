@@ -9,6 +9,27 @@ what each piece guarantees. Env var reference lives in `backend/.env.example`.
 > in [Known gaps](#known-gaps) below. Where the two documents disagree, the audit wins:
 > it was written against the running code.
 
+## Response headers
+
+Set by a single middleware in `server.py` so the guarantee travels with the app rather
+than living in a proxy config, and holds in development too.
+
+| Header | Value | Why |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | `/uploads` serves user bytes from the app origin; stops a polyglot being sniffed as HTML |
+| `X-Frame-Options` | `DENY` | clickjacking of admin actions |
+| `Referrer-Policy` | `no-referrer` | verification and reset tokens travel in query strings |
+| `Permissions-Policy` | camera/mic/geolocation off | nothing here needs them |
+| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'; …` | tightened per path (below) |
+| `Strict-Transport-Security` | 1 year, `includeSubDomains` | **HTTPS only** — pinning http dev would be self-inflicted downtime |
+
+CSP varies by path: `/uploads` gets a `sandbox`ed policy (which does not affect
+`<img>`/`<video>` rendering — verified), `/docs` and `/redoc` get a narrower policy that
+permits the Swagger CDN, everything else gets the strict default.
+
+Moving verification and reset tokens out of URL query strings entirely is still
+outstanding (audit P1.6); `Referrer-Policy` is the cheaper half of that fix.
+
 ## Reporting a vulnerability
 
 Email the maintainer rather than opening a public issue, and allow a reasonable window
@@ -26,20 +47,27 @@ and the perimeter.
 |---|---|---|
 | C1 | `PAYMENTS_MODE` silently fell back to the simulator when `STRIPE_API_KEY` was unset — two unauthenticated endpoints then finalized orders, so tickets were free | Startup refuses `APP_ENV=production` with fake payments, from either a missing key or an explicit `LOCAL_FAKE_PAYMENTS=1` |
 | H3 | The first account to register became admin, and the `INITIAL_ADMIN_EMAIL` bootstrap re-promoted the operator without demoting a squatter | Registration order confers nothing; admin comes only from `INITIAL_ADMIN_EMAIL` |
+| H2 | Rate-limiter keys were created per IP and per email and never removed — a memory-exhaustion DoS | Periodic sweep drops keys whose window has expired, plus a per-bucket cap with LRU eviction |
+| M1 | No security response headers at all | `nosniff`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, CSP on every response; HSTS on HTTPS; a sandboxed CSP on `/uploads` |
+| M2 | Session tokens stored in plaintext — a database read yielded live sessions for every user | Only `sha256(token)` is persisted; migrated in place without logging anyone out |
+| — | `POST /auth/logout` read only the cookie, so a `Bearer` client got `200 {"ok":true}` while its session stayed valid (found while fixing M2) | Both call sites share `_presented_token`; logout revokes either form |
 
 **Still open:**
 
 | Id | Gap | Effect |
 |---|---|---|
 | H1 | `X-Forwarded-For` trusted with no proxy allowlist | Every rate limit bypassable; mail bombing; brute force |
-| H2 | Rate-limiter buckets never evict | Memory-exhaustion DoS |
-| M1 | No security response headers | Clickjacking; reset tokens leak via referrer and logs |
-| M2 | Session tokens stored in plaintext | A database read yields live sessions for every user |
 | M3 | `SameSite=None` with no CSRF token | Cross-site writes to `/admin/uploads` |
 | M4/M5 | Special-link capacity and per-user cap are TOCTOU | Oversell under concurrency |
+| M6–M12, L1–L4 | See the audit | |
 
-H1 and M1 are pinned by `xfail(strict=True)` tests in `backend/tests/test_security_hardening.py`,
-so the suite goes red the moment either is fixed without removing the marker.
+H1 is pinned by an `xfail(strict=True)` test in `backend/tests/test_security_hardening.py`,
+so the suite goes red the moment it is fixed without removing the marker.
+
+**H1 is now the single most valuable remaining fix.** With H2 done the limiter can no
+longer be used to exhaust memory, but it still cannot stop a determined attacker: anyone
+can choose their own bucket by setting a header, which leaves `/api/newsletter` and
+`/api/auth/forgot-password` usable as mail-bomb amplifiers against third parties.
 
 Code at each of these points carries a `SECURITY [id]` comment keyed to the audit:
 
@@ -72,9 +100,15 @@ pre-registration account-takeover hole that silent merge-by-email would open.
 
 - `session_token`: opaque 256-bit random, `HttpOnly`, `Secure`+`SameSite=None` on HTTPS
   (or `Lax`+insecure on http dev, derived from `PUBLIC_APP_URL`), 7-day lifetime.
-  Stored in Mongo **in plaintext** and matched by equality — a database read is a
-  session compromise (audit M2). `SameSite=None` plus the absence of any CSRF token
-  leaves multipart POSTs cross-site reachable (M3).
+- **Only `sha256(token)` is stored** (audit M2). The plaintext lives in the user's cookie
+  and nowhere else, so a leaked backup or dump of `user_sessions` contains nothing
+  replayable. Plain SHA-256 rather than a slow KDF is deliberate: the input is 256 bits of
+  `secrets`-grade randomness, so there is no dictionary to attack, and this runs on every
+  authenticated request where bcrypt's cost would be self-inflicted DoS.
+- Accepted as a cookie or as `Authorization: Bearer`. Both `get_current_user` and
+  `logout` resolve it through the same helper, so a Bearer client can actually log out.
+- `SameSite=None` plus the absence of any CSRF token still leaves multipart POSTs
+  cross-site reachable (M3, open).
 - Rotated on every login (old token deleted) — defeats fixation.
 - Stored with a real `expires_at` datetime and reaped by a MongoDB **TTL index**
   (`expireAfterSeconds=0`). The TTL monitor is best-effort (~60s); `get_current_user`

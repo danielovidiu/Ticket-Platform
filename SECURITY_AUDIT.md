@@ -39,11 +39,14 @@ both are the kind of thing that gets exploited within days of a public launch.
 |---|---|---|
 | C1 | **Fixed** | Startup fails closed; verified across a 5-scenario matrix |
 | H3 | **Fixed** | First-arrival admin removed entirely; verified on an empty database |
-| H1, H2 | Open | Pinned by an `xfail(strict=True)` regression test |
-| M1 | Open | Pinned by an `xfail(strict=True)` regression test |
-| M2–M12, L1–L4 | Open | See the remediation plan |
+| H2 | **Fixed** | Periodic sweep + per-bucket LRU cap |
+| M1 | **Fixed** | Security-headers middleware; path-specific CSP |
+| M2 | **Fixed** | `sha256` at rest, migrated in place with no forced logout |
+| L5 | **Fixed** | Bearer clients could not actually log out (found while fixing M2) |
+| H1 | **Open** | Pinned by an `xfail(strict=True)` regression test. Now the top priority |
+| M3–M12, L1–L4 | Open | See the remediation plan |
 | Stale deps | **Fixed** | 126 → 38 runtime packages; `starlette` past CVE-2024-47874 |
-| Test suite | **Fixed** | 105 passed / 2 xfailed, from 12 failed / 29 errors / 7 passed |
+| Test suite | **Fixed** | 115 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
 
 ---
 
@@ -187,7 +190,16 @@ password.
 **Fix.** Only honour `X-Forwarded-For` from a configured trusted-proxy CIDR; otherwise
 use `request.client.host`. Run uvicorn with `--forwarded-allow-ips` set to the proxy.
 
-### H2 — Rate-limiter state grows without bound (memory-exhaustion DoS)
+### H2 — Rate-limiter state grows without bound (memory-exhaustion DoS) — FIXED
+
+> **Resolved.** `_rate_check` now backs both the IP limiter and the per-email limiter, and
+> bounds the table two ways: a sweep (at most once every 60s, so it can't be used to burn
+> CPU) drops keys whose window has fully expired, and each bucket has a hard
+> `RATE_LIMIT_MAX_KEYS` cap with LRU eviction as a backstop for a burst that outruns the
+> sweep. Verified by driving 500 distinct keys through a short-window bucket (2 keys
+> survive the sweep) and 500 through a capped bucket (stays at the cap). Note the limiter
+> is still per-process, so N workers means N times the configured allowance — that is a
+> correctness caveat, not the memory issue. The original finding follows.
 
 `_rate_buckets` is a `defaultdict(lambda: defaultdict(deque))`. Entries are created per
 `(bucket, ip)` and per `(bucket, email)` and **never removed** — expired timestamps are
@@ -231,7 +243,16 @@ by first-arrival. Otherwise require an explicit one-time bootstrap token.
 
 ## Medium
 
-### M1 — No security response headers at all **[verified]**
+### M1 — No security response headers at all **[verified]** — FIXED
+
+> **Resolved.** A middleware in `server.py` now sets `nosniff`, `X-Frame-Options: DENY`,
+> `Referrer-Policy: no-referrer`, `Permissions-Policy`, and a CSP on every response, with
+> HSTS added only when `PUBLIC_APP_URL` is HTTPS (pinning http dev would be self-inflicted
+> downtime). CSP is path-specific: `/uploads` gets a `sandbox`ed policy, `/docs` a narrower
+> one permitting the Swagger CDN, everything else the strict default. Verified live on
+> success, 401 and 404 paths, and confirmed in the browser that the sandboxed CSP does
+> **not** affect `<img>`/`<video>` rendering — the gallery and a 7-image lightbox render
+> intact with no CSP violations. The original finding follows.
 
 ```
 $ curl -D - localhost:8000/api/auth/methods
@@ -257,7 +278,15 @@ the application origin (see M8).
 
 **Compromised:** admin actions via clickjacking; reset tokens via referrer/log leakage.
 
-### M2 — Session tokens are stored in the database in plaintext
+### M2 — Session tokens are stored in the database in plaintext — FIXED
+
+> **Resolved.** Only `sha256(token)` is persisted; `_hash_token` is applied on issue,
+> lookup, rotation and logout. The startup migration hashes pre-existing rows **in place
+> and does not log anyone out** — the value being hashed is exactly what the user's cookie
+> already holds, so the next request hashes the same plaintext and matches. Verified by
+> planting a legacy plaintext row, restarting, and confirming the untouched cookie still
+> authenticates (401 → migrate → 200). Rows are identified by shape (64 hex chars =
+> already migrated) because the old rows carry no flag. The original finding follows.
 
 `_issue_session` inserts `secrets.token_urlsafe(32)` verbatim, and `get_current_user`
 looks it up by equality. Any read-only exposure of `user_sessions` — a backup, a log, an
@@ -386,6 +415,14 @@ but the validator is the wrong place to rely on the transport, and the address f
   calls Stripe. Refunded inventory is permanently lost from sale.
 - **L4** — `_cleanup_expired_reservations` only runs when someone reserves for that same
   event, so expired holds on a quiet event never return stock.
+- **L5 — FIXED. Logout silently no-opped for Bearer clients.** Found while fixing M2, not
+  in the original review. `get_current_user` accepted the session token from either the
+  cookie or `Authorization: Bearer`, but `POST /auth/logout` read only the cookie — so a
+  Bearer client (a mobile app, a script, the test fixtures) received `200 {"ok": true}`
+  while its session remained valid server-side. A logout that reports success without
+  revoking anything is worse than one that fails loudly. Both now resolve the token
+  through a shared `_presented_token` helper. This surfaced because the new M2 test
+  asserted on the database row rather than trusting the 200.
 
 ---
 
@@ -578,7 +615,8 @@ operator must supply a private key that does nothing.
 |---|---|---|---|
 | `/api/webhook/stripe` in fake mode | nothing | free tickets, forever (C1) | **closed** — production cannot run fake mode |
 | Registering first on a fresh deploy | timing | full admin (H3) | **closed** — admin is config-only |
-| Spoofed `X-Forwarded-For` | nothing | all rate limits void; mail bombing; DoS (H1, H2) | open |
-| Read access to a Mongo backup | a leaked dump | every live session token; all PII (M2) | open |
+| Spoofed `X-Forwarded-For` → memory growth | nothing | worker OOM (H2) | **closed** — table is bounded |
+| Read access to a Mongo backup | a leaked dump | every live session token (M2) | **closed** — hashes only; PII still exposed |
+| Spoofed `X-Forwarded-For` → limit bypass | nothing | mail bombing; brute force (H1) | **open — top priority** |
 | A compromised editor account | phishing an editor | site-wide iframe phishing under the real domain (M11) | open |
 | An admin visiting a hostile page | no interaction beyond the visit | arbitrary file writes to `/uploads` (M3) | open |

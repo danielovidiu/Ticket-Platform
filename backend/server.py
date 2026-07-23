@@ -9,6 +9,7 @@ import json
 import uuid
 import base64
 import secrets
+import hashlib
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -30,41 +31,93 @@ from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 from starlette.middleware.cors import CORSMiddleware
 # Simple in-memory sliding-window rate limiter. Enough for a single-node MVP.
-# For multi-node prod, swap for a Redis-backed limiter.
+# For multi-node prod, swap for a Redis-backed limiter (this one is per-process, so N
+# workers currently means N times the configured allowance).
 #
-# SECURITY [H1/H2 — see SECURITY_AUDIT.md]: this limiter is currently the ONLY brake on
-# login brute force, newsletter/reset mail bombing, and reservation spam, and it has two
-# known holes:
-#   1. The client IP below is read straight from `X-Forwarded-For` with no trusted-proxy
-#      check, so any caller can pick its own bucket and bypass every limit outright
-#      (reproduced: 14/14 requests accepted against a 10/60s limit by rotating the
-#      header). Fix = only honour the header from a configured proxy CIDR.
-#   2. `_rate_buckets` never evicts. Empty deques and their keys are retained forever, so
-#      an attacker who controls the key (see 1) can grow this dict until the worker OOMs.
-# Do not treat these limits as a security control until both are fixed.
-from collections import defaultdict, deque
+# SECURITY [H2 — fixed]: this dict used to grow without bound. Keys were created per
+# (bucket, ip) and per (bucket, email) and never removed — `popleft()` drained the expired
+# timestamps but left the empty deque and its key behind forever. Combined with H1 below,
+# where the caller chooses its own key, that was a straightforward memory-exhaustion DoS.
+# It is now bounded two ways: a periodic sweep drops keys whose window has fully expired,
+# and each bucket has a hard key cap with LRU eviction as a backstop against a burst that
+# outruns the sweep.
+#
+# SECURITY [H1 — STILL OPEN]: the client IP is read straight from `X-Forwarded-For` with
+# no trusted-proxy check, so any caller can pick its own bucket and bypass every limit
+# outright (reproduced: 14/14 requests accepted against a 10/60s limit by rotating the
+# header). Fix = only honour the header when the peer is a configured proxy. Until then
+# these limits stop honest clients and casual abuse, not a determined attacker.
+from collections import defaultdict, deque, OrderedDict
 from threading import Lock
-_rate_buckets: dict = defaultdict(lambda: defaultdict(deque))
+
+# Per bucket. 10k keys x a short deque is a few MB — enough headroom for real traffic
+# from a large NAT, small enough that filling it is not a denial of service.
+RATE_LIMIT_MAX_KEYS = 10_000
+RATE_LIMIT_SWEEP_SECONDS = 60
+
+_rate_buckets: dict = defaultdict(OrderedDict)   # bucket -> {key: deque[timestamps]}
+_rate_windows: dict = {}                         # bucket -> window, for the sweep
+_rate_last_sweep = 0.0
 _rate_lock = Lock()
+
+
+def _sweep_rate_buckets(now: float):
+    """Drop keys with nothing left inside their window. Caller must hold _rate_lock.
+
+    Runs at most once every RATE_LIMIT_SWEEP_SECONDS: the work is proportional to the
+    number of live keys, and doing it on every request would hand an attacker a cheap way
+    to burn CPU.
+    """
+    global _rate_last_sweep
+    if now - _rate_last_sweep < RATE_LIMIT_SWEEP_SECONDS:
+        return
+    _rate_last_sweep = now
+    for bucket, keys in _rate_buckets.items():
+        window = _rate_windows.get(bucket, 3600)
+        dead = [k for k, dq in keys.items() if not dq or dq[-1] <= now - window]
+        for k in dead:
+            del keys[k]
+
+
+def _rate_check(bucket: str, key: str, max_calls: int, window_seconds: int):
+    """Record a hit against (bucket, key). Returns retry_after seconds if over the
+    limit, else None. Caller must hold _rate_lock."""
+    _rate_windows[bucket] = max(_rate_windows.get(bucket, 0), window_seconds)
+    now = datetime.now(timezone.utc).timestamp()
+    _sweep_rate_buckets(now)
+
+    keys = _rate_buckets[bucket]
+    dq = keys.get(key)
+    if dq is None:
+        # Backstop for a burst that arrives faster than the sweep: evict least-recently
+        # used. An attacker can still push honest clients out of the table, but that
+        # costs them their own rate limiting too, and memory stays flat either way.
+        while len(keys) >= RATE_LIMIT_MAX_KEYS:
+            keys.popitem(last=False)
+        dq = keys[key] = deque()
+    keys.move_to_end(key)  # LRU ordering
+
+    while dq and dq[0] < now - window_seconds:
+        dq.popleft()
+    if len(dq) >= max_calls:
+        return int(window_seconds - (now - dq[0])) + 1
+    dq.append(now)
+    return None
+
 
 def rate_limit(key: str, max_calls: int, window_seconds: int):
     """Returns a FastAPI dependency that raises 429 when exceeded."""
     async def _dep(request: Request):
-        # SECURITY: untrusted header — see the H1 note above.
+        # SECURITY [H1]: untrusted header — see the note above.
         ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
-        now = datetime.now(timezone.utc).timestamp()
         with _rate_lock:
-            dq = _rate_buckets[key][ip]
-            while dq and dq[0] < now - window_seconds:
-                dq.popleft()
-            if len(dq) >= max_calls:
-                retry_after = int(window_seconds - (now - dq[0])) + 1
-                raise HTTPException(
-                    status_code=429,
-                    detail=f"Too many requests. Try again in {retry_after}s.",
-                    headers={"Retry-After": str(retry_after)},
-                )
-            dq.append(now)
+            retry_after = _rate_check(key, ip, max_calls, window_seconds)
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many requests. Try again in {retry_after}s.",
+                headers={"Retry-After": str(retry_after)},
+            )
     return _dep
 
 import asyncio
@@ -242,6 +295,40 @@ def read_token(purpose: str, token: str) -> dict:
     return jwt.decode(token, SESSION_SECRET, algorithms=["HS256"], audience=f"ss:{purpose}")
 
 
+# ---------- Session tokens ----------
+
+def _hash_token(token: str) -> str:
+    """What actually goes in the database for a session.
+
+    SECURITY [M2]: session tokens are bearer credentials — whoever holds one *is* the
+    user. Storing them verbatim made `user_sessions` a credential store, so any read of
+    that collection (backup, log, dump) handed over every live session including admins'.
+    Hashing means a leaked database contains nothing replayable.
+
+    Plain SHA-256, deliberately, not bcrypt: the input is 256 bits of `secrets`-grade
+    randomness, so there is no dictionary to attack and nothing for a slow KDF to buy —
+    and this runs on every authenticated request, where bcrypt's cost would be a
+    self-inflicted DoS.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _presented_token(session_token: Optional[str], authorization: Optional[str]) -> Optional[str]:
+    """The session token on this request: cookie first, then `Authorization: Bearer`.
+
+    Both call sites must agree on this. They did not: `get_current_user` accepted either,
+    but `logout` looked only at the cookie — so a Bearer-authenticated client (mobile, a
+    script, our own test fixtures) got `200 {"ok": true}` from logout while its session
+    stayed valid server-side. A logout that reports success without revoking anything is
+    worse than one that fails loudly.
+    """
+    if session_token:
+        return session_token
+    if authorization and authorization.startswith("Bearer "):
+        return authorization.split(" ", 1)[1]
+    return None
+
+
 # ---------- Auth ----------
 # SECURITY — TRUST BOUNDARY. Everything below this line decides *who the caller is* and
 # *what they may do*. `get_current_user` is the only place a request becomes an identity;
@@ -255,13 +342,12 @@ async def get_current_user(
     session_token: Optional[str] = Cookie(default=None),
     authorization: Optional[str] = Header(default=None),
 ):
-    token = session_token
-    if not token and authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ", 1)[1]
+    token = _presented_token(session_token, authorization)
     if not token:
         raise HTTPException(401, "Not authenticated")
 
-    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    # SECURITY [M2]: match on the hash — the plaintext token is never stored.
+    session = await db.user_sessions.find_one({"session_token": _hash_token(token)}, {"_id": 0})
     if not session:
         raise HTTPException(401, "Invalid session")
 
@@ -354,16 +440,16 @@ def _client_ip(request: Optional[Request]) -> str:
 
 def _email_rate_check(bucket: str, email: str, max_calls: int, window: int):
     """Per-email sibling of rate_limit() (which keys on IP). Guards password login
-    against distributed brute force of one account from many IPs."""
-    now = datetime.now(timezone.utc).timestamp()
-    key = (email or "").strip().lower()
+    against distributed brute force of one account from many IPs.
+
+    Shares _rate_check so this table is bounded too — it is keyed on attacker-supplied
+    email addresses, so it was the easier half of the H2 memory-exhaustion problem.
+    """
     with _rate_lock:
-        dq = _rate_buckets[bucket][key]
-        while dq and dq[0] < now - window:
-            dq.popleft()
-        if len(dq) >= max_calls:
-            raise HTTPException(429, "Too many attempts. Try again later.")
-        dq.append(now)
+        retry_after = _rate_check(bucket, (email or "").strip().lower(), max_calls, window)
+    if retry_after is not None:
+        raise HTTPException(429, "Too many attempts. Try again later.",
+                            headers={"Retry-After": str(retry_after)})
 
 
 async def _issue_session(response: Response, user_id: str, old_token: Optional[str] = None) -> str:
@@ -371,18 +457,17 @@ async def _issue_session(response: Response, user_id: str, old_token: Optional[s
     session token (defeats fixation). expires_at is a real datetime so the Phase E
     TTL index can reap it server-side.
 
-    SECURITY [M2 — see SECURITY_AUDIT.md]: the token is stored in Mongo in PLAINTEXT and
-    matched by equality in `get_current_user`. Any read-only exposure of `user_sessions`
-    (a backup, a dump, an injection) therefore hands over directly usable sessions for
-    every logged-in user, admins included. Store sha256(token) and look up by hash — the
-    cookie stays a bearer secret, the database stops being a credential store.
+    SECURITY [M2 — fixed]: only the SHA-256 of the token is persisted. The plaintext
+    exists in the user's cookie and nowhere else, so a read-only exposure of
+    `user_sessions` (a backup, a dump, an injection) no longer yields usable sessions.
+    Lookups hash the presented token and match on that — see `_hash_token`.
     """
     if old_token:
-        await db.user_sessions.delete_one({"session_token": old_token})
+        await db.user_sessions.delete_one({"session_token": _hash_token(old_token)})
     token = secrets.token_urlsafe(32)
     await db.user_sessions.insert_one({
         "user_id": user_id,
-        "session_token": token,
+        "session_token": _hash_token(token),
         "expires_at": now_utc() + timedelta(days=7),
         "created_at": now_utc().isoformat(),
     })
@@ -689,9 +774,16 @@ async def auth_me(user=Depends(get_current_user)):
 
 
 @api.post("/auth/logout")
-async def logout(response: Response, session_token: Optional[str] = Cookie(default=None)):
-    if session_token:
-        await db.user_sessions.delete_one({"session_token": session_token})
+async def logout(
+    response: Response,
+    session_token: Optional[str] = Cookie(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    # Resolve the token the same way get_current_user does. Reading only the cookie meant
+    # Bearer clients were told they had logged out while the session stayed live.
+    token = _presented_token(session_token, authorization)
+    if token:
+        await db.user_sessions.delete_one({"session_token": _hash_token(token)})
     response.delete_cookie("session_token", path="/")
     return {"ok": True}
 
@@ -2388,6 +2480,56 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# SECURITY [M1 — fixed]: no security response headers were set at all. Added here rather
+# than at the proxy so the guarantee travels with the app and holds in dev too.
+#
+# Two paths need different treatment:
+#   * /uploads serves user-supplied bytes from the application origin. The upload
+#     endpoint picks its extension from a client-declared Content-Type and writes the
+#     original bytes verbatim (audit M8), so `nosniff` is what stops a browser deciding a
+#     polyglot is HTML, and the sandboxed CSP neuters it if one is ever served as a
+#     document. Neither affects <img>/<video> rendering, which is not document loading.
+#   * /docs and /redoc load Swagger/ReDoc from a CDN, so the strict default CSP would
+#     break them. They get a narrower policy instead of an exemption.
+_DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
+_CSP_DEFAULT = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+_CSP_UPLOADS = "default-src 'none'; img-src 'self'; media-src 'self'; frame-ancestors 'none'; sandbox"
+_CSP_DOCS = ("default-src 'none'; img-src 'self' data: https://fastapi.tiangolo.com; "
+             "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+             "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+             "font-src 'self' https://cdn.jsdelivr.net; connect-src 'self'; frame-ancestors 'none'")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+
+    # setdefault, not assignment: a route that deliberately sets its own value wins.
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    # Email-verification and password-reset tokens travel in URL query strings, so a
+    # referrer leak is a credential leak. This is the cheapest half of that fix; moving
+    # the tokens out of the query string entirely is audit item P1.6.
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+
+    # Only meaningful over TLS, and actively unhelpful on http dev where it would pin the
+    # browser to a scheme localhost isn't serving.
+    if COOKIE_SECURE:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+
+    if path.startswith("/uploads"):
+        csp = _CSP_UPLOADS
+    elif path.startswith(_DOCS_PATHS):
+        csp = _CSP_DOCS
+    else:
+        csp = _CSP_DEFAULT
+    response.headers.setdefault("Content-Security-Policy", csp)
+    return response
+
 
 @app.on_event("startup")
 async def bootstrap_admin():
@@ -2437,6 +2579,7 @@ async def init_indexes():
             if dt:
                 await db.user_sessions.update_one({"_id": s["_id"]}, {"$set": {"expires_at": dt}})
 
+        await migrate_session_token_hashes()
         await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
         await db.user_sessions.create_index("session_token", unique=True)
         await db.users.create_index("email", unique=True)
@@ -2455,6 +2598,41 @@ async def init_indexes():
         await migrate_gallery_ordering()
     except Exception:
         logger.exception("migrate_gallery_ordering failed")
+
+
+async def migrate_session_token_hashes():
+    """Replace plaintext session tokens with their SHA-256 (audit M2).
+
+    This migrates in place and does NOT log anyone out: the value being hashed is exactly
+    what the user's cookie already holds, so the next request hashes the same plaintext
+    and matches the migrated row.
+
+    Rows are identified by shape rather than a flag, because the old rows have no flag to
+    read. `secrets.token_urlsafe(32)` yields 43 base64url characters; a hex SHA-256 is 64
+    characters of [0-9a-f], so "64 hex chars" means already migrated. A stored token that
+    is neither is not something this app issued — drop it rather than guess.
+    """
+    migrated = dropped = 0
+    async for s in db.user_sessions.find({}, {"_id": 1, "session_token": 1}):
+        tok = s.get("session_token") or ""
+        if len(tok) == 64 and all(c in "0123456789abcdef" for c in tok):
+            continue  # already hashed
+        if not tok:
+            await db.user_sessions.delete_one({"_id": s["_id"]})
+            dropped += 1
+            continue
+        try:
+            await db.user_sessions.update_one(
+                {"_id": s["_id"]}, {"$set": {"session_token": _hash_token(tok)}}
+            )
+            migrated += 1
+        except Exception:
+            # A duplicate-key collision here means the same token was already migrated
+            # under another row; the stale one is worthless either way.
+            await db.user_sessions.delete_one({"_id": s["_id"]})
+            dropped += 1
+    if migrated or dropped:
+        logger.info("Session tokens hashed at rest: %d migrated, %d dropped", migrated, dropped)
 
 
 async def migrate_gallery_ordering():

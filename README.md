@@ -9,10 +9,12 @@ GDPR/CAN-SPAM-aware user-management stack.
 - **Frontend**: React 19 (CRA/craco), `frontend/`.
 
 > **Status: hardening in progress.**
-> A security audit found one critical and three high-severity issues.
-> **C1 (payment bypass) and H3 (admin takeover) are now fixed**; H1 and H2 (rate-limit
-> bypass and the unbounded limiter) are not. See **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**
-> and the checklist below before deploying.
+> A security audit found one critical and three high-severity issues. **C1 (payment
+> bypass), H3 (admin takeover) and H2 (limiter memory DoS) are fixed**, along with M1
+> (security headers) and M2 (plaintext session tokens). **H1 remains open** and is now
+> the top priority: `X-Forwarded-For` is trusted unconditionally, so every rate limit is
+> still bypassable. See **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)** and the checklist
+> below before deploying.
 
 ## Run it locally
 
@@ -48,14 +50,18 @@ The audit's P0 items.
       entirely. Admin comes only from `INITIAL_ADMIN_EMAIL`, applied both at registration
       and at startup; every other account is created as `user`. A deployment with no
       `INITIAL_ADMIN_EMAIL` logs a loud warning that no admin exists.
+- [x] **Rate limiter bounded.** *(H2)* A periodic sweep drops expired keys and each bucket
+      has an LRU-evicting cap, so attacker-chosen keys can no longer grow the table until
+      the worker OOMs. Still per-process: N workers means N times the allowance.
+- [x] **Security headers.** *(M1)* `nosniff`, `X-Frame-Options`, `Referrer-Policy`,
+      `Permissions-Policy` and a path-specific CSP on every response, plus HSTS on HTTPS.
+- [x] **Session tokens hashed at rest.** *(M2)* Only `sha256(token)` is stored; existing
+      sessions were migrated in place without logging anyone out.
 - [ ] **Trusted-proxy handling.** `X-Forwarded-For` is trusted unconditionally, so every
       rate limit in the app is bypassable by rotating the header (verified). Gate it on a
-      proxy allowlist and run uvicorn with `--forwarded-allow-ips`. *(H1)*
-- [ ] **Bound the rate limiter.** `_rate_buckets` never evicts; attacker-chosen keys grow
-      it until the worker OOMs. *(H2)*
-- [ ] **Security headers.** None are set — no HSTS, CSP, `nosniff`, `X-Frame-Options`, or
-      `Referrer-Policy`. The last one matters most: verification and reset tokens travel
-      in URL query strings. *(M1)*
+      proxy allowlist and run uvicorn with `--forwarded-allow-ips`. **This is the top
+      remaining item** — until it lands, `/api/newsletter` and `/api/auth/forgot-password`
+      work as mail-bomb amplifiers against arbitrary third parties. *(H1)*
 
 Configuration the app already enforces (it refuses to start otherwise): `APP_ENV=production`,
 a 32-byte `SESSION_SECRET`, and an explicit `CORS_ORIGINS` allowlist. Set
@@ -97,14 +103,16 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**105 passed, 2 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
+**115 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
 everything else (Mongo URL, database name) comes from `backend/.env`, the same file the
 server reads. If the server isn't running the whole session skips with one clear message
 instead of a wall of connection errors.
 
-The two `xfail`s are deliberate: they are audit findings H1 (X-Forwarded-For rate-limit
-bypass) and M1 (missing security headers), recorded as `xfail(strict=True)` so the gaps
-stay visible *and* so fixing one turns the suite red until the marker is removed.
+The single `xfail` is deliberate: it is audit finding H1 (X-Forwarded-For rate-limit
+bypass), recorded as `xfail(strict=True)` so the gap stays visible *and* so fixing it
+turns the suite red until the marker is removed. That mechanism has already earned its
+keep — M1 was marked the same way, and closing it forced the marker's removal rather than
+letting the stale expectation sit there.
 
 Test data is namespaced (`@pytest.invalid` addresses, `TEST_` title prefixes), removed at
 teardown, and swept on start if a previous run was interrupted.
