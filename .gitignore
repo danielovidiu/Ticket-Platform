@@ -18,6 +18,12 @@ dist-ssr
 supabase/.branches
 supabase/.temp
 
+# Symlink to a separate project with its own git repo & remote
+# (danielovidiu/Ticket-Platform). The real checkout lives at
+# ~/Developer/Ticket-Platform — it cannot live under ~/Documents because that
+# subtree is TCC-protected and dev servers there fail on getcwd().
+/Ticket-Platform
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

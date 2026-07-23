@@ -6,6 +6,24 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 5173
+    },
+    {
+      "name": "ticket-platform-backend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/daniel.teodorescu/Developer/Ticket-Platform/backend && venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000 --reload"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "ticket-platform-frontend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/daniel.teodorescu/Developer/Ticket-Platform/frontend && PORT=3000 npx --yes yarn@1.22.22 start"
+      ],
+      "port": 3000
     }
   ]
 }
