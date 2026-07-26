@@ -45,6 +45,11 @@ pillow>=11
 qrcode>=8
 reportlab>=4
 
+# --- Storage ---
+# Vercel Blob SDK, used to store uploaded gallery/artist/event media — the
+# serverless function's local filesystem is read-only outside /tmp.
+vercel>=0.7
+
 # --- Config ---
 python-dotenv>=1.0
 
