@@ -110,6 +110,8 @@ uvicorn==0.51.0
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
+vercel==0.7.2
+    # via -r requirements.in
 watchfiles==1.2.0
     # via uvicorn
 websockets==16.1.1
