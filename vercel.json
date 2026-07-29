@@ -20,7 +20,6 @@
     },
     "backend": {
       "root": "backend",
-      "runtime": "python3.13",
       "entrypoint": "server:app"
     }
   },
