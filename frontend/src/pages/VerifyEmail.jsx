@@ -21,13 +21,15 @@ export default function VerifyEmail() {
       </h1>
       <p className="mt-4 text-zinc-400 text-sm">
         {state === "ok"
-          ? "Your email address is confirmed."
+          ? "Your account is active. Sign in to pick up where you left off."
           : state === "error"
-            ? "This verification link is invalid or has expired. Request a new one from your settings."
+            ? "This verification link is invalid or has expired. Start signing in and we'll send a new one."
             : "One moment."}
       </p>
       {state !== "working" && (
-        <Link to="/settings" className="btn-primary mt-8 inline-block">Go to settings</Link>
+        <Link to="/login" className="btn-accent mt-8 inline-block" data-testid="verify-signin">
+          {state === "ok" ? "SIGN IN" : "BACK TO SIGN IN"}
+        </Link>
       )}
     </div>
   );

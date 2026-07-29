@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { http } from "../api";
+import { mediaUrl } from "../lib/media";
 import { renderInline } from "../lib/richText";
 
 export default function Artists() {
@@ -14,7 +15,7 @@ export default function Artists() {
         {artists.map((a) => (
           <Link key={a.artist_id} to={`/artists/${a.slug}`} data-testid={`artist-${a.slug}`} className="group block border border-white/10">
             {a.image_url && (
-              <div className="aspect-square overflow-hidden"><img src={a.image_url} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" /></div>
+              <div className="aspect-square overflow-hidden"><img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" /></div>
             )}
             <div className="p-5">
               <div className="font-display uppercase text-xl font-bold tracking-tighter">{a.name}</div>

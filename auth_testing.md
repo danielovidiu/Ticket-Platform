@@ -9,12 +9,24 @@ hold the session.
 
 ## Password auth
 
-```bash
-# register (auto-logs-in, sets session cookie)
-curl -c cj.txt -X POST localhost:8000/api/auth/register -H 'content-type: application/json' \
-  -d '{"email":"a@b.co","password":"hunter2pw","name":"A","tos_accepted":true,"news_opt_in":true}'
+First name, surname, email and phone are all mandatory, and registration issues **no
+session** — the account is inert until the emailed link is clicked.
 
-curl -b cj.txt localhost:8000/api/auth/me            # -> your user (no password_hash)
+```bash
+# register -> {"ok":true,"verification_required":true,"email":"a@b.co"}. No cookie is set.
+curl -X POST localhost:8000/api/auth/register -H 'content-type: application/json' \
+  -d '{"email":"a@b.co","password":"hunter2pw","first_name":"Ana","last_name":"Popescu",
+       "phone":"+40 721 234 567","tos_accepted":true,"news_opt_in":true}'
+# the phone is stored normalized (+40721234567) and `name` is derived ("Ana Popescu")
+
+# signing in before verifying -> 403 {"reason":"email_not_verified","email":"a@b.co"}
+curl -X POST localhost:8000/api/auth/login -H 'content-type: application/json' \
+  -d '{"email":"a@b.co","password":"hunter2pw"}'
+
+# no session to authenticate with yet, so the resend route takes the address instead
+curl -X POST localhost:8000/api/auth/resend-verification -H 'content-type: application/json' \
+  -d '{"email":"a@b.co"}'                            # -> always {"ok":true} (no enumeration)
+
 curl localhost:8000/api/auth/methods                 # -> {"password":true,"google":false,"apple":false}
 
 # wrong password / missing user / OAuth-only account all return the SAME generic 401
@@ -22,11 +34,25 @@ curl -X POST localhost:8000/api/auth/login -H 'content-type: application/json' \
   -d '{"email":"a@b.co","password":"WRONG"}'
 ```
 
+`/api/auth/me` returns two derived booleans the UI keys off: `email_verified` and
+`profile_complete` (first name + surname + phone all present). An account that is signed
+in but incomplete — every Google/Apple sign-up, since no provider returns a phone number
+— is redirected to `/complete-profile`, and `POST /api/reservations` refuses it with
+`{"reason":"profile_incomplete"}`.
+
+```bash
+# the completion form and Settings both write through the same route; it can fill a
+# blank but never empty one
+curl -b cj.txt -X PATCH localhost:8000/api/auth/profile -H 'content-type: application/json' \
+  -d '{"first_name":"Ana","last_name":"Popescu","phone":"0721 234 567"}'
+```
+
 ## Email verification & password reset (tokens land in db.outbox)
 
 ```bash
 mongosh $DB --eval 'db.outbox.findOne({kind:"verify_email"}).payload.verify_url'
 curl "localhost:8000/api/auth/verify?token=<token from that url>"
+# -> {"ok":true,"email":...,"profile_complete":...}; sign in afterwards, no session here
 
 curl -X POST localhost:8000/api/auth/forgot-password -d '{"email":"a@b.co"}' -H 'content-type: application/json'
 mongosh $DB --eval 'db.outbox.findOne({kind:"password_reset"}).payload.reset_url'

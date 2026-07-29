@@ -31,12 +31,24 @@ os_env = {
 
 @pytest.fixture(scope="module")
 def server(monkeypatch_module):
-    import os
+    """server.py reads its OAuth configuration at import time, so the variables have to
+    be in place before the reload.
+
+    Set through monkeypatch rather than os.environ directly, and therefore undone at
+    teardown: these used to leak for the rest of the worker's life, and DB_NAME among
+    them. Every later test that shelled out to a fresh interpreter (`_run_in_backend`
+    in backend_test.py) inherited the override and read a database nothing had written
+    to — which surfaced as a reservation that finalized "successfully" while staying
+    pending, several tests away from the cause.
+    """
     for k, v in os_env.items():
-        os.environ[k] = v
+        monkeypatch_module.setenv(k, v)
     import server as srv
     importlib.reload(srv)
-    return srv
+    yield srv
+    # Leave the module matching the restored environment, not the test's.
+    monkeypatch_module.undo()
+    importlib.reload(srv)
 
 
 @pytest.fixture(scope="module")

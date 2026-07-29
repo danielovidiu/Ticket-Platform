@@ -15,13 +15,14 @@ rewrite.
 """
 import os
 import time
+import uuid
 import subprocess
 import json
 import pytest
 import requests
 
-from support import (BASE_URL, API, db, mint_user, register_user, hash_token,
-                     TEST_EMAIL_DOMAIN)
+from support import (BASE_URL, API, db, mint_user, register_user, registered_user_doc,
+                     hash_token, TEST_EMAIL_DOMAIN)
 
 
 def _mint_session(role: str):
@@ -56,11 +57,15 @@ class TestAdminBootstrap:
         """A newly registered account is a plain user regardless of who got there first.
 
         Uses the real endpoint (register_user tracks the account for teardown), because
-        the point is what /api/auth/register itself assigns.
+        the point is what /api/auth/register itself assigns. The role is read from the
+        stored row: registration returns no user object, since it issues no session
+        until the emailed verification link is clicked.
         """
-        r = register_user()
+        email = f"pytest-{uuid.uuid4().hex[:12]}@{TEST_EMAIL_DOMAIN}"
+        r = register_user(email)
         assert r.status_code == 200, r.text
-        assert r.json()["user"]["role"] == "user", "registration granted a privileged role"
+        assert r.json().get("verification_required") is True, "registration handed out a session"
+        assert registered_user_doc(email).get("role") == "user", "registration granted a privileged role"
 
     def test_no_count_based_admin_rule_remains(self):
         """Guard the regression directly: nothing may key a role off the user count."""

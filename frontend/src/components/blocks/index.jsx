@@ -36,7 +36,7 @@ function Hero({ props }) {
     <section className={`relative overflow-hidden ${h} flex flex-col justify-end`}>
       {props.image_url && (
         <div className="absolute inset-0">
-          <img src={props.image_url} alt="" className="w-full h-full object-cover opacity-40" />
+          <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover opacity-40" />
           <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[color:var(--bg,#050505)]" />
         </div>
       )}
@@ -67,7 +67,7 @@ function ImageBlock({ props }) {
     <section className="py-10">
       <figure className={cls}>
         <div className={`${aspect} overflow-hidden border border-white/10`}>
-          <img src={props.image_url} alt={props.caption || ""} className="w-full h-full object-cover block" />
+          <img src={mediaUrl(props.image_url)} alt={props.caption || ""} className="w-full h-full object-cover block" />
         </div>
         {props.caption && <figcaption className="p-3 font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">{props.caption}</figcaption>}
       </figure>
@@ -84,7 +84,7 @@ function GalleryGrid({ props }) {
       <div className="columns-1 md:columns-3 gap-4 space-y-4">
         {items.map((g) => (
           <figure key={g.gallery_id} className="break-inside-avoid border border-white/10">
-            <img src={g.image_url} alt={g.caption} className="w-full block" />
+            <img src={mediaUrl(g.image_url)} alt={g.caption} className="w-full block" />
           </figure>
         ))}
       </div>
@@ -131,7 +131,7 @@ function EventsGrid({ props }) {
                 </button>
               ) : (
                 <Link to={`/events/${e.slug}`} className="aspect-[16/10] overflow-hidden block shrink-0">
-                  <img src={e.image_url} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                  <img src={mediaUrl(e.image_url)} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                 </Link>
               )}
               <Link to={`/events/${e.slug}`} className="p-6 flex-1 flex flex-col justify-center">
@@ -171,7 +171,7 @@ function ArtistsGrid({ props }) {
       <div className={`grid grid-cols-2 ${cols} gap-4`}>
         {artists.map((a) => (
           <Link key={a.artist_id} to={`/artists/${a.slug}`} className="group block border border-white/10">
-            <div className={`${aspectClass(props.card_aspect, "aspect-square")} overflow-hidden`}><img src={a.image_url} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" /></div>
+            <div className={`${aspectClass(props.card_aspect, "aspect-square")} overflow-hidden`}><img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" /></div>
             <div className="p-4"><div className="font-display uppercase font-semibold">{a.name}</div></div>
           </Link>
         ))}
@@ -314,7 +314,7 @@ function Split({ props }) {
     <section className="py-16"><Container>
       <div className={`grid md:grid-cols-2 gap-10 items-center ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}>
         <div className={`${aspectClass(props.aspect, "aspect-square")} overflow-hidden border border-white/10`}>
-          {props.image_url ? <img src={props.image_url} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-zinc-600 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>}
+          {props.image_url ? <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-zinc-600 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>}
         </div>
         <div>
           {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">{props.eyebrow}</div>}

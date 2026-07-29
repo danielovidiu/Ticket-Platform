@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { http } from "../api";
+import { mediaUrl } from "../lib/media";
 import { renderInline } from "../lib/richText";
 
 export default function Archive() {
@@ -18,7 +19,7 @@ export default function Archive() {
       <div className="mt-6 grid md:grid-cols-2 gap-6">
         {projects.map((p) => (
           <div key={p.project_id} className="border border-white/10">
-            <div className="aspect-[16/9] overflow-hidden"><img src={p.image_url} alt={p.title} className="w-full h-full object-cover" /></div>
+            <div className="aspect-[16/9] overflow-hidden"><img src={mediaUrl(p.image_url)} alt={p.title} className="w-full h-full object-cover" /></div>
             <div className="p-6">
               <div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">{p.year}</div>
               <div className="font-display text-2xl uppercase font-bold tracking-tighter mt-2">{p.title}</div>

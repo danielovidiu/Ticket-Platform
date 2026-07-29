@@ -13,6 +13,12 @@ const UPLOAD_CONCURRENCY = 3;
  * could be captured). */
 const hasPoster = (g) => g.media_type === "video" && g.thumbnail_url && g.thumbnail_url !== g.image_url;
 
+/** A pasted URL carries no Content-Type to inspect, so the extension is all there is to
+ * go on. Guessing wrong only picks the wrong element to render it in, which the editor
+ * can see immediately in the grid. */
+const VIDEO_EXT = /\.(mp4|webm|mov|m4v)(\?|#|$)/i;
+const guessMediaType = (url) => (VIDEO_EXT.test(url) ? "video" : "image");
+
 function Tile({ item, index, count, isDragging, isDropTarget, onDragStart, onDragOver, onDragEnd, onDrop, onMove, onSetCover, onDelete, onCaption }) {
   const [caption, setCaption] = useState(item.caption || "");
   useEffect(() => { setCaption(item.caption || ""); }, [item.caption]);
@@ -100,6 +106,7 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
   const [dragFrom, setDragFrom] = useState(null);
   const [dragOver, setDragOver] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
+  const [urlDraft, setUrlDraft] = useState("");
   const inputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -214,6 +221,32 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
     setTimeout(() => setQueue([]), failed > 0 ? 8000 : 2500);
   };
 
+  const addByUrl = async () => {
+    const url = urlDraft.trim();
+    if (!url) return;
+    setBusy(true);
+    try {
+      const media_type = guessMediaType(url);
+      await http.post("/admin/gallery", {
+        image_url: url,
+        // Nothing to make a thumbnail from when the bytes live elsewhere, so the item
+        // is its own thumbnail — the same shape the upload endpoint returns for a video
+        // whose poster couldn't be captured.
+        thumbnail_url: url,
+        media_type,
+        event_id: eventId,
+      });
+      setUrlDraft("");
+      await load();
+      toast.success(media_type === "video" ? "Video added" : "Image added");
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Could not add that URL");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onDropFiles = (e) => {
     e.preventDefault();
     setDropZoneActive(false);
@@ -241,6 +274,21 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
         </div>
         <input ref={inputRef} type="file" accept="image/*,video/*" multiple className="hidden" data-testid="album-upload-input"
                onChange={(e) => { const f = [...e.target.files]; e.target.value = ""; uploadFiles(f); }} />
+      </div>
+
+      {/* Media that already lives somewhere else doesn't need re-hosting. Outside the
+          dropzone, or clicking the field would open the file picker. */}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <input
+          value={urlDraft}
+          onChange={(e) => setUrlDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addByUrl(); } }}
+          placeholder="…or paste an image / video URL"
+          className="input-x flex-1 min-w-[14rem] !text-xs"
+          data-testid="album-url-input"
+        />
+        <button onClick={addByUrl} disabled={busy || !urlDraft.trim()}
+                className="btn-primary shrink-0 text-xs disabled:opacity-40" data-testid="album-url-add">Add URL</button>
       </div>
 
       {queue.length > 0 && (

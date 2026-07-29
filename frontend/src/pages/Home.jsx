@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { http } from "../api";
+import { mediaUrl } from "../lib/media";
 import { ArrowUpRight } from "lucide-react";
 
 const fmtDate = (iso) => {
@@ -73,7 +74,7 @@ export default function Home() {
             <Link key={e.event_id} to={`/events/${e.slug}`} data-testid={`event-card-${e.slug}`}
                   className="group block border border-white/10 bg-[#0F0F0F] hover:border-white transition-colors">
               <div className="aspect-[16/10] overflow-hidden">
-                <img src={e.image_url} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                <img src={mediaUrl(e.image_url)} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
               </div>
               <div className="p-6 md:p-8">
                 <div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">
@@ -110,7 +111,7 @@ export default function Home() {
           {artists.slice(0, 6).map((a) => (
             <Link key={a.artist_id} to={`/artists/${a.slug}`} className="group block border border-white/10 overflow-hidden">
               <div className="aspect-square overflow-hidden">
-                <img src={a.image_url} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" />
+                <img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" />
               </div>
               <div className="p-4 flex items-center justify-between">
                 <div className="font-display uppercase tracking-tight font-semibold">{a.name}</div>

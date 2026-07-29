@@ -34,7 +34,10 @@ export default function Checkout() {
       const { data } = await http.post("/checkout", { reservation_id: reservationId, origin_url: window.location.origin });
       window.location.href = data.url;
     } catch (e) {
-      toast.error(e.response?.data?.detail || "Checkout failed");
+      // /checkout answers with a plain string, but the account gates on the reservation
+      // route use an object — guard so an error never renders as "[object Object]".
+      const detail = e.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : "Checkout failed");
       setBusy(false);
     }
   };

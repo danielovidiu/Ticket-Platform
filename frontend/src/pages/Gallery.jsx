@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useParams, Navigate } from "react-router-dom";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
 import { Lightbox } from "../components/ui/lightbox";
@@ -41,22 +42,37 @@ function Card({ testId, coverUrl, isVideo, isPoster, title, badge, onClick }) {
 }
 
 export default function Gallery() {
+  // Present on /gallery/<slug>, absent on the bare /gallery.
+  const { slug } = useParams();
   const [standalone, setStandalone] = useState([]);
   const [eventAlbums, setEventAlbums] = useState([]);
+  const [settings, setSettings] = useState(null);
   const [active, setActive] = useState(null); // { items, index }
   useEffect(() => {
     http.get("/gallery/clusters").then((r) => {
       setStandalone(r.data.standalone);
       setEventAlbums(r.data.event_albums);
+      setSettings(r.data.settings || null);
     }).catch(() => {});
   }, []);
 
   const toItems = (list) => list.map((g) => ({ url: g.image_url, thumbnail_url: g.thumbnail_url, media_type: g.media_type, caption: g.caption }));
 
+  // One gallery, one address: an old or mistyped slug redirects to the configured one
+  // rather than rendering the same page under two URLs.
+  if (settings && slug && slug !== settings.slug) {
+    return <Navigate to={`/gallery/${settings.slug}`} replace />;
+  }
+
   return (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
       <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Documentation</div>
-      <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-2">Gallery</h1>
+      <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-2" data-testid="gallery-heading">
+        {settings?.title || "Gallery"}
+      </h1>
+      {settings?.description && (
+        <p className="mt-4 max-w-2xl text-zinc-400 text-sm leading-relaxed" data-testid="gallery-intro">{settings.description}</p>
+      )}
 
       <div className="mt-12 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6 items-stretch">
         {eventAlbums.map((a) => (

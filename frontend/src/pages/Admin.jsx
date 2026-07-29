@@ -7,6 +7,7 @@ import { DateTimePicker } from "../components/ui/datetime-picker";
 import { FormatToolbar } from "../lib/richText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 import AlbumManager from "../components/AlbumManager";
+import ImageField from "../components/ImageField";
 
 const TABS = ["stats", "events", "orders", "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
 
@@ -229,7 +230,9 @@ function EventForm({ form, setForm, onSave, onClose }) {
           <input placeholder="Slug" value={form.slug} onChange={(e) => setF("slug", e.target.value)} className="input-x col-span-2" />
           <input placeholder="Venue" value={form.venue} onChange={(e) => setF("venue", e.target.value)} className="input-x" />
           <input placeholder="City" value={form.city || ""} onChange={(e) => setF("city", e.target.value)} className="input-x" />
-          <input placeholder="Image URL" value={form.image_url} onChange={(e) => setF("image_url", e.target.value)} className="input-x col-span-2" />
+          <div className="col-span-2">
+            <ImageField label="Cover image" value={form.image_url} onChange={(v) => setF("image_url", v)} testId="event-image" />
+          </div>
           <div className="col-span-2">
             <FormatToolbar textareaRef={descRef} value={form.description} onChange={(v) => setF("description", v)} />
             <textarea ref={descRef} placeholder="Description" value={form.description} onChange={(e) => setF("description", e.target.value)} className="input-x w-full" rows={3} />
@@ -516,9 +519,89 @@ function Users() {
   );
 }
 
+// Mirrors the server's _slugify, so the field shows what will actually be stored
+// rather than accepting something the API then quietly rewrites.
+const slugify = (v) => (v || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+/** Title and slug for the sitewide gallery. The slug is the URL it lives at, so it is
+ * shown as one — an editor should be able to see what they are changing. */
+function GallerySettings() {
+  const [settings, setSettings] = useState(null);
+  const [busy, setBusy] = useState(false);
+  // Left alone once the editor starts typing a slug of their own; until then it tracks
+  // the title, which is what people expect from a slug field.
+  const [slugTouched, setSlugTouched] = useState(false);
+
+  useEffect(() => {
+    http.get("/admin/gallery/settings").then((r) => setSettings(r.data)).catch(() => setSettings(null));
+  }, []);
+
+  if (!settings) return null;
+
+  const set = (k, v) => setSettings((s) => ({ ...s, [k]: v }));
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const { data } = await http.patch("/admin/gallery/settings", {
+        title: settings.title,
+        slug: settings.slug,
+        description: settings.description || "",
+      });
+      setSettings(data);
+      setSlugTouched(false);
+      toast.success("Gallery details saved");
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Could not save");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border border-white/10 bg-[#0F0F0F] p-4 mb-4" data-testid="gallery-settings">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <Field label="Gallery title">
+          <input
+            value={settings.title}
+            onChange={(e) => {
+              set("title", e.target.value);
+              if (!slugTouched) set("slug", slugify(e.target.value));
+            }}
+            className="input-x w-full"
+            data-testid="gallery-title"
+          />
+        </Field>
+        <Field label="Slug">
+          <input
+            value={settings.slug}
+            onChange={(e) => { setSlugTouched(true); set("slug", slugify(e.target.value)); }}
+            placeholder="live-documentation"
+            className="input-x w-full font-mono-x"
+            data-testid="gallery-slug"
+          />
+        </Field>
+      </div>
+      <Field label="Intro (optional)" className="mt-3">
+        <input value={settings.description || ""} onChange={(e) => set("description", e.target.value)}
+               className="input-x w-full" data-testid="gallery-description" />
+      </Field>
+      <div className="flex flex-wrap items-center gap-3 mt-3">
+        <button onClick={save} disabled={busy} className="btn-accent disabled:opacity-40" data-testid="gallery-settings-save">
+          {busy ? "…" : "SAVE DETAILS"}
+        </button>
+        <Link to={`/gallery/${settings.slug}`} className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 hover:text-white break-all">
+          /gallery/{settings.slug} ↗
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 function GalleryAdmin() {
   const [events, setEvents] = useState([]);
-  // "" is the sitewide Documentation gallery; any other value is an event album.
+  // "" is the sitewide gallery; any other value is an event album.
   const [albumId, setAlbumId] = useState("");
 
   useEffect(() => {
@@ -532,7 +615,7 @@ function GalleryAdmin() {
       <div className="border border-white/10 bg-[#0F0F0F] p-4 mb-4">
         <Field label="Album">
           <select value={albumId} onChange={(e) => setAlbumId(e.target.value)} className="input-x w-full" data-testid="gallery-album-select">
-            <option value="">Sitewide gallery (Documentation)</option>
+            <option value="">Sitewide gallery</option>
             {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
           </select>
         </Field>
@@ -542,6 +625,9 @@ function GalleryAdmin() {
             : "Shown directly in the main Gallery grid, alongside event album tiles."}
         </div>
       </div>
+      {/* Event albums take their title and slug from the event itself, so this only
+          applies to the sitewide one. */}
+      {!current && <GallerySettings />}
       {/* Remount on album change so upload queue and drag state never leak across albums. */}
       <AlbumManager
         key={albumId || "sitewide"}
@@ -551,6 +637,15 @@ function GalleryAdmin() {
     </div>
   );
 }
+
+// Mirrors the server's _newsletter_status: rows predating the status field are
+// treated as confirmed rather than shown as blank.
+const subStatus = (s) => (s.unsubscribed_at ? "unsubscribed" : s.status || "confirmed");
+const NEWSLETTER_STATUS_CLASS = {
+  confirmed: "text-[color:var(--success)]",
+  pending: "text-[color:var(--accent)]",
+  unsubscribed: "text-zinc-500",
+};
 
 function NewsletterAdmin() {
   const [items, setItems] = useState([]);
@@ -568,10 +663,15 @@ function NewsletterAdmin() {
         {items.map((s) => (
           <div key={s.sub_id} className="border border-white/10 p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center text-sm">
             {/* Addresses have no spaces to wrap at, so they need break-words. */}
-            <div className="lg:col-span-5 min-w-0 font-mono-x break-words">{s.email}</div>
+            <div className="lg:col-span-4 min-w-0 font-mono-x break-words">{s.email}</div>
+            {/* Double opt-in means a row can sit unconfirmed indefinitely; without this
+                column an address that never clicked the link looked like a subscriber. */}
+            <div className={`lg:col-span-2 min-w-0 font-mono-x text-[10px] uppercase tracking-[0.2em] ${NEWSLETTER_STATUS_CLASS[subStatus(s)]}`}>
+              {subStatus(s)}
+            </div>
             <div className="lg:col-span-2 min-w-0 text-zinc-400 text-xs break-words">{s.source || "—"}</div>
             <div className="lg:col-span-3 min-w-0 font-mono-x text-xs text-zinc-400">{new Date(s.created_at).toLocaleString("en-GB")}</div>
-            <div className="lg:col-span-2 min-w-0 lg:text-right">
+            <div className="lg:col-span-1 min-w-0 lg:text-right">
               <button onClick={() => del(s.sub_id)} className="btn-primary text-[10px]" data-testid={`newsletter-del-${s.sub_id}`}>Del</button>
             </div>
           </div>

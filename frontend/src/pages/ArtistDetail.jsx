@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { http } from "../api";
+import { mediaUrl } from "../lib/media";
 import { renderRich } from "../lib/richText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 
@@ -14,7 +15,7 @@ export default function ArtistDetail() {
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16 grid md:grid-cols-12 gap-10">
       {a.image_url && (
         <div className="md:col-span-5">
-          <div className="aspect-square overflow-hidden border border-white/10"><img src={a.image_url} alt={a.name} className="w-full h-full object-cover" /></div>
+          <div className="aspect-square overflow-hidden border border-white/10"><img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover" /></div>
         </div>
       )}
       <div className={a.image_url ? "md:col-span-7" : "md:col-span-12"}>

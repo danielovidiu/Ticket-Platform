@@ -54,6 +54,7 @@ Set these on the project (**Settings → Environment Variables**), not in a comm
 | `COOKIE_SAMESITE` | `lax` | Frontend and API share an origin here; the derived default (`none`) would needlessly expose the session cookie cross-site |
 | `TRUSTED_IP_HEADER` | `x-vercel-forwarded-for` | Makes the rate limiter work. Vercel sets this header itself and discards any client copy |
 | `INITIAL_ADMIN_EMAIL` | your address | The only way an account becomes admin. Without it nobody can reach the admin UI |
+| `REQUIRE_PHONE` | *(blank)* | Set to `1` to make the phone number mandatory at signup. Blank = collected but optional; name and surname are always required |
 | `APP_ENV` | `development` | See the warning below |
 | `LOCAL_FAKE_PAYMENTS` | `1` | See the warning below |
 | `BLOB_READ_WRITE_TOKEN` | *(injected)* | Added automatically when the Blob store is connected |

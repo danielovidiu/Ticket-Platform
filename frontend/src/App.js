@@ -1,8 +1,8 @@
 import React from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
-import { AuthProvider } from "./auth";
+import { AuthProvider, useAuth } from "./auth";
 import Layout from "./components/Layout";
 import DynamicPage from "./pages/DynamicPage";
 import Events from "./pages/Events";
@@ -18,6 +18,7 @@ import Admin from "./pages/Admin";
 import Scan from "./pages/Scan";
 import CMSEditor from "./pages/CMSEditor";
 import Login from "./pages/Login";
+import CompleteProfile from "./pages/CompleteProfile";
 import VerifyEmail from "./pages/VerifyEmail";
 import ResetPassword from "./pages/ResetPassword";
 import Settings from "./pages/Settings";
@@ -26,9 +27,29 @@ import NewsletterUnsubscribe from "./pages/NewsletterUnsubscribe";
 import ThemeLoader from "./components/ThemeLoader";
 import CookieConsent from "./components/CookieConsent";
 
+// Pages a signed-in user with an unfinished profile may still reach. The completion
+// form itself obviously, the auth flows (so signing out or verifying still works), and
+// the legal pages the form links to.
+const PROFILE_GATE_EXEMPT = ["/complete-profile", "/login", "/verify", "/reset-password",
+                             "/terms", "/privacy", "/cookie-policy", "/newsletter"];
+
+/** Name, surname and phone are mandatory on every account. Anyone signed in without
+ * them is sent to fill them in — including Google sign-ups, since no provider gives us
+ * a phone number. The same rule is enforced server-side when a reservation is created,
+ * so this is a redirect for the user's benefit rather than the control itself. */
+function ProfileGate({ children }) {
+  const { user, loading } = useAuth();
+  const { pathname, search } = useLocation();
+
+  if (loading || !user || user.profile_complete) return children;
+  if (PROFILE_GATE_EXEMPT.some((p) => pathname.startsWith(p))) return children;
+  return <Navigate to={`/complete-profile?return=${encodeURIComponent(pathname + search)}`} replace />;
+}
+
 function AppRouter() {
   return (
     <Layout>
+      <ProfileGate>
       <Routes>
         <Route path="/" element={<DynamicPage slugOverride="home" />} />
         <Route path="/mission" element={<DynamicPage slugOverride="mission" />} />
@@ -47,16 +68,21 @@ function AppRouter() {
         <Route path="/artists/:slug" element={<ArtistDetail />} />
         <Route path="/archive" element={<Archive />} />
         <Route path="/gallery" element={<Gallery />} />
+        {/* The sitewide gallery's own slug. Gallery redirects to the canonical one when
+            the slug in the URL isn't the configured one. */}
+        <Route path="/gallery/:slug" element={<Gallery />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/scan" element={<Scan />} />
         <Route path="/cms" element={<CMSEditor />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/complete-profile" element={<CompleteProfile />} />
         <Route path="/verify" element={<VerifyEmail />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/newsletter/confirm" element={<NewsletterConfirm />} />
         <Route path="/newsletter/unsubscribe" element={<NewsletterUnsubscribe />} />
       </Routes>
+      </ProfileGate>
     </Layout>
   );
 }

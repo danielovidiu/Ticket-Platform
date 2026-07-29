@@ -121,7 +121,11 @@ def mint_user(role: str = "user") -> tuple:
 
     db.users.insert_one({
         "user_id": user_id, "email": email, "name": f"pytest {role}",
-        "picture": "", "phone": "", "role": role, "password_hash": None,
+        # Name/surname/phone are mandatory on an account, and the server refuses a
+        # reservation from a profile missing any of them — a fixture identity has to be
+        # complete or every checkout test fails on the gate rather than on its subject.
+        "first_name": "pytest", "last_name": role, "phone": "+40721000000",
+        "picture": "", "role": role, "password_hash": None,
         "email_verified_at": now.isoformat(), "email_opt_in": False,
         "news_opt_in": False, "promo_opt_in": False, "consent_at": None,
         "tos_accepted_at": now.isoformat(), "created_at": now.isoformat(),
@@ -139,19 +143,31 @@ def register_user(email: str = None, password: str = "pytest-passw0rd", **extra)
     """Exercise the REAL registration endpoint. Rate-limited (5 per 5 min per IP) — use
     sparingly, and only in tests that are actually about registration.
 
-    The resulting account is tracked for teardown, which `mint_user` does automatically
-    but a bare requests.post would not.
+    Name, surname and phone are mandatory, so defaults are supplied for callers that
+    don't care about them; pass them in `extra` to override.
+
+    The account is NOT usable when this returns: registration issues no session until
+    the emailed link is clicked. Tests that need an identity should use `mint_user`;
+    tests about the registration contract itself can read the created row out of the
+    database, which is why the id is looked up by email rather than taken from the
+    response body (there isn't one any more).
     """
     email = email or f"pytest-{uuid.uuid4().hex[:12]}@{TEST_EMAIL_DOMAIN}"
-    r = requests.post(
-        f"{API}/auth/register",
-        json={"email": email, "password": password, "tos_accepted": True, **extra},
-        timeout=TIMEOUT,
-    )
+    body = {"email": email, "password": password, "tos_accepted": True,
+            "first_name": "Pytest", "last_name": "Runner", "phone": "+40721000000"}
+    body.update(extra)
+    r = requests.post(f"{API}/auth/register", json=body, timeout=TIMEOUT)
     if r.status_code == 200:
         with contextlib.suppress(Exception):
-            _created_user_ids.append(r.json()["user"]["user_id"])
+            _created_user_ids.append(db.users.find_one({"email": email}, {"user_id": 1})["user_id"])
     return r
+
+
+def registered_user_doc(email: str) -> dict:
+    """The stored account for an address registered through the API. Registration
+    returns no user object now (no session until the address is verified), so tests
+    that assert on what was stored read it back here."""
+    return db.users.find_one({"email": email.strip().lower()}, {"_id": 0}) or {}
 
 
 def cleanup_test_users():

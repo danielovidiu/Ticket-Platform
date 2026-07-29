@@ -4,6 +4,7 @@ FastAPI + MongoDB, first-party auth (password + Google/Apple OAuth) + Stripe Che
 """
 import io
 import os
+import re
 import csv
 import json
 import uuid
@@ -22,7 +23,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, Cookie, Header, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from PIL import Image
@@ -181,6 +182,15 @@ SERVERLESS = bool(os.environ.get("VERCEL", "").strip())
 # back to). Its scheme also decides how session cookies are scoped (below).
 PUBLIC_APP_URL = os.environ.get("PUBLIC_APP_URL", "http://localhost:3000").rstrip("/")
 POLICY_VERSION = os.environ.get("POLICY_VERSION", "2026-07-22")
+
+# Feature flag for the mandatory phone number. OFF by default: an account needs a first
+# name and a surname, and the phone is collected but optional. Set REQUIRE_PHONE=1 to
+# make it mandatory everywhere at once — registration, the profile form, and the
+# "profile complete" rule the frontend gate and the reservation check both read. A
+# number that IS entered is validated either way; the flag only decides whether leaving
+# it blank is allowed. Turning it on later makes every phone-less account incomplete,
+# and those users are asked for one the next time they sign in.
+REQUIRE_PHONE = os.environ.get("REQUIRE_PHONE", "").strip() == "1"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("supersanity")
@@ -512,6 +522,65 @@ def _valid_email(email: str) -> bool:
     return "@" in email and "." in email.split("@")[-1] and 3 <= len(email) <= 254
 
 
+# Every account must carry a first name and a last name, plus a phone number when
+# REQUIRE_PHONE is on. Email and password (or an OAuth identity) are handled separately —
+# these are the fields a provider can't always give us, so they are what "profile
+# complete" means.
+_PHONE_SEPARATORS = re.compile(r"[\s\-().]")
+_PHONE_RE = re.compile(r"^\+?[0-9]{7,15}$")
+
+
+def _normalize_phone(phone: str) -> str:
+    """Strip the separators people type and keep an optional leading +.
+
+    Returns "" when the result isn't a plausible phone number, so callers can treat
+    falsy as invalid. Stored normalized, so the same number is always the same value.
+    """
+    cleaned = _PHONE_SEPARATORS.sub("", (phone or "").strip())
+    return cleaned if _PHONE_RE.match(cleaned) else ""
+
+
+def _full_name(first: str, last: str) -> str:
+    """The single display name kept alongside the parts, because tickets, invoices,
+    the Stripe customer and the admin lists all want one string."""
+    return " ".join(p for p in ((first or "").strip(), (last or "").strip()) if p)
+
+
+def _split_name(name: str) -> tuple:
+    """Best-effort first/last split for a legacy or provider-supplied single name.
+    Everything after the first token is the surname ("Ana Maria Popescu" -> Ana Maria
+    is wrong far less often than dropping the middle name entirely)."""
+    parts = (name or "").strip().split()
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], " ".join(parts[1:])
+
+
+def _profile_complete(u: Optional[dict]) -> bool:
+    """Read REQUIRE_PHONE at call time, not import time, so flipping the flag needs
+    only a restart — and so tests can exercise both settings."""
+    if not u:
+        return False
+    fields = ("first_name", "last_name", "phone") if REQUIRE_PHONE else ("first_name", "last_name")
+    return all((u.get(f) or "").strip() for f in fields)
+
+
+def _validate_phone(raw: str) -> str:
+    """Normalized phone, or "" when the field was left blank and that is allowed.
+
+    Two separate rules, easy to conflate: whether a phone number is REQUIRED is the
+    feature flag's business, but whether a number someone actually typed is plausible
+    is not — a typo is rejected either way rather than silently stored.
+    """
+    raw = (raw or "").strip()
+    phone = _normalize_phone(raw)
+    if not phone and (raw or REQUIRE_PHONE):
+        raise HTTPException(400, "Enter a valid phone number, e.g. +40 721 234 567")
+    return phone
+
+
 def _email_rate_check(bucket: str, email: str, max_calls: int, window: int):
     """Per-email sibling of rate_limit() (which keys on IP). Guards password login
     against distributed brute force of one account from many IPs.
@@ -582,7 +651,28 @@ async def _audit(actor_id: str, action: str, target_type: str, target_id: str, m
         logger.exception("audit write failed: %s %s", action, target_id)
 
 
-async def _get_or_create_user(email, *, name="", picture="", provider=None, sub=None, email_verified=False):
+def _identity_name_updates(u: dict, first: str, last: str) -> dict:
+    """Fields to fill in on an existing account from what a provider just told us.
+
+    Only ever fills blanks: a name the user typed themselves outranks the one on their
+    Google profile. The single `name` is rebuilt whenever a part changes, so the two
+    representations can't drift.
+    """
+    upd = {}
+    if first and not (u.get("first_name") or "").strip():
+        upd["first_name"] = first
+    if last and not (u.get("last_name") or "").strip():
+        upd["last_name"] = last
+    if upd or not (u.get("name") or "").strip():
+        merged = _full_name(upd.get("first_name", u.get("first_name", "")),
+                            upd.get("last_name", u.get("last_name", "")))
+        if merged:
+            upd["name"] = merged
+    return upd
+
+
+async def _get_or_create_user(email, *, name="", first_name="", last_name="", picture="",
+                              provider=None, sub=None, email_verified=False):
     """OAuth identity resolution + the verified-email account-linking gate.
 
     Match order: provider `sub` first (survives email changes / Apple private relay),
@@ -591,16 +681,22 @@ async def _get_or_create_user(email, *, name="", picture="", provider=None, sub=
     otherwise a stranger who pre-registered the victim's address with a password could
     be silently merged into. Returns (user_doc, created_bool). Raises 409 on a blocked
     link so the frontend can tell the user to use their original method.
+
+    Providers give us name parts (Google's given_name/family_name, Apple's first
+    authorization payload) but never a phone number, so an account created here starts
+    profile-incomplete and the frontend collects the rest — see _profile_complete.
     """
     email = (email or "").strip().lower()
     sub_field = {"google": "google_sub", "apple": "apple_sub"}.get(provider)
+    # Fall back to splitting the display name when the provider sent no separate parts.
+    if not (first_name or last_name):
+        first_name, last_name = _split_name(name)
+    name = name or _full_name(first_name, last_name)
 
     if sub_field and sub:
         u = await db.users.find_one({sub_field: sub}, {"_id": 0})
         if u:
-            upd = {}
-            if name and not u.get("name"):
-                upd["name"] = name
+            upd = _identity_name_updates(u, first_name, last_name)
             if picture:
                 upd["picture"] = picture
             if upd:
@@ -613,13 +709,11 @@ async def _get_or_create_user(email, *, name="", picture="", provider=None, sub=
         if u:
             if not (u.get("email_verified_at") or email_verified):
                 raise HTTPException(409, {"reason": "use_existing_method", "email": email})
-            upd = {}
+            upd = _identity_name_updates(u, first_name, last_name)
             if sub_field and sub and not u.get(sub_field):
                 upd[sub_field] = sub
             if email_verified and not u.get("email_verified_at"):
                 upd["email_verified_at"] = now_utc().isoformat()
-            if name and not u.get("name"):
-                upd["name"] = name
             if picture:
                 upd["picture"] = picture
             if upd:
@@ -632,6 +726,8 @@ async def _get_or_create_user(email, *, name="", picture="", provider=None, sub=
         "user_id": user_id,
         "email": email,
         "name": name or "",
+        "first_name": first_name or "",
+        "last_name": last_name or "",
         "picture": picture or "",
         "phone": "",
         "role": _initial_role(email),  # SECURITY [H3]: config, never arrival order
@@ -657,7 +753,9 @@ async def _get_or_create_user(email, *, name="", picture="", provider=None, sub=
 class RegisterIn(BaseModel):
     email: str
     password: str
-    name: str = ""
+    first_name: str = ""
+    last_name: str = ""
+    phone: str = ""
     tos_accepted: bool = False
     email_opt_in: bool = False
     news_opt_in: bool = False
@@ -685,8 +783,13 @@ class ResetPasswordIn(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
-    name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     phone: Optional[str] = None
+
+
+class ResendVerifyIn(BaseModel):
+    email: str
 
 
 class ArtistIn(BaseModel):
@@ -767,17 +870,36 @@ class CheckoutIn(BaseModel):
 # ---------- Auth Endpoints ----------
 
 def _public_user(u: Optional[dict]) -> Optional[dict]:
-    """Strip secret-bearing fields before returning a user to the client."""
+    """Strip secret-bearing fields before returning a user to the client.
+
+    The two booleans are derived rather than stored, so the client never has to know
+    which combination of fields means "still needs to finish signing up".
+    """
     if not u:
         return u
-    return {k: v for k, v in u.items() if k not in ("password_hash", "_id")}
+    out = {k: v for k, v in u.items() if k not in ("password_hash", "_id")}
+    out["email_verified"] = bool(u.get("email_verified_at"))
+    out["profile_complete"] = _profile_complete(u)
+    return out
+
+
+async def _send_verification(user_id: str, email: str):
+    token = make_token("email-verify", user_id)
+    await send_mail("verify_email", email, {"verify_url": f"{PUBLIC_APP_URL}/verify?token={token}"})
 
 
 @api.post("/auth/register", dependencies=[Depends(rate_limit("auth_register", 5, 300))])
 async def register(body: RegisterIn, request: Request, response: Response):
     email = body.email.strip().lower()
+    first_name = body.first_name.strip()
+    last_name = body.last_name.strip()
+    if not first_name:
+        raise HTTPException(400, "Enter your first name")
+    if not last_name:
+        raise HTTPException(400, "Enter your surname")
     if not _valid_email(email):
         raise HTTPException(400, "Enter a valid email address")
+    phone = _validate_phone(body.phone)
     if len(body.password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
     if not body.tos_accepted:
@@ -792,9 +914,11 @@ async def register(body: RegisterIn, request: Request, response: Response):
     doc = {
         "user_id": user_id,
         "email": email,
-        "name": body.name.strip(),
+        "name": _full_name(first_name, last_name),
+        "first_name": first_name,
+        "last_name": last_name,
         "picture": "",
-        "phone": "",
+        "phone": phone,
         "role": _initial_role(email),  # SECURITY [H3]: config, never arrival order
         "password_hash": hash_password(body.password),
         "email_verified_at": None,
@@ -813,12 +937,18 @@ async def register(body: RegisterIn, request: Request, response: Response):
     for kind in ("email_opt_in", "news_opt_in", "promo_opt_in"):
         await _log_consent(user_id, kind, doc[kind], request, "register")
 
-    # Fire-and-forget verification email (outbox in dev).
-    token = make_token("email-verify", user_id)
-    await send_mail("verify_email", email, {"verify_url": f"{PUBLIC_APP_URL}/verify?token={token}"})
+    # Ticking "email me about upcoming events" at signup puts the address on the
+    # newsletter list as pending; verifying the account promotes it to confirmed.
+    if doc["news_opt_in"]:
+        await _sync_newsletter_subscription(email, True, source="register", confirmed=False)
 
-    await _issue_session(response, user_id)
-    return {"user": _public_user(await db.users.find_one({"user_id": user_id}, {"_id": 0}))}
+    # Fire-and-forget verification email (outbox in dev).
+    await _send_verification(user_id, email)
+
+    # Deliberately NO session: an account is unusable until the emailed link is clicked
+    # (see the same gate in login()). Returning the address lets the client show
+    # "check your inbox" and offer a resend without asking for it again.
+    return {"ok": True, "verification_required": True, "email": email}
 
 
 @api.post("/auth/login", dependencies=[Depends(rate_limit("auth_login", 10, 300))])
@@ -832,14 +962,28 @@ async def login(body: LoginIn, request: Request, response: Response, session_tok
         if not u:
             verify_password(body.password, _DUMMY_HASH)
         raise HTTPException(401, "Invalid email or password")
+    # Unverified accounts get no session at all. The credentials were correct, so saying
+    # so leaks nothing an attacker who just guessed the password doesn't already know,
+    # and the alternative — a generic error — strands the legitimate owner.
+    # No mail is sent from here: this path is reachable ten times per window per address,
+    # and re-sending on each attempt would turn a login form into a mail amplifier. The
+    # client offers a resend button, which goes through the tighter /auth/resend-verification.
+    if not u.get("email_verified_at"):
+        raise HTTPException(403, {"reason": "email_not_verified", "email": email})
     await _issue_session(response, u["user_id"], old_token=session_token)
     return {"user": _public_user(u)}
 
 
 @api.get("/auth/methods")
 async def auth_methods():
-    """Which sign-in methods this deployment has configured — drives the login UI."""
-    return {"password": True, "google": GOOGLE_ENABLED, "apple": APPLE_ENABLED}
+    """What this deployment expects at the door — drives the login and signup UI.
+
+    `require_phone` rides along rather than living on its own endpoint: the signup form
+    needs it at exactly the moment it already fetches this, and a second round trip
+    would just mean the phone field renders with the wrong label first.
+    """
+    return {"password": True, "google": GOOGLE_ENABLED, "apple": APPLE_ENABLED,
+            "require_phone": REQUIRE_PHONE}
 
 
 @api.get("/auth/me")
@@ -864,10 +1008,76 @@ async def logout(
 
 @api.patch("/auth/profile")
 async def update_profile(body: ProfileUpdate, user=Depends(get_current_user)):
-    upd = {k: v for k, v in body.model_dump().items() if v is not None}
-    if upd:
-        await db.users.update_one({"user_id": user["user_id"]}, {"$set": upd})
+    """Also the "finish your profile" endpoint.
+
+    The mandatory fields are validated on the MERGED result rather than only on what was
+    sent — a partial patch can fill a blank but can never empty one, and an OAuth account
+    that arrived without a phone number is completed through exactly the same route as an
+    edit from Settings.
+    """
+    patch = body.model_dump()
+    first = (patch["first_name"] if patch["first_name"] is not None else user.get("first_name", "")).strip()
+    last = (patch["last_name"] if patch["last_name"] is not None else user.get("last_name", "")).strip()
+    raw_phone = patch["phone"] if patch["phone"] is not None else user.get("phone", "")
+
+    if not first:
+        raise HTTPException(400, "Enter your first name")
+    if not last:
+        raise HTTPException(400, "Enter your surname")
+    phone = _validate_phone(raw_phone)
+
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"first_name": first, "last_name": last, "phone": phone,
+                  "name": _full_name(first, last)}},
+    )
     return _public_user(await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0}))
+
+
+async def _sync_newsletter_subscription(email: str, granted: bool, *, source: str, confirmed: bool):
+    """Keep the newsletter subscriber list in step with an account's news_opt_in flag.
+
+    These used to be two disconnected things: `news_opt_in` is a consent flag on the user
+    document, while the admin Newsletter tab lists `newsletter_subscriptions`, which only
+    the public signup form ever wrote to — so ticking Newsletter in Settings subscribed
+    the user to nothing anybody could see or export.
+
+    `confirmed` is what distinguishes the two entry points. A signed-in user ticking the
+    box has, by definition, a verified address (login requires it), so there is nothing
+    for a double opt-in email to prove and the row goes straight in as confirmed. Ticking
+    it during registration lands as pending, and verify_email promotes it.
+
+    An existing confirmed row is never downgraded — a user who confirmed through the
+    public form should not be knocked back to pending by an unrelated consent edit.
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return
+    now_iso = now_utc().isoformat()
+
+    if not granted:
+        await db.newsletter_subscriptions.update_one(
+            {"email": email},
+            {"$set": {"status": "unsubscribed", "unsubscribed_at": now_iso}},
+        )
+        return
+
+    existing = await db.newsletter_subscriptions.find_one({"email": email}, {"_id": 0, "status": 1, "unsubscribed_at": 1})
+    if existing and _newsletter_status(existing) == "confirmed":
+        return
+
+    set_fields = {"status": "confirmed" if confirmed else "pending", "source": source, "unsubscribed_at": None}
+    insert_fields = {"sub_id": new_id("sub"), "email": email, "created_at": now_iso}
+    # confirmed_at belongs to exactly one of the two operators — Mongo rejects a field
+    # that appears in both $set and $setOnInsert.
+    if confirmed:
+        set_fields["confirmed_at"] = now_iso
+    else:
+        insert_fields["confirmed_at"] = None
+
+    await db.newsletter_subscriptions.update_one(
+        {"email": email}, {"$set": set_fields, "$setOnInsert": insert_fields}, upsert=True,
+    )
 
 
 @api.post("/auth/consents")
@@ -882,6 +1092,11 @@ async def update_consents(body: ConsentsIn, request: Request, user=Depends(get_c
             if kind == "consent_at":
                 continue
             await _log_consent(user["user_id"], kind, granted, request, "settings")
+        if "news_opt_in" in changes:
+            await _sync_newsletter_subscription(
+                user["email"], changes["news_opt_in"], source="settings",
+                confirmed=bool(user.get("email_verified_at")),
+            )
     return _public_user(await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0}))
 
 
@@ -891,8 +1106,24 @@ async def update_consents(body: ConsentsIn, request: Request, user=Depends(get_c
 async def request_verify(user=Depends(get_current_user)):
     if user.get("email_verified_at"):
         return {"ok": True, "already_verified": True}
-    token = make_token("email-verify", user["user_id"])
-    await send_mail("verify_email", user["email"], {"verify_url": f"{PUBLIC_APP_URL}/verify?token={token}"})
+    await _send_verification(user["user_id"], user["email"])
+    return {"ok": True}
+
+
+@api.post("/auth/resend-verification", dependencies=[Depends(rate_limit("auth_verify_resend", 5, 900))])
+async def resend_verification(body: ResendVerifyIn):
+    """Unauthenticated sibling of /auth/request-verify.
+
+    Needed because an unverified account has no session to authenticate with — that is
+    the whole point of the gate in login(). Always returns ok, and is rate-limited per
+    address as well as per IP, so it can't be used to enumerate accounts or to mail-bomb
+    one.
+    """
+    email = body.email.strip().lower()
+    _email_rate_check("auth_verify_resend_email", email, 3, 900)
+    u = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "email_verified_at": 1})
+    if u and not u.get("email_verified_at"):
+        await _send_verification(u["user_id"], email)
     return {"ok": True}
 
 
@@ -902,11 +1133,21 @@ async def verify_email(token: str):
         claims = read_token("email-verify", token)
     except jwt.PyJWTError:
         raise HTTPException(400, "This verification link is invalid or has expired")
-    await db.users.update_one(
-        {"user_id": claims["sub"]},
-        {"$set": {"email_verified_at": now_utc().isoformat()}},
-    )
-    return {"ok": True}
+    u = await db.users.find_one({"user_id": claims["sub"]}, {"_id": 0})
+    if not u:
+        raise HTTPException(400, "This verification link is invalid or has expired")
+    if not u.get("email_verified_at"):
+        await db.users.update_one(
+            {"user_id": u["user_id"]},
+            {"$set": {"email_verified_at": now_utc().isoformat()}},
+        )
+        # A newsletter opt-in taken at registration was held as pending until exactly
+        # this moment — the address is now proven.
+        if u.get("news_opt_in"):
+            await _sync_newsletter_subscription(u["email"], True, source="register", confirmed=True)
+    # No session is issued here on purpose — clicking a link out of an inbox proves the
+    # address, not that the person at this browser owns the account. They sign in next.
+    return {"ok": True, "email": u["email"], "profile_complete": _profile_complete(u)}
 
 
 @api.post("/auth/forgot-password", dependencies=[Depends(rate_limit("auth_forgot", 5, 900))])
@@ -981,10 +1222,12 @@ def _safe_return(path: Optional[str]) -> str:
     return path
 
 
-async def _oauth_finish(request, *, provider, email, name, picture, sub, email_verified, return_path, clear_cookies):
+async def _oauth_finish(request, *, provider, email, name, first_name="", last_name="", picture,
+                        sub, email_verified, return_path, clear_cookies):
     try:
         user, created = await _get_or_create_user(
-            email, name=name, picture=picture, provider=provider, sub=sub, email_verified=email_verified,
+            email, name=name, first_name=first_name, last_name=last_name, picture=picture,
+            provider=provider, sub=sub, email_verified=email_verified,
         )
     except HTTPException as e:
         if e.status_code == 409:
@@ -993,6 +1236,15 @@ async def _oauth_finish(request, *, provider, email, name, picture, sub, email_v
                 resp.delete_cookie(c, path="/")
             return resp
         raise
+    # Same rule as password login: no session until the address is confirmed. Providers
+    # normally assert email_verified, so this only fires for the ones that don't.
+    if not user.get("email_verified_at"):
+        await _send_verification(user["user_id"], user["email"])
+        resp = RedirectResponse(
+            f"{PUBLIC_APP_URL}/login?error=email_not_verified&email={quote(user['email'])}", status_code=302)
+        for c in clear_cookies:
+            resp.delete_cookie(c, path="/")
+        return resp
     resp = RedirectResponse(f"{PUBLIC_APP_URL}{_safe_return(return_path)}", status_code=302)
     await _issue_session(resp, user["user_id"])
     for c in clear_cookies:
@@ -1054,7 +1306,12 @@ async def google_callback(
         raise HTTPException(400, "Could not verify Google identity")
     return await _oauth_finish(
         request, provider="google",
-        email=claims.get("email", ""), name=claims.get("name", ""), picture=claims.get("picture", ""),
+        email=claims.get("email", ""), name=claims.get("name", ""),
+        # Google returns the parts separately, which is exactly what the account needs —
+        # splitting the display name is only the fallback inside _get_or_create_user.
+        first_name=(claims.get("given_name") or "").strip(),
+        last_name=(claims.get("family_name") or "").strip(),
+        picture=claims.get("picture", ""),
         sub=claims.get("sub"), email_verified=bool(claims.get("email_verified")),
         return_path=g_return or "/", clear_cookies=("g_state", "g_return"),
     )
@@ -1099,20 +1356,22 @@ async def apple_callback(
     except jwt.PyJWTError:
         raise HTTPException(400, "Could not verify Apple identity")
     email = claims.get("email", "")
-    name = ""
+    first_name = last_name = ""
     # Apple sends name/email in the form body only on the very first authorization.
     if user:
         try:
             u = json.loads(user)
             nm = u.get("name") or {}
-            name = f"{nm.get('firstName', '')} {nm.get('lastName', '')}".strip()
+            first_name = (nm.get("firstName") or "").strip()
+            last_name = (nm.get("lastName") or "").strip()
             email = email or u.get("email", "")
         except (ValueError, TypeError):
             pass
     ev = claims.get("email_verified")
     return await _oauth_finish(
         request, provider="apple",
-        email=email, name=name, picture="",
+        email=email, name=_full_name(first_name, last_name),
+        first_name=first_name, last_name=last_name, picture="",
         sub=claims.get("sub"), email_verified=(ev is True or ev == "true"),
         return_path=a_return or "/", clear_cookies=("a_state", "a_return"),
     )
@@ -1166,6 +1425,8 @@ async def delete_my_account(request: Request, response: Response, user=Depends(g
             "$set": {
                 "email": f"deleted+{uid}@anon.invalid",
                 "name": "",
+                "first_name": "",
+                "last_name": "",
                 "phone": "",
                 "picture": "",
                 "role": "user",
@@ -1265,6 +1526,40 @@ async def gallery():
     return await db.gallery.find({"event_id": None}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(200)
 
 
+# ----- Sitewide gallery identity (title + slug) -----
+#
+# One document, not a collection: there is exactly one sitewide gallery, and its title
+# and slug are what the public page shows and lives at (/gallery/<slug>). Event albums
+# keep taking their title and slug from the event they belong to.
+
+GALLERY_SETTINGS_DEFAULT = {"title": "Gallery", "slug": "gallery", "description": ""}
+_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def _slugify(value: str) -> str:
+    """Lowercase, ASCII-ish, hyphen-separated. Accepts what an editor types
+    ("Live Documentation") and returns what a URL needs ("live-documentation")."""
+    s = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower())
+    return s.strip("-")
+
+
+async def _gallery_settings() -> dict:
+    """Stored values over defaults, ignoring blanks so a half-written document can't
+    leave the public page with no title or an empty URL."""
+    doc = await db.site_settings.find_one({"_id": "gallery"}, {"_id": 0}) or {}
+    merged = dict(GALLERY_SETTINGS_DEFAULT)
+    for k in merged:
+        v = doc.get(k)
+        if isinstance(v, str) and (v.strip() or k == "description"):
+            merged[k] = v.strip()
+    return merged
+
+
+@api.get("/gallery/settings")
+async def gallery_settings():
+    return await _gallery_settings()
+
+
 def _album_cover(items: List[dict]) -> dict:
     """The explicitly chosen cover, else the first item in the album's order."""
     return next((g for g in items if g.get("is_cover")), items[0])
@@ -1296,7 +1591,10 @@ async def gallery_clusters():
             "cover": _album_cover(items), "count": len(items), "items": items,
         })
 
-    return {"standalone": standalone, "event_albums": event_albums}
+    # Settings ride along so the page renders its heading and canonical URL from one
+    # request instead of flashing a placeholder title while a second one lands.
+    return {"standalone": standalone, "event_albums": event_albums,
+            "settings": await _gallery_settings()}
 
 
 class ContactMsg(BaseModel):
@@ -1458,6 +1756,14 @@ async def _cleanup_expired_reservations(event_id: str):
 async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     if body.quantity < 1:
         raise HTTPException(400, "Invalid quantity")
+
+    # The server-side half of the mandatory-profile rule. The UI redirects to the
+    # completion form long before this, but sessions predating the rule (and any direct
+    # API caller) reach checkout without a name or a phone number to put on the ticket.
+    if not user.get("email_verified_at"):
+        raise HTTPException(403, {"reason": "email_not_verified", "email": user.get("email", "")})
+    if not _profile_complete(user):
+        raise HTTPException(403, {"reason": "profile_incomplete"})
 
     event = await db.events.find_one({"event_id": body.event_id}, {"_id": 0})
     if not event or not event.get("is_published"):
@@ -2251,9 +2557,28 @@ class GalleryIn(BaseModel):
     event_id: Optional[str] = None
 
 
+def _valid_media_url(url: str) -> bool:
+    """What may be stored as an item's source: an http(s) address, or one of our own
+    root-relative upload paths. Anything else — `javascript:`, `data:`, a
+    protocol-relative `//host` — is refused rather than handed to an <img>/<video> src.
+    """
+    u = (url or "").strip()
+    if u.startswith("//"):
+        return False
+    return u.startswith(("http://", "https://", "/"))
+
+
 @api.post("/admin/gallery")
 async def admin_add_gallery(body: GalleryIn, user=Depends(require_admin)):
     g = body.model_dump()
+    # Items normally arrive from /admin/uploads, but an editor can also paste the URL of
+    # an image that already lives somewhere else, so the value is checked here.
+    g["image_url"] = (g.get("image_url") or "").strip()
+    g["thumbnail_url"] = (g.get("thumbnail_url") or "").strip() or g["image_url"]
+    if not _valid_media_url(g["image_url"]) or not _valid_media_url(g["thumbnail_url"]):
+        raise HTTPException(400, "Enter a full http(s) image or video URL")
+    if g.get("media_type") not in ("image", "video"):
+        raise HTTPException(400, "media_type must be 'image' or 'video'")
     g["gallery_id"] = new_id("gal")
     g["created_at"] = now_utc().isoformat()
     # New items land at the end of their own bucket.
@@ -2283,6 +2608,46 @@ async def admin_reorder_gallery(body: GalleryReorderIn, user=Depends(require_adm
     for i, gid in enumerate(body.ordered_ids):
         await db.gallery.update_one({"gallery_id": gid}, {"$set": {"sort_order": i}})
     return {"ok": True, "count": len(body.ordered_ids)}
+
+
+class GallerySettingsIn(BaseModel):
+    title: Optional[str] = None
+    slug: Optional[str] = None
+    description: Optional[str] = None
+
+
+# Declared BEFORE /admin/gallery/{gallery_id} — FastAPI matches in declaration order, and
+# a literal path registered after the parameterised one would be swallowed by it.
+@api.get("/admin/gallery/settings")
+async def admin_gallery_settings(user=Depends(require_admin)):
+    return await _gallery_settings()
+
+
+@api.patch("/admin/gallery/settings")
+async def admin_update_gallery_settings(body: GallerySettingsIn, user=Depends(require_admin)):
+    current = await _gallery_settings()
+    updates = {}
+
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(400, "The gallery needs a title")
+        updates["title"] = title
+
+    if body.slug is not None:
+        # Editors type a slug, or leave it blank and mean "derive it from the title".
+        slug = _slugify(body.slug) or _slugify(updates.get("title", current["title"]))
+        if not _SLUG_RE.match(slug or ""):
+            raise HTTPException(400, "The slug must use letters, numbers and hyphens, e.g. live-documentation")
+        updates["slug"] = slug
+
+    if body.description is not None:
+        updates["description"] = body.description.strip()
+
+    if updates:
+        await db.site_settings.update_one({"_id": "gallery"}, {"$set": updates}, upsert=True)
+        await _audit(user["user_id"], "gallery_settings_updated", "gallery", "sitewide", updates)
+    return await _gallery_settings()
 
 
 class GalleryPatchIn(BaseModel):
@@ -2333,7 +2698,10 @@ async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
 async def admin_upload_media(
     file: UploadFile = File(...),
     poster: Optional[UploadFile] = File(None),
-    user=Depends(require_admin),
+    # Editors, not just admins: the CMS is an editor-role tool and its image blocks
+    # upload through here, so admin-only made the feature 403 for the exact role it
+    # exists for. Not an escalation — an editor can already publish a custom_html block.
+    user=Depends(require_admin_or_editor),
 ):
     # SECURITY [M3/M8/M9 — see SECURITY_AUDIT.md]. Three things to know about this route:
     #   * The media type is decided by the CLIENT-DECLARED Content-Type below; nothing
@@ -2588,7 +2956,8 @@ async def security_headers(request: Request, call_next):
 
 
 # Bump when a change below needs to run against an already-initialised database.
-SCHEMA_VERSION = 1
+# 2: users gained first_name/last_name (split out of the single `name`).
+SCHEMA_VERSION = 2
 
 
 @app.on_event("startup")
@@ -2694,6 +3063,11 @@ async def init_indexes():
     except Exception:
         logger.exception("migrate_gallery_ordering failed")
 
+    try:
+        await migrate_user_names()
+    except Exception:
+        logger.exception("migrate_user_names failed")
+
 
 async def migrate_session_token_hashes():
     """Replace plaintext session tokens with their SHA-256 (audit M2).
@@ -2757,6 +3131,27 @@ async def migrate_gallery_ordering():
             fixed += 1
     if fixed:
         logger.info("Gallery ordering backfilled for %d item(s)", fixed)
+
+
+async def migrate_user_names():
+    """Split the legacy single `name` into first_name/last_name.
+
+    Accounts that predate the mandatory Name/Surname/Phone rule stored one string. The
+    split is a guess (see _split_name), and phone is deliberately NOT invented — an
+    account left without a surname or a number is profile-incomplete, and the user is
+    asked to correct it at their next sign-in. This only fills fields that are absent,
+    so it never overwrites what someone has since typed.
+    """
+    fixed = 0
+    async for u in db.users.find({"first_name": {"$exists": False}}, {"_id": 0, "user_id": 1, "name": 1}):
+        first, last = _split_name(u.get("name"))
+        await db.users.update_one(
+            {"user_id": u["user_id"]},
+            {"$set": {"first_name": first, "last_name": last}},
+        )
+        fixed += 1
+    if fixed:
+        logger.info("Backfilled first/last name for %d user(s)", fixed)
 
 
 @app.on_event("shutdown")

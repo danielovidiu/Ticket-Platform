@@ -72,7 +72,20 @@ export default function EventDetail() {
       });
       navigate(`/checkout/${data.reservation_id}`);
     } catch (e) {
-      toast.error(e.response?.data?.detail || "Could not hold tickets");
+      // The account gates answer with an object, not a string: a session that predates
+      // the mandatory-profile rule can reach this button with no phone number on file.
+      // Send those to the form that fixes it instead of showing a dead-end error.
+      const detail = e.response?.data?.detail;
+      if (detail?.reason === "profile_incomplete") {
+        toast.error("Add your name and phone number to buy tickets");
+        navigate(`/complete-profile?return=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+        return;
+      }
+      if (detail?.reason === "email_not_verified") {
+        toast.error("Confirm your email address first — check your inbox for the link");
+        return;
+      }
+      toast.error(typeof detail === "string" ? detail : "Could not hold tickets");
     } finally {
       setBusy(false);
     }
@@ -84,7 +97,7 @@ export default function EventDetail() {
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10">
       <div className="md:col-span-7">
         <div className="aspect-[4/3] overflow-hidden border border-white/10">
-          <img src={event.image_url} alt={event.title} className="w-full h-full object-cover" />
+          <img src={mediaUrl(event.image_url)} alt={event.title} className="w-full h-full object-cover" />
         </div>
         <div className="mt-8 font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-400">
           {fmtDate(event.starts_at)} · Doors {fmtTime(event.doors_open_at || event.starts_at)} · {[event.venue, event.city].filter(Boolean).join(", ")}

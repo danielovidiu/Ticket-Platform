@@ -6,6 +6,7 @@ import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartp
 import { BlockRenderer } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
 import { FormatToolbar } from "../lib/richText";
+import ImageField from "../components/ImageField";
 
 const AUTOSAVE_MS = 1200;
 
@@ -334,7 +335,7 @@ const FIELDS = {
     { k: "eyebrow", label: "Eyebrow (small caps)" },
     { k: "heading", label: "Heading", type: "textarea" },
     { k: "body", label: "Body", type: "textarea", format: true },
-    { k: "image_url", label: "Background image URL" },
+    { k: "image_url", label: "Background image", type: "image" },
     { k: "cta_label", label: "Primary CTA label" },
     { k: "cta_href", label: "Primary CTA link" },
     { k: "cta_style", label: "Primary CTA style", type: "select", options: ["accent", "outline"] },
@@ -345,7 +346,7 @@ const FIELDS = {
   ],
   rich_text: [{ k: "content", label: "Content (markdown-ish)", type: "textarea", rows: 12, format: true }],
   image: [
-    { k: "image_url", label: "Image URL" },
+    { k: "image_url", label: "Image", type: "image" },
     { k: "caption", label: "Caption" },
     { k: "full_width", label: "Full width", type: "checkbox" },
     { k: "aspect", label: "Aspect ratio", type: "select", options: ["natural", "1:1", "4:3", "3:4", "16:9", "21:9", "3:2", "16:10"] },
@@ -392,7 +393,7 @@ const FIELDS = {
   spacer: [{ k: "height", label: "Height (e.g. 4rem, 120px)" }],
   split: [
     { k: "direction", label: "Direction", type: "select", options: ["image-left", "image-right"] },
-    { k: "image_url", label: "Image URL" },
+    { k: "image_url", label: "Image", type: "image" },
     { k: "aspect", label: "Image aspect", type: "select", options: ["1:1", "4:3", "3:4", "16:9", "16:10", "3:2"] },
     { k: "eyebrow", label: "Eyebrow" },
     { k: "heading", label: "Heading" },
@@ -419,6 +420,18 @@ function PropsEditor({ block, onChange }) {
     <div className="space-y-4">
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">{BLOCK_LABELS[block.type]}</div>
       {fields.map((f) => (
+        // Image fields render outside the <label>: they carry their own caption plus
+        // buttons and a file input, and clicking a label activates its first control,
+        // which would fire the wrong one.
+        f.type === "image" ? (
+          <ImageField
+            key={f.k}
+            label={f.label}
+            value={v[f.k] || ""}
+            onChange={(val) => onChange({ [f.k]: val })}
+            testId={`cms-${f.k}`}
+          />
+        ) : (
         <label key={f.k} className="block">
           <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">{f.label}</div>
           {f.type === "textarea" && f.format ? (
@@ -439,6 +452,7 @@ function PropsEditor({ block, onChange }) {
             <input value={v[f.k] || ""} onChange={(e) => onChange({ [f.k]: e.target.value })} className="input-x !py-2 !text-sm" />
           )}
         </label>
+        )
       ))}
     </div>
   );

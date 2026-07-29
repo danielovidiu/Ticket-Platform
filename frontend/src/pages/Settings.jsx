@@ -7,12 +7,17 @@ import { toast } from "sonner";
 export default function Settings() {
   const { user, loading, refresh, setUser } = useAuth();
   const navigate = useNavigate();
-  const [profile, setProfile] = useState({ name: "", phone: "" });
+  const [profile, setProfile] = useState({ first_name: "", last_name: "", phone: "" });
   const [consents, setConsents] = useState({ email_opt_in: false, news_opt_in: false, promo_opt_in: false });
+  const [requirePhone, setRequirePhone] = useState(false);
+
+  useEffect(() => {
+    http.get("/auth/methods").then((r) => setRequirePhone(!!r.data.require_phone)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (user) {
-      setProfile({ name: user.name || "", phone: user.phone || "" });
+      setProfile({ first_name: user.first_name || "", last_name: user.last_name || "", phone: user.phone || "" });
       setConsents({
         email_opt_in: !!user.email_opt_in,
         news_opt_in: !!user.news_opt_in,
@@ -31,7 +36,12 @@ export default function Settings() {
 
   const saveProfile = async () => {
     try { const { data } = await http.patch("/auth/profile", profile); setUser(data); toast.success("Profile saved"); }
-    catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+    catch (e) {
+      // Name, surname and phone are mandatory, so this endpoint rejects blanks with a
+      // message worth showing verbatim.
+      const d = e.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Failed");
+    }
   };
 
   const toggleConsent = async (key) => {
@@ -82,8 +92,16 @@ export default function Settings() {
             : <button onClick={resendVerify} className="ml-2 underline hover:text-white">Verify email</button>}
         </div>
         <div className="grid gap-3">
-          <input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} placeholder="Name" className="input-x w-full" />
-          <input value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} placeholder="Phone" className="input-x w-full" />
+          <div className="grid grid-cols-2 gap-3">
+            <input value={profile.first_name} onChange={(e) => setProfile({ ...profile, first_name: e.target.value })} placeholder="Name" data-testid="settings-first-name" className="input-x w-full" />
+            <input value={profile.last_name} onChange={(e) => setProfile({ ...profile, last_name: e.target.value })} placeholder="Surname" data-testid="settings-last-name" className="input-x w-full" />
+          </div>
+          <input type="tel" value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+                 placeholder={requirePhone ? "Phone number" : "Phone number (optional)"}
+                 data-testid="settings-phone" className="input-x w-full" />
+          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+            {requirePhone ? "All three are required on every account." : "Name and surname are required on every account."}
+          </div>
           <button onClick={saveProfile} className="btn-primary w-fit">Save profile</button>
         </div>
       </section>
