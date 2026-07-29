@@ -42,11 +42,11 @@ from starlette.middleware.cors import CORSMiddleware
 # and each bucket has a hard key cap with LRU eviction as a backstop against a burst that
 # outruns the sweep.
 #
-# SECURITY [H1 — STILL OPEN]: the client IP is read straight from `X-Forwarded-For` with
-# no trusted-proxy check, so any caller can pick its own bucket and bypass every limit
-# outright (reproduced: 14/14 requests accepted against a 10/60s limit by rotating the
-# header). Fix = only honour the header when the peer is a configured proxy. Until then
-# these limits stop honest clients and casual abuse, not a determined attacker.
+# SECURITY [H1 — fixed]: the client IP used to be read straight from `X-Forwarded-For`
+# with no trusted-proxy check, so any caller could pick its own bucket and bypass every
+# limit outright (reproduced: 14/14 requests accepted against a 10/60s limit by rotating
+# the header). Forwarding headers are now believed only when TRUSTED_IP_HEADER names one
+# — see the note on that constant below.
 from collections import defaultdict, deque, OrderedDict
 from threading import Lock
 
@@ -105,11 +105,44 @@ def _rate_check(bucket: str, key: str, max_calls: int, window_seconds: int):
     return None
 
 
+# SECURITY [H1 — fixed]: which header, if any, may be believed when it claims to carry
+# the client's IP. A forwarding header is only trustworthy when something in front of the
+# app overwrites it on every request; otherwise the caller picks its own value and with it
+# its own rate-limit bucket. So nothing is trusted unless it is named here:
+#
+#   unset (default)             direct exposure or local dev — use the socket peer.
+#   x-vercel-forwarded-for      on Vercel. The platform sets it itself and discards any
+#                               client-supplied copy, so it cannot be spoofed.
+#   x-forwarded-for             behind your own nginx/ALB — ONLY if that proxy replaces
+#                               the header rather than appending to it, and the app is
+#                               unreachable except through it.
+#
+# Note this is deliberately not `x-forwarded-for` by default. That was the old behaviour
+# and it made every limit in the app bypassable by rotating the header, which turned
+# /api/newsletter and /api/auth/forgot-password into mail-bomb amplifiers.
+TRUSTED_IP_HEADER = os.environ.get("TRUSTED_IP_HEADER", "").strip().lower()
+
+
+def _client_ip(request: Optional[Request]) -> str:
+    """The caller's IP, or "" when it cannot be established.
+
+    Used both for rate-limit bucketing and as the evidence recorded in the consent log,
+    so a spoofable value here is worth more than it looks.
+    """
+    if request is None:
+        return ""
+    if TRUSTED_IP_HEADER:
+        # Left-most entry is the original client; the proxy appends itself to the right.
+        forwarded = request.headers.get(TRUSTED_IP_HEADER, "").split(",")[0].strip()
+        if forwarded:
+            return forwarded
+    return request.client.host if request.client else ""
+
+
 def rate_limit(key: str, max_calls: int, window_seconds: int):
     """Returns a FastAPI dependency that raises 429 when exceeded."""
     async def _dep(request: Request):
-        # SECURITY [H1]: untrusted header — see the note above.
-        ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
+        ip = _client_ip(request) or "unknown"
         with _rate_lock:
             retry_after = _rate_check(key, ip, max_calls, window_seconds)
         if retry_after is not None:
@@ -126,6 +159,11 @@ import stripe as stripe_sdk
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+# Imported after load_dotenv, not with the other imports at the top: storage picks its
+# backend from BLOB_READ_WRITE_TOKEN at import time, and on a laptop that variable comes
+# from .env rather than the real environment.
+import storage  # noqa: E402
+
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "").strip()
@@ -133,6 +171,12 @@ STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
 INITIAL_ADMIN_EMAIL = os.environ.get("INITIAL_ADMIN_EMAIL", "").strip().lower()
 
 APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
+
+# True when running as short-lived function instances rather than one long-lived process.
+# Vercel sets VERCEL=1 in every build and runtime environment; set it by hand on another
+# serverless host. It only changes lifecycle assumptions (see the shutdown hook), never
+# behaviour a request can observe.
+SERVERLESS = bool(os.environ.get("VERCEL", "").strip())
 # Public origin of the FRONTEND (where OAuth callbacks and email links send users
 # back to). Its scheme also decides how session cookies are scoped (below).
 PUBLIC_APP_URL = os.environ.get("PUBLIC_APP_URL", "http://localhost:3000").rstrip("/")
@@ -192,6 +236,18 @@ SESSION_SECRET = os.environ.get("SESSION_SECRET", "").strip()
 if not SESSION_SECRET:
     if APP_ENV == "production":
         raise RuntimeError("SESSION_SECRET is required when APP_ENV=production")
+    if SERVERLESS:
+        # The dev fallback below mints a secret per process. One uvicorn on a laptop has
+        # exactly one of those; a serverless deployment has one per instance, so a
+        # verification or reset link signed by the instance that sent the email is
+        # rejected by whichever instance the user's click lands on. It would fail
+        # intermittently, look like a token-expiry bug, and never reproduce locally.
+        raise RuntimeError(
+            "SESSION_SECRET must be set on a serverless host, regardless of APP_ENV: "
+            "instances do not share an ephemeral secret, so email-verification, "
+            "password-reset and newsletter links would validate only by coincidence. "
+            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
     SESSION_SECRET = "dev-insecure-" + secrets.token_hex(16)
     logger.warning("SESSION_SECRET not set — using an ephemeral dev secret; tokens reset on restart")
 
@@ -209,7 +265,18 @@ if not SESSION_SECRET:
 # CSP, X-Frame-Options, nosniff, or Referrer-Policy. The Referrer-Policy gap matters most
 # because email-verification and password-reset tokens travel in the URL query string.
 COOKIE_SECURE = PUBLIC_APP_URL.startswith("https://")
-COOKIE_SAMESITE = "none" if COOKIE_SECURE else "lax"
+# The default below assumes the API is on a different origin from the frontend, which is
+# what "none" is for. When they are the SAME origin — the Vercel services layout serves
+# the frontend and /api from one domain — that assumption is wrong and needlessly costly:
+# SameSite=None means the session cookie rides along on cross-site requests, and this app
+# has no CSRF token or Origin check to catch them (M3). Set COOKIE_SAMESITE=lax there.
+COOKIE_SAMESITE = os.environ.get("COOKIE_SAMESITE", "").strip().lower() or (
+    "none" if COOKIE_SECURE else "lax"
+)
+if COOKIE_SAMESITE not in {"lax", "strict", "none"}:
+    raise RuntimeError(f"COOKIE_SAMESITE must be lax, strict or none (got {COOKIE_SAMESITE!r})")
+if COOKIE_SAMESITE == "none" and not COOKIE_SECURE:
+    raise RuntimeError("COOKIE_SAMESITE=none requires an https PUBLIC_APP_URL; browsers drop the cookie otherwise")
 
 # OAuth providers — each is fully optional. A provider whose vars are unset simply
 # doesn't appear in GET /auth/methods and its start/callback endpoints return 404.
@@ -230,15 +297,33 @@ APPLE_PRIVATE_KEY = os.environ.get("APPLE_PRIVATE_KEY", "").strip()  # .p8 conte
 APPLE_REDIRECT_URI = os.environ.get("APPLE_REDIRECT_URI", "").strip()
 APPLE_ENABLED = bool(APPLE_CLIENT_ID and APPLE_TEAM_ID and APPLE_KEY_ID and APPLE_PRIVATE_KEY and APPLE_REDIRECT_URI)
 
-client = AsyncIOMotorClient(MONGO_URL)
+# Pool sizing matters on serverless hosts, where "one app" is really N short-lived
+# instances that each open their own pool. Motor's default ceiling of 100 sockets per
+# instance will exhaust an Atlas cluster's connection allowance (500 on M0/M10) after a
+# handful of concurrent instances, and the symptom is connection errors under load rather
+# than anything obviously pool-shaped. A single request only ever needs a couple of
+# sockets, so cap it low and let the instance count do the scaling.
+MONGO_MAX_POOL_SIZE = int(os.environ.get("MONGO_MAX_POOL_SIZE", "5"))
+client = AsyncIOMotorClient(
+    MONGO_URL,
+    maxPoolSize=MONGO_MAX_POOL_SIZE,
+    # Fail fast rather than sitting on a request until the platform's own timeout kills
+    # it — a misconfigured MONGO_URL or a missing Atlas IP allowlist entry should surface
+    # as a prompt 500, not a 60-second hang.
+    serverSelectionTimeoutMS=int(os.environ.get("MONGO_SERVER_SELECTION_TIMEOUT_MS", "5000")),
+)
 db = client[DB_NAME]
 
 app = FastAPI(title="Supersanity API")
 api = APIRouter(prefix="/api")
 
-UPLOAD_DIR = ROOT_DIR / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+# Uploaded media lives in Vercel Blob when BLOB_READ_WRITE_TOKEN is set, and on local
+# disk otherwise — see storage.py. The /uploads mount exists only in the local case:
+# under Blob the stored URLs are absolute and served by Vercel's CDN, and creating or
+# mounting a directory inside a read-only function bundle would abort the cold start.
+if storage.is_local():
+    UPLOAD_DIR = storage.ensure_local_dir()
+    app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 IMAGE_CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
 VIDEO_CONTENT_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov"}
@@ -425,17 +510,6 @@ def _valid_email(email: str) -> bool:
     # relying on the transport.
     email = (email or "").strip()
     return "@" in email and "." in email.split("@")[-1] and 3 <= len(email) <= 254
-
-
-def _client_ip(request: Optional[Request]) -> str:
-    # SECURITY [H1]: same untrusted-header problem as rate_limit(). Here the consequence
-    # is weaker but not nil — this value is written to the consent log as the evidence of
-    # where consent came from, so a spoofed header makes that audit record unreliable.
-    if request is None:
-        return ""
-    return request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-        request.client.host if request.client else ""
-    )
 
 
 def _email_rate_check(bucket: str, email: str, max_calls: int, window: int):
@@ -2235,24 +2309,6 @@ async def admin_update_gallery(gallery_id: str, body: GalleryPatchIn, user=Depen
     return await db.gallery.find_one({"gallery_id": gallery_id}, {"_id": 0})
 
 
-def _delete_upload_file(url: Optional[str]):
-    """Remove a file this app stored. Only ever touches names directly inside
-    UPLOAD_DIR — remote URLs (seeded Unsplash items) and any path trying to climb
-    out of the directory are ignored."""
-    if not url or not url.startswith("/uploads/"):
-        return
-    name = url.split("/uploads/", 1)[1]
-    if not name or "/" in name or "\\" in name or name.startswith("."):
-        return
-    target = (UPLOAD_DIR / name).resolve()
-    if target.parent != UPLOAD_DIR.resolve() or not target.is_file():
-        return
-    try:
-        target.unlink()
-    except OSError:
-        logger.exception("Could not delete upload %s", name)
-
-
 @api.delete("/admin/gallery/{gallery_id}")
 async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
     item = await db.gallery.find_one({"gallery_id": gallery_id}, {"_id": 0})
@@ -2261,10 +2317,10 @@ async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
     await db.gallery.delete_one({"gallery_id": gallery_id})
     # Drop the bytes too, or uploads accumulate forever. The thumbnail may be the
     # same URL as the original (videos without a poster), so guard against that.
-    _delete_upload_file(item.get("image_url"))
+    await storage.delete(item.get("image_url"))
     thumb = item.get("thumbnail_url")
     if thumb and thumb != item.get("image_url"):
-        _delete_upload_file(thumb)
+        await storage.delete(thumb)
     # Promote a new cover if this was it, so the album never loses its cover.
     if item.get("is_cover"):
         nxt = await db.gallery.find({"event_id": item.get("event_id")}).sort([("sort_order", 1)]).limit(1).to_list(1)
@@ -2303,7 +2359,7 @@ async def admin_upload_media(
         raise HTTPException(400, "File too large (max 25MB)")
 
     file_id = uuid.uuid4().hex
-    (UPLOAD_DIR / f"{file_id}{ext}").write_bytes(data)
+    url = await storage.save(f"{file_id}{ext}", data, content_type)
 
     thumbnail_url = None
     if media_type == "image":
@@ -2311,9 +2367,9 @@ async def admin_upload_media(
             img = Image.open(io.BytesIO(data))
             img = img.convert("RGB")
             img.thumbnail((640, 640))
-            thumb_name = f"{file_id}_thumb.jpg"
-            img.save(UPLOAD_DIR / thumb_name, "JPEG", quality=82)
-            thumbnail_url = f"/uploads/{thumb_name}"
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=82)
+            thumbnail_url = await storage.save(f"{file_id}_thumb.jpg", buf.getvalue(), "image/jpeg")
         except Exception:
             logger.exception("Thumbnail generation failed for upload %s", file_id)
     elif poster is not None:
@@ -2326,15 +2382,15 @@ async def admin_upload_media(
                 raise ValueError("poster too large")
             pimg = Image.open(io.BytesIO(pdata)).convert("RGB")
             pimg.thumbnail((640, 640))
-            thumb_name = f"{file_id}_poster.jpg"
-            pimg.save(UPLOAD_DIR / thumb_name, "JPEG", quality=82)
-            thumbnail_url = f"/uploads/{thumb_name}"
+            buf = io.BytesIO()
+            pimg.save(buf, "JPEG", quality=82)
+            thumbnail_url = await storage.save(f"{file_id}_poster.jpg", buf.getvalue(), "image/jpeg")
         except Exception:
             logger.exception("Poster processing failed for upload %s", file_id)
 
     return {
-        "url": f"/uploads/{file_id}{ext}",
-        "thumbnail_url": thumbnail_url or f"/uploads/{file_id}{ext}",
+        "url": url,
+        "thumbnail_url": thumbnail_url or url,
         "media_type": media_type,
         "has_poster": bool(thumbnail_url) if media_type == "video" else True,
     }
@@ -2531,7 +2587,47 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+# Bump when a change below needs to run against an already-initialised database.
+SCHEMA_VERSION = 1
+
+
 @app.on_event("startup")
+async def init_app():
+    """One-time database setup, skipped once the database says it is already done.
+
+    This used to be two unconditional startup hooks. That is fine for a long-lived
+    uvicorn process that starts once a week, and wrong for a serverless host, where every
+    cold start is a fresh "boot": each one would re-scan `user_sessions` end to end and
+    walk every gallery bucket before serving its first request, on an instance that may
+    exist for one request.
+
+    So the work is gated on a marker document. The gate also covers INITIAL_ADMIN_EMAIL,
+    which is why the marker stores it — changing that variable has to re-run the
+    promotion, or an operator setting it after the first deploy would see nothing happen.
+
+    Two cold starts can still race through the gate together. Everything below is
+    idempotent (`create_index` and the migrations all converge on the same state), so the
+    cost of losing that race is duplicated work, not corruption.
+    """
+    marker = {"version": SCHEMA_VERSION, "admin_email": INITIAL_ADMIN_EMAIL}
+    try:
+        current = await db.app_meta.find_one({"_id": "init"}, {"_id": 0, "version": 1, "admin_email": 1})
+        if current == marker:
+            return
+    except Exception:
+        # An unreachable database here means the whole app is broken anyway; fall through
+        # and let the real operations below produce a useful error in the logs.
+        logger.exception("Could not read the init marker — running setup unconditionally")
+
+    await init_indexes()
+    await bootstrap_admin()
+
+    try:
+        await db.app_meta.update_one({"_id": "init"}, {"$set": marker}, upsert=True)
+    except Exception:
+        logger.exception("Could not record the init marker — setup will re-run next boot")
+
+
 async def bootstrap_admin():
     """Promote INITIAL_ADMIN_EMAIL to admin, and warn when nobody can administer.
 
@@ -2566,7 +2662,6 @@ async def bootstrap_admin():
         )
 
 
-@app.on_event("startup")
 async def init_indexes():
     """Create indexes idempotently on boot.
 
@@ -2666,4 +2761,10 @@ async def migrate_gallery_ordering():
 
 @app.on_event("shutdown")
 async def shutdown():
-    client.close()
+    # Only close the pool where "shutdown" means the process is going away for good.
+    # Serverless instances are torn down with the pool still open — Vercel allows ~500ms
+    # after SIGTERM and does not surface logs from it — so there is nothing to gain by
+    # closing here, and a closed client on an instance the runtime turns out to reuse
+    # fails the next request with an InvalidOperation that looks nothing like its cause.
+    if not SERVERLESS:
+        client.close()

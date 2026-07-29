@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { http } from "../api";
+import { http, API } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -557,7 +557,7 @@ function NewsletterAdmin() {
   const load = () => http.get("/admin/newsletter").then((r) => setItems(r.data));
   useEffect(() => { load(); }, []);
   const del = async (id) => { if (!window.confirm("Remove subscriber?")) return; await http.delete(`/admin/newsletter/${id}`); load(); };
-  const csvUrl = `${process.env.REACT_APP_BACKEND_URL}/api/admin/newsletter.csv`;
+  const csvUrl = `${API}/admin/newsletter.csv`;
   return (
     <div>
       <div className="flex justify-between items-center mb-4">

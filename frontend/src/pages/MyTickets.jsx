@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
-import { http } from "../api";
+import { http, API } from "../api";
 import { useAuth, startLogin } from "../auth";
 import { Link } from "react-router-dom";
 
@@ -62,7 +62,7 @@ export default function MyTickets() {
                 <div className="col-span-4 font-mono-x text-xs text-zinc-400">{new Date(i.issued_at).toLocaleDateString("en-GB")}</div>
                 <div className="col-span-2 font-mono-x">{i.total.toFixed(2)} {i.currency}</div>
                 <div className="col-span-2 text-right">
-                  <a href={`${process.env.REACT_APP_BACKEND_URL}/api/invoices/${i.invoice_id}/pdf`} target="_blank" rel="noreferrer"
+                  <a href={`${API}/invoices/${i.invoice_id}/pdf`} target="_blank" rel="noreferrer"
                      className="btn-primary inline-block" data-testid={`invoice-pdf-${i.invoice_id}`}>PDF</a>
                 </div>
               </div>

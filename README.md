@@ -5,16 +5,17 @@ box office (reserve → Stripe checkout → QR ticket), door scanner, and a self
 GDPR/CAN-SPAM-aware user-management stack.
 
 - **Backend**: FastAPI + MongoDB (Motor), single module `backend/server.py` (+
-  `cms_routes.py`, `mailer.py`).
+  `cms_routes.py`, `mailer.py`, `storage.py`).
 - **Frontend**: React 19 (CRA/craco), `frontend/`.
+- **Deploying**: one Vercel project, two services — see **[DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md)**.
 
 > **Status: hardening in progress.**
-> A security audit found one critical and three high-severity issues. **C1 (payment
-> bypass), H3 (admin takeover) and H2 (limiter memory DoS) are fixed**, along with M1
-> (security headers) and M2 (plaintext session tokens). **H1 remains open** and is now
-> the top priority: `X-Forwarded-For` is trusted unconditionally, so every rate limit is
-> still bypassable. See **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)** and the checklist
-> below before deploying.
+> A security audit found one critical and three high-severity issues. **All four are now
+> fixed** — C1 (payment bypass), H1 (spoofable rate-limit key), H2 (limiter memory DoS)
+> and H3 (admin takeover) — along with M1 (security headers) and M2 (plaintext session
+> tokens). See **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)** and the checklist below
+> before deploying, and note that **P1–P3 are still open**, including M3: there is no
+> CSRF token or Origin check on state-changing routes.
 
 ## Run it locally
 
@@ -57,15 +58,20 @@ The audit's P0 items.
       `Permissions-Policy` and a path-specific CSP on every response, plus HSTS on HTTPS.
 - [x] **Session tokens hashed at rest.** *(M2)* Only `sha256(token)` is stored; existing
       sessions were migrated in place without logging anyone out.
-- [ ] **Trusted-proxy handling.** `X-Forwarded-For` is trusted unconditionally, so every
-      rate limit in the app is bypassable by rotating the header (verified). Gate it on a
-      proxy allowlist and run uvicorn with `--forwarded-allow-ips`. **This is the top
-      remaining item** — until it lands, `/api/newsletter` and `/api/auth/forgot-password`
-      work as mail-bomb amplifiers against arbitrary third parties. *(H1)*
+- [x] **Trusted-proxy handling.** *(H1)* `X-Forwarded-For` used to be trusted
+      unconditionally, so every rate limit was bypassable by rotating the header
+      (verified) and `/api/newsletter` and `/api/auth/forgot-password` worked as
+      mail-bomb amplifiers. Forwarding headers are now believed only when
+      `TRUSTED_IP_HEADER` names one; unset — the default — means the socket peer is
+      used. Set it to `x-vercel-forwarded-for` on Vercel, or to `x-forwarded-for` behind
+      a proxy that **replaces** rather than appends to the header. Getting this wrong in
+      the other direction is silent, so leave it blank if you are not sure.
 
 Configuration the app already enforces (it refuses to start otherwise): `APP_ENV=production`,
-a 32-byte `SESSION_SECRET`, and an explicit `CORS_ORIGINS` allowlist. Set
-`INITIAL_ADMIN_EMAIL` too, or nobody can administer the site.
+a 32-byte `SESSION_SECRET`, and an explicit `CORS_ORIGINS` allowlist. `SESSION_SECRET` is
+required on any serverless host regardless of `APP_ENV`, because the dev fallback is
+per-process and instances do not share it. Set `INITIAL_ADMIN_EMAIL` too, or nobody can
+administer the site.
 
 Then work through P1–P3 in the audit.
 
