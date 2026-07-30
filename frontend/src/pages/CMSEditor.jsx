@@ -8,21 +8,48 @@ import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } fro
 import { FormatToolbar } from "../lib/richText";
 import ImageField from "../components/ImageField";
 
+// Wait this long after the last edit before saving...
 const AUTOSAVE_MS = 1200;
+// ...but never leave work unsaved for longer than this. The debounce alone resets on
+// every keystroke, so someone typing steadily for two minutes had nothing persisted for
+// two minutes.
+const AUTOSAVE_MAX_WAIT_MS = 5000;
+// Consecutive edits to the SAME field within this window collapse into one undo entry.
+// Without it every keystroke pushed its own, and the 50-step history held less than a
+// sentence. Must stay above FIELD_MAX_WAIT_MS, or a continuous typing run would outpace
+// the window and fragment into an entry per push.
+const HISTORY_COALESCE_MS = 900;
+const HISTORY_LIMIT = 50;
 
 export default function CMSEditor() {
   const { user, loading } = useAuth();
   const [pages, setPages] = useState([]);
   const [currentId, setCurrentId] = useState(null);
   const [page, setPage] = useState(null);
-  const [selectedIdx, setSelectedIdx] = useState(null);
+  // Selection is by block_id, not index: edits are debounced now, so a commit can land
+  // after the selection moved and an index would by then point at a different block.
+  const [selectedId, setSelectedId] = useState(null);
   const [device, setDevice] = useState("desktop");
   const [rightTab, setRightTab] = useState("props"); // props | theme | versions
-  const [undoStack, setUndoStack] = useState([]);
-  const [redoStack, setRedoStack] = useState([]);
   const [savedAt, setSavedAt] = useState(null);
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+  const [dirty, setDirty] = useState(false);
   const [theme, setTheme] = useState(null);
   const [showNewPage, setShowNewPage] = useState(false);
+
+  // `page` drives rendering; pageRef is what mutations read. It is updated synchronously
+  // inside commit(), so two edits in the same tick still compose instead of the second
+  // overwriting the first from a stale render snapshot.
+  const pageRef = useRef(null);
+  // History lives in refs rather than state: pushing it from inside a setState updater
+  // would double up under StrictMode, and nothing renders from the entries themselves.
+  const undoRef = useRef([]);
+  const redoRef = useRef([]);
+  const [historyTick, setHistoryTick] = useState(0); // re-renders the undo/redo buttons
+  const lastEditRef = useRef({ key: null, at: 0 });
+  const savedDraftRef = useRef(null); // identity of the last draft the server acknowledged
+  const dirtySinceRef = useRef(0);
+  const [revision, setRevision] = useState(0); // bumps per edit; re-arms the save timer
 
   // Load pages + theme
   useEffect(() => {
@@ -37,74 +64,207 @@ export default function CMSEditor() {
     });
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Adopt a page straight from the server: nothing to save, no history behind it. */
+  const loadPage = useCallback((p) => {
+    pageRef.current = p;
+    savedDraftRef.current = p?.draft || null;
+    setPage(p);
+    setDirty(false);
+    setSaveState("idle");
+    undoRef.current = [];
+    redoRef.current = [];
+    lastEditRef.current = { key: null, at: 0 };
+    setHistoryTick((t) => t + 1);
+  }, []);
+
   // Load current page
   useEffect(() => {
     if (!currentId) return;
     http.get(`/admin/cms/pages/${currentId}`).then((r) => {
-      setPage(r.data);
-      setSelectedIdx(null);
-      setUndoStack([]); setRedoStack([]);
+      loadPage(r.data);
+      setSelectedId(null);
     });
-  }, [currentId]);
+  }, [currentId, loadPage]);
 
-  const blocks = page?.draft?.blocks || [];
+  // Memoized so the empty-page fallback isn't a fresh array identity on every render,
+  // which would defeat the memoization downstream of it.
+  const blocks = useMemo(() => page?.draft?.blocks || [], [page]);
 
-  // ----- Undo/redo helpers -----
-  const commit = useCallback((newBlocks, opts = {}) => {
-    if (!page) return;
-    setUndoStack((u) => [...u.slice(-49), page.draft.blocks]);
-    if (!opts.keepRedo) setRedoStack([]);
-    setPage({ ...page, draft: { blocks: newBlocks } });
-  }, [page]);
+  // ----- History -----
+  /** Record the pre-edit state, unless this edit continues the previous one.
+   *
+   * `coalesceKey` identifies "the same thing being edited" — one block's one field.
+   * Typing runs push a commit every few hundred ms, and collapsing them means undo
+   * steps back over a whole phrase instead of one letter. Structural edits pass no key
+   * and therefore always get their own entry. */
+  const pushHistory = useCallback((prevBlocks, coalesceKey) => {
+    const now = Date.now();
+    const last = lastEditRef.current;
+    const continues = coalesceKey != null && coalesceKey === last.key && now - last.at < HISTORY_COALESCE_MS;
+    lastEditRef.current = { key: coalesceKey ?? null, at: now };
+    if (continues) return;
+    undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), prevBlocks];
+    redoRef.current = [];
+    setHistoryTick((t) => t + 1);
+  }, []);
 
-  const undo = () => {
-    if (undoStack.length === 0) return;
-    const prev = undoStack[undoStack.length - 1];
-    setUndoStack((u) => u.slice(0, -1));
-    setRedoStack((r) => [...r, page.draft.blocks]);
-    setPage({ ...page, draft: { blocks: prev } });
-  };
-  const redo = () => {
-    if (redoStack.length === 0) return;
-    const next = redoStack[redoStack.length - 1];
-    setRedoStack((r) => r.slice(0, -1));
-    setUndoStack((u) => [...u, page.draft.blocks]);
-    setPage({ ...page, draft: { blocks: next } });
-  };
+  /** The single write path for the draft.
+   *
+   * Takes an updater over the CURRENT blocks (read from pageRef, which is written
+   * synchronously below) rather than a precomputed array off a render snapshot, so a
+   * debounced field commit that lands late still composes with whatever happened since.
+   * Returning the same array means "nothing changed" and is a no-op. */
+  const commit = useCallback((updater, coalesceKey) => {
+    const prev = pageRef.current;
+    if (!prev) return;
+    const prevBlocks = prev.draft.blocks;
+    const nextBlocks = typeof updater === "function" ? updater(prevBlocks) : updater;
+    if (nextBlocks === prevBlocks) return;
 
-  // ----- Autosave -----
-  const savingRef = useRef(null);
+    pushHistory(prevBlocks, coalesceKey);
+    const nextPage = { ...prev, draft: { blocks: nextBlocks } };
+    pageRef.current = nextPage;
+    setPage(nextPage);
+    if (!dirtySinceRef.current) dirtySinceRef.current = Date.now();
+    setDirty(true);
+    setRevision((r) => r + 1);
+  }, [pushHistory]);
+
+  const applyHistory = useCallback((from, to) => {
+    const prev = pageRef.current;
+    if (!prev || from.current.length === 0) return;
+    const blocksToApply = from.current[from.current.length - 1];
+    from.current = from.current.slice(0, -1);
+    to.current = [...to.current, prev.draft.blocks];
+    // An undo must never be folded into the typing run that preceded it.
+    lastEditRef.current = { key: null, at: 0 };
+    const nextPage = { ...prev, draft: { blocks: blocksToApply } };
+    pageRef.current = nextPage;
+    setPage(nextPage);
+    if (!dirtySinceRef.current) dirtySinceRef.current = Date.now();
+    setDirty(true);
+    setRevision((r) => r + 1);
+    setHistoryTick((t) => t + 1);
+  }, []);
+
+  const undo = useCallback(() => applyHistory(undoRef, redoRef), [applyHistory]);
+  const redo = useCallback(() => applyHistory(redoRef, undoRef), [applyHistory]);
+
+  // ----- Saving -----
+  const inFlightRef = useRef(false);
+  const queuedRef = useRef(false);
+
+  /** Write the current draft. Never runs two requests at once: a save requested while
+   * one is in flight is queued and re-run with the newest draft afterwards, so a slow
+   * request can't land after a newer one and resurrect stale content. */
+  const saveNow = useCallback(async () => {
+    const p = pageRef.current;
+    if (!p) return;
+    if (p.draft === savedDraftRef.current) return; // nothing new
+    if (inFlightRef.current) { queuedRef.current = true; return; }
+
+    const snapshot = p.draft;
+    inFlightRef.current = true;
+    setSaveState("saving");
+    try {
+      await http.patch(`/admin/cms/pages/${p.page_id}`, { draft: snapshot });
+      savedDraftRef.current = snapshot;
+      setSavedAt(Date.now());
+      setSaveState("saved");
+      // Only clear the flag if nothing was typed while the request was in the air.
+      if (pageRef.current?.draft === snapshot) {
+        setDirty(false);
+        dirtySinceRef.current = 0;
+      }
+    } catch {
+      // Failures used to be swallowed, which left the editor claiming "Saved just now"
+      // while the work existed only in this tab. The next edit re-arms the timer, so
+      // this retries on its own; the status line says so meanwhile.
+      setSaveState("error");
+    } finally {
+      inFlightRef.current = false;
+      if (queuedRef.current) { queuedRef.current = false; saveNow(); }
+    }
+  }, []);
+
+  // Debounced, but with a ceiling: the plain debounce reset on every keystroke, so
+  // continuous typing was never interrupted long enough to trigger a save at all.
   useEffect(() => {
-    if (!page) return;
-    clearTimeout(savingRef.current);
-    savingRef.current = setTimeout(async () => {
-      try {
-        await http.patch(`/admin/cms/pages/${page.page_id}`, { draft: page.draft });
-        setSavedAt(Date.now());
-      } catch (e) { /* silent */ }
-    }, AUTOSAVE_MS);
-    return () => clearTimeout(savingRef.current);
-  }, [page]);
+    if (!dirty) return undefined;
+    const elapsed = dirtySinceRef.current ? Date.now() - dirtySinceRef.current : 0;
+    const wait = Math.max(0, Math.min(AUTOSAVE_MS, AUTOSAVE_MAX_WAIT_MS - elapsed));
+    const t = setTimeout(saveNow, wait);
+    return () => clearTimeout(t);
+  }, [revision, dirty, saveNow]);
+
+  // Last lines of defence for work still sitting in the debounce window.
+  useEffect(() => {
+    const onBeforeUnload = (e) => {
+      if (pageRef.current && pageRef.current.draft !== savedDraftRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    const onVisibility = () => { if (document.visibilityState === "hidden") saveNow(); };
+    const onKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveNow(); }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [saveNow]);
+
+  /** Switching pages replaces `page` wholesale — flush first or the last edit is lost. */
+  const selectPage = useCallback((pid) => {
+    if (pid === pageRef.current?.page_id) return;
+    saveNow();
+    setCurrentId(pid);
+  }, [saveNow]);
 
   // ----- Block ops -----
+  const selectBlock = useCallback((id) => setSelectedId(id), []);
+
   const addBlock = (type) => {
     const b = { block_id: newBlockId(), type, enabled: true, props: BLOCK_DEFAULTS[type]() };
-    const idx = selectedIdx == null ? blocks.length : selectedIdx + 1;
-    const next = [...blocks.slice(0, idx), b, ...blocks.slice(idx)];
-    commit(next);
-    setSelectedIdx(idx);
+    commit((prev) => {
+      const after = prev.findIndex((x) => x.block_id === selectedId);
+      const idx = after < 0 ? prev.length : after + 1;
+      return [...prev.slice(0, idx), b, ...prev.slice(idx)];
+    });
+    setSelectedId(b.block_id);
   };
   const moveBlock = (i, dir) => {
-    const j = i + dir;
-    if (j < 0 || j >= blocks.length) return;
-    const next = [...blocks];
-    [next[i], next[j]] = [next[j], next[i]];
-    commit(next);
-    setSelectedIdx(j);
+    commit((prev) => {
+      const j = i + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
   };
-  const removeBlock = (i) => { commit(blocks.filter((_, k) => k !== i)); setSelectedIdx(null); };
-  const toggleBlock = (i) => { const next = [...blocks]; next[i] = { ...next[i], enabled: next[i].enabled === false ? true : false }; commit(next); };
-  const updateProps = (i, patch) => { const next = [...blocks]; next[i] = { ...next[i], props: { ...next[i].props, ...patch } }; commit(next); };
+  const removeBlock = (i) => {
+    const removed = blocks[i];
+    commit((prev) => prev.filter((_, k) => k !== i));
+    if (removed && removed.block_id === selectedId) setSelectedId(null);
+  };
+  const toggleBlock = (i) => commit((prev) => {
+    const next = [...prev];
+    next[i] = { ...next[i], enabled: next[i].enabled === false };
+    return next;
+  });
+  /** Targets a block by id, so a debounced field commit still hits the right block even
+   * if the selection moved while it was pending. */
+  const updateProps = useCallback((blockId, patch, coalesceKey) => {
+    commit(
+      (prev) => prev.map((b) => (b.block_id === blockId ? { ...b, props: { ...b.props, ...patch } } : b)),
+      coalesceKey,
+    );
+  }, [commit]);
 
   // ----- Drag & drop reorder -----
   const dragIdx = useRef(null);
@@ -113,26 +273,32 @@ export default function CMSEditor() {
   const onDrop = (i) => (e) => {
     e.preventDefault();
     const from = dragIdx.current;
-    if (from == null || from === i) return;
-    const next = [...blocks];
-    const [moved] = next.splice(from, 1);
-    next.splice(i, 0, moved);
-    commit(next); setSelectedIdx(i);
     dragIdx.current = null;
+    if (from == null || from === i) return;
+    commit((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(i, 0, moved);
+      return next;
+    });
   };
 
   // ----- Publish / revert -----
   const publish = async () => {
+    // Publish snapshots what the SERVER holds as the draft, so anything still sitting in
+    // the debounce window has to go up first or it silently doesn't get published.
+    await saveNow();
     await http.post(`/admin/cms/pages/${page.page_id}/publish`);
     toast.success("Published live");
     const r = await http.get(`/admin/cms/pages/${page.page_id}`);
-    setPage(r.data);
+    loadPage(r.data);
   };
   const revert = async (version_id) => {
     await http.post(`/admin/cms/pages/${page.page_id}/revert/${version_id}`);
     toast.success("Version loaded into draft");
     const r = await http.get(`/admin/cms/pages/${page.page_id}`);
-    setPage(r.data); setSelectedIdx(null); setUndoStack([]); setRedoStack([]);
+    loadPage(r.data);
+    setSelectedId(null);
   };
 
   // ----- Pages CRUD -----
@@ -151,8 +317,12 @@ export default function CMSEditor() {
     setCurrentId(r.data[0]?.page_id || null);
   };
   const updatePageMeta = async (patch) => {
+    // The response carries the server's copy of the draft, which is behind whatever is
+    // pending locally — keep the local draft and take only the metadata.
     const r = await http.patch(`/admin/cms/pages/${page.page_id}`, patch);
-    setPage(r.data);
+    const merged = { ...r.data, draft: pageRef.current?.draft || r.data.draft };
+    pageRef.current = merged;
+    setPage(merged);
     const list = await http.get("/admin/cms/pages");
     setPages(list.data);
   };
@@ -180,13 +350,10 @@ export default function CMSEditor() {
     setTheme(r.data);
   };
 
-  const selectedBlock = selectedIdx != null ? blocks[selectedIdx] : null;
-
-  const savedLabel = useMemo(() => {
-    if (!savedAt) return "Not saved";
-    const s = Math.floor((Date.now() - savedAt) / 1000);
-    return s < 5 ? "Saved just now" : `Saved ${s}s ago`;
-  }, [savedAt]);
+  const selectedBlock = useMemo(
+    () => (selectedId ? blocks.find((b) => b.block_id === selectedId) || null : null),
+    [blocks, selectedId],
+  );
 
   if (loading) return <div className="p-16 font-mono-x text-zinc-500">Loading…</div>;
   if (!user || (user.role !== "admin" && user.role !== "editor")) return <div className="p-16 text-center font-mono-x">Access denied. CMS is for admin / editor roles.</div>;
@@ -199,7 +366,7 @@ export default function CMSEditor() {
       <div className="hairline-b bg-black px-4 py-3 flex items-center gap-3 flex-wrap">
         <div className="font-display uppercase font-black tracking-tighter text-lg">SUPERSANITY<span className="text-[color:var(--accent)]">/</span>CMS</div>
         <div className="hidden md:block h-6 border-l border-white/10 mx-2" />
-        <select value={currentId || ""} onChange={(e) => setCurrentId(e.target.value)} data-testid="page-select" className="input-x !py-1.5 !px-2 max-w-[280px]">
+        <select value={currentId || ""} onChange={(e) => selectPage(e.target.value)} data-testid="page-select" className="input-x !py-1.5 !px-2 max-w-[280px]">
           {pages.map((p) => <option key={p.page_id} value={p.page_id}>{p.title} — /p/{p.slug}</option>)}
         </select>
         <button onClick={() => setShowNewPage(true)} data-testid="new-page-btn" className="btn-primary !py-1.5 !px-3 !text-xs"><Plus size={14} className="inline" /> New page</button>
@@ -207,8 +374,10 @@ export default function CMSEditor() {
         <div className="flex-1" />
 
         <div className="hidden md:flex items-center gap-2">
-          <button onClick={undo} disabled={undoStack.length === 0} title="Undo" className="p-2 border border-white/20 hover:bg-white hover:text-black disabled:opacity-30 disabled:pointer-events-none"><Undo2 size={14} /></button>
-          <button onClick={redo} disabled={redoStack.length === 0} title="Redo" className="p-2 border border-white/20 hover:bg-white hover:text-black disabled:opacity-30 disabled:pointer-events-none"><Redo2 size={14} /></button>
+          {/* historyTick is read here purely so these two re-render when the ref-held
+              stacks change; the entries themselves never drive a render. */}
+          <button onClick={undo} disabled={historyTick >= 0 && undoRef.current.length === 0} title="Undo" data-testid="cms-undo" className="p-2 border border-white/20 hover:bg-white hover:text-black disabled:opacity-30 disabled:pointer-events-none"><Undo2 size={14} /></button>
+          <button onClick={redo} disabled={redoRef.current.length === 0} title="Redo" data-testid="cms-redo" className="p-2 border border-white/20 hover:bg-white hover:text-black disabled:opacity-30 disabled:pointer-events-none"><Redo2 size={14} /></button>
         </div>
 
         <div className="flex items-center border border-white/20">
@@ -216,7 +385,11 @@ export default function CMSEditor() {
           <button onClick={() => setDevice("mobile")} className={`p-2 ${device==="mobile"?"bg-white text-black":""}`}><Smartphone size={14} /></button>
         </div>
 
-        <div className="font-mono-x text-[10px] uppercase tracking-[0.25em] text-zinc-500 hidden md:block">{savedLabel}</div>
+        <SaveStatus state={saveState} savedAt={savedAt} dirty={dirty} />
+        <button onClick={saveNow} disabled={!dirty && saveState !== "error"} title="Save draft now (⌘S)"
+                data-testid="save-draft-btn" className="btn-primary !py-1.5 !px-3 !text-xs disabled:opacity-30">
+          Save now
+        </button>
         {page && <a href={`/p/${page.slug}`} target="_blank" rel="noreferrer" className="btn-primary !py-1.5 !px-3 !text-xs">View live</a>}
         <button onClick={publish} data-testid="publish-page-btn" className="btn-accent !py-2 !px-4 !text-xs">Publish</button>
       </div>
@@ -230,7 +403,7 @@ export default function CMSEditor() {
             <ul className="space-y-1">
               {pages.map((p, i) => (
                 <li key={p.page_id} className={`flex items-center justify-between border px-2 py-1.5 text-xs ${p.page_id === currentId ? "border-white bg-white/10" : "border-white/10"}`}>
-                  <button onClick={() => setCurrentId(p.page_id)} className="text-left flex-1 truncate">{p.title}</button>
+                  <button onClick={() => selectPage(p.page_id)} className="text-left flex-1 truncate">{p.title}</button>
                   <div className="flex items-center gap-1">
                     <button onClick={() => movePage(i, -1)} className="text-zinc-500 hover:text-white"><ChevronUp size={12} /></button>
                     <button onClick={() => movePage(i, 1)} className="text-zinc-500 hover:text-white"><ChevronDown size={12} /></button>
@@ -260,8 +433,8 @@ export default function CMSEditor() {
                       onDragStart={onDragStart(i)}
                       onDragOver={onDragOver}
                       onDrop={onDrop(i)}
-                      className={`flex items-center gap-1 border px-2 py-1.5 text-xs cursor-move ${i === selectedIdx ? "border-white bg-white/10" : "border-white/10"} ${b.enabled === false ? "opacity-40" : ""}`}>
-                    <button onClick={() => setSelectedIdx(i)} className="text-left flex-1 truncate">{BLOCK_LABELS[b.type] || b.type}</button>
+                      className={`flex items-center gap-1 border px-2 py-1.5 text-xs cursor-move ${b.block_id === selectedId ? "border-white bg-white/10" : "border-white/10"} ${b.enabled === false ? "opacity-40" : ""}`}>
+                    <button onClick={() => selectBlock(b.block_id)} className="text-left flex-1 truncate">{BLOCK_LABELS[b.type] || b.type}</button>
                     <button onClick={() => toggleBlock(i)} title="Toggle visibility" className="text-zinc-500 hover:text-white">{b.enabled === false ? <EyeOff size={12} /> : <Eye size={12} />}</button>
                     <button onClick={() => moveBlock(i, -1)} className="text-zinc-500 hover:text-white"><ChevronUp size={12} /></button>
                     <button onClick={() => moveBlock(i, 1)} className="text-zinc-500 hover:text-white"><ChevronDown size={12} /></button>
@@ -284,13 +457,8 @@ export default function CMSEditor() {
                     Empty. Add blocks from the left.
                   </div>
                 ) : (
-                  blocks.map((b, i) => (
-                    <div key={b.block_id}
-                         onClick={() => setSelectedIdx(i)}
-                         className={`relative group cursor-pointer ${i === selectedIdx ? "outline outline-2 outline-[color:var(--accent)]" : "hover:outline hover:outline-1 hover:outline-white/40"}`}>
-                      <div className={`absolute top-2 left-2 z-30 font-mono-x text-[9px] uppercase tracking-[0.2em] bg-black text-white px-2 py-1 border border-white/20 ${i === selectedIdx ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>{BLOCK_LABELS[b.type]}</div>
-                      <BlockRenderer block={b} />
-                    </div>
+                  blocks.map((b) => (
+                    <PreviewBlock key={b.block_id} block={b} selected={b.block_id === selectedId} onSelect={selectBlock} />
                   ))
                 )
               ) : (
@@ -310,7 +478,7 @@ export default function CMSEditor() {
 
           <div className="p-4">
             {rightTab === "props" && (selectedBlock ? (
-              <PropsEditor block={selectedBlock} onChange={(patch) => updateProps(selectedIdx, patch)} pageMeta={page} onPageMeta={updatePageMeta} />
+              <PropsEditor block={selectedBlock} onChange={updateProps} pageMeta={page} onPageMeta={updatePageMeta} />
             ) : page ? (
               <PageMetaEditor page={page} onChange={updatePageMeta} />
             ) : null)}
@@ -329,7 +497,143 @@ export default function CMSEditor() {
   );
 }
 
+/** One block in the live preview.
+ *
+ * Memoized, and that is the point: without it every keystroke re-rendered every block on
+ * the page, because the props inputs are driven from the editor's top-level state. Only
+ * the block whose props actually changed (plus the two whose selection outline moved)
+ * re-renders now. `onSelect` must stay referentially stable for this to hold. */
+const PreviewBlock = React.memo(function PreviewBlock({ block, selected, onSelect }) {
+  return (
+    <div onClick={() => onSelect(block.block_id)}
+         className={`relative group cursor-pointer ${selected ? "outline outline-2 outline-[color:var(--accent)]" : "hover:outline hover:outline-1 hover:outline-white/40"}`}>
+      <div className={`absolute top-2 left-2 z-30 font-mono-x text-[9px] uppercase tracking-[0.2em] bg-black text-white px-2 py-1 border border-white/20 ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+        {BLOCK_LABELS[block.type]}
+      </div>
+      <BlockRenderer block={block} />
+    </div>
+  );
+});
+
+/** Honest save indicator. Its own component with its own interval, so the clock ticking
+ * doesn't re-render the editor (and the preview) every few seconds. The label it replaced
+ * was memoized on the save timestamp, so it read "Saved just now" indefinitely — including
+ * while there were unsaved changes sitting in the debounce window. */
+function SaveStatus({ state, savedAt, dirty }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  // A freshly opened page has nothing pending — the server's draft is what's on screen.
+  let label = "No changes";
+  let tone = "text-zinc-500";
+  if (state === "saving") { label = "Saving…"; }
+  else if (state === "error") { label = "Save failed — retrying"; tone = "text-[color:var(--accent)]"; }
+  else if (dirty) { label = "Unsaved changes"; tone = "text-white"; }
+  else if (savedAt) {
+    const s = Math.floor((Date.now() - savedAt) / 1000);
+    label = s < 5 ? "Saved just now" : s < 60 ? `Saved ${s}s ago` : `Saved ${Math.floor(s / 60)}m ago`;
+  }
+  return (
+    <div data-testid="cms-save-status" className={`font-mono-x text-[10px] uppercase tracking-[0.25em] hidden md:block ${tone}`}>
+      {label}
+    </div>
+  );
+}
+
 // -------------- Props editor --------------
+
+// Text fields keep their own value while you type and push upward on this delay. Binding
+// them straight to the editor's state meant a full preview re-render inside every
+// keystroke, and once that render outlasts the gap between two keys, React writes the
+// older state back into the input and the characters typed in between are lost.
+const FIELD_DEBOUNCE_MS = 250;
+// ...and the same ceiling the autosave needs, for the same reason: a debounce that resets
+// on every keystroke never elapses for someone typing steadily, which would freeze the
+// preview mid-sentence and starve the autosave of anything to save. Kept below
+// HISTORY_COALESCE_MS so a continuous run still collapses into one undo entry.
+const FIELD_MAX_WAIT_MS = 600;
+
+function useDebouncedField(external, onCommit) {
+  const [local, setLocal] = useState(external);
+  const localRef = useRef(external);
+  const pushedRef = useRef(external);
+  const timer = useRef(null);
+  const pendingSinceRef = useRef(0);
+  // The commit callback changes identity every render; a pending timeout must call the
+  // latest one rather than the closure it was created with.
+  const commitRef = useRef(onCommit);
+  useEffect(() => { commitRef.current = onCommit; });
+
+  // Adopt changes that came from somewhere else — undo, revert, a version being loaded.
+  // Values this field pushed itself come back identical and are ignored, which is what
+  // keeps the caret from jumping mid-word.
+  useEffect(() => {
+    if (external !== pushedRef.current) {
+      pushedRef.current = external;
+      localRef.current = external;
+      setLocal(external);
+    }
+  }, [external]);
+
+  const push = useCallback((val) => {
+    pushedRef.current = val;
+    pendingSinceRef.current = 0;
+    commitRef.current(val);
+  }, []);
+
+  const onChange = useCallback((val) => {
+    localRef.current = val;
+    setLocal(val);
+    if (!pendingSinceRef.current) pendingSinceRef.current = Date.now();
+    const waited = Date.now() - pendingSinceRef.current;
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => push(val), Math.max(0, Math.min(FIELD_DEBOUNCE_MS, FIELD_MAX_WAIT_MS - waited)));
+  }, [push]);
+
+  const flush = useCallback(() => {
+    clearTimeout(timer.current);
+    if (localRef.current !== pushedRef.current) push(localRef.current);
+  }, [push]);
+
+  // Blur covers clicking away; unmount covers switching block or page mid-word. Commits
+  // target the block by id, so a flush landing after the selection moved is still safe.
+  useEffect(() => () => {
+    clearTimeout(timer.current);
+    if (localRef.current !== pushedRef.current) push(localRef.current);
+  }, [push]);
+
+  return { local, onChange, flush };
+}
+
+function TextField({ value, onCommit, testId }) {
+  const { local, onChange, flush } = useDebouncedField(value, onCommit);
+  return (
+    <input value={local} data-testid={testId} onChange={(e) => onChange(e.target.value)} onBlur={flush}
+           className="input-x !py-2 !text-sm" />
+  );
+}
+
+function TextareaField({ value, onCommit, rows, testId }) {
+  const { local, onChange, flush } = useDebouncedField(value, onCommit);
+  return (
+    <textarea rows={rows || 4} value={local} data-testid={testId} onChange={(e) => onChange(e.target.value)} onBlur={flush}
+              className="input-x !py-2 !text-sm" />
+  );
+}
+
+function ListField({ value, onCommit }) {
+  // Held as text while editing so a blank line mid-typing doesn't drop an item.
+  const { local, onChange, flush } = useDebouncedField((value || []).join("\n"), (text) =>
+    onCommit(text.split("\n").filter(Boolean)));
+  return (
+    <textarea rows={5} value={local} onChange={(e) => onChange(e.target.value)} onBlur={flush}
+              className="input-x !py-2 !text-sm font-mono-x" />
+  );
+}
+
 const FIELDS = {
   hero: [
     { k: "eyebrow", label: "Eyebrow (small caps)" },
@@ -403,12 +707,18 @@ const FIELDS = {
   ],
 };
 
-function FormattedTextareaField({ f, value, onChange }) {
+function FormattedTextareaField({ f, value, onCommit, testId }) {
   const ref = useRef(null);
+  const { local, onChange, flush } = useDebouncedField(value, onCommit);
   return (
     <>
-      <FormatToolbar textareaRef={ref} value={value} onChange={onChange} />
-      <textarea ref={ref} rows={f.rows || 4} value={value} onChange={(e) => onChange(e.target.value)} className="input-x !py-2 !text-sm" />
+      {/* The toolbar rewrites the whole value (wrapping the selection), which is a
+          discrete edit rather than typing — take it locally and push it straight up so
+          the preview reflects the formatting immediately. */}
+      <FormatToolbar textareaRef={ref} value={local} onChange={(val) => { onChange(val); flush(); }} />
+      <textarea ref={ref} rows={f.rows || 4} value={local} data-testid={testId}
+                onChange={(e) => onChange(e.target.value)} onBlur={flush}
+                className="input-x !py-2 !text-sm" />
     </>
   );
 }
@@ -416,44 +726,52 @@ function FormattedTextareaField({ f, value, onChange }) {
 function PropsEditor({ block, onChange }) {
   const fields = FIELDS[block.type] || [];
   const v = block.props || {};
+  const blockId = block.block_id;
+  // One patch per field. The coalesce key is what lets a typing run collapse into a
+  // single undo entry while an edit to a different field starts a new one.
+  const commitField = useCallback(
+    (key) => (val) => onChange(blockId, { [key]: val }, `${blockId}:${key}`),
+    [onChange, blockId],
+  );
+
   return (
     <div className="space-y-4">
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">{BLOCK_LABELS[block.type]}</div>
-      {fields.map((f) => (
+      {fields.map((f) => {
+        // Keyed by block AND field: selecting another block must give the text fields
+        // fresh local state rather than leaving the previous block's text on screen.
+        const key = `${blockId}:${f.k}`;
+        const testId = `cms-${f.k}`;
+
         // Image fields render outside the <label>: they carry their own caption plus
         // buttons and a file input, and clicking a label activates its first control,
         // which would fire the wrong one.
-        f.type === "image" ? (
-          <ImageField
-            key={f.k}
-            label={f.label}
-            value={v[f.k] || ""}
-            onChange={(val) => onChange({ [f.k]: val })}
-            testId={`cms-${f.k}`}
-          />
-        ) : (
-        <label key={f.k} className="block">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">{f.label}</div>
-          {f.type === "textarea" && f.format ? (
-            <FormattedTextareaField f={f} value={v[f.k] || ""} onChange={(val) => onChange({ [f.k]: val })} />
-          ) : f.type === "textarea" ? (
-            <textarea rows={f.rows || 4} value={v[f.k] || ""} onChange={(e) => onChange({ [f.k]: e.target.value })} className="input-x !py-2 !text-sm" />
-          ) : f.type === "select" ? (
-            <select value={v[f.k] || ""} onChange={(e) => onChange({ [f.k]: e.target.value })} className="input-x !py-2 !text-sm">
-              {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          ) : f.type === "checkbox" ? (
-            <div className="flex items-center gap-2 pt-1"><input type="checkbox" checked={!!v[f.k]} onChange={(e) => onChange({ [f.k]: e.target.checked })} /> <span className="text-xs text-zinc-400">{f.label}</span></div>
-          ) : f.type === "number" ? (
-            <input type="number" value={v[f.k] ?? ""} onChange={(e) => onChange({ [f.k]: Number(e.target.value) })} className="input-x !py-2 !text-sm" />
-          ) : f.type === "list" ? (
-            <textarea rows={5} value={(v[f.k] || []).join("\n")} onChange={(e) => onChange({ [f.k]: e.target.value.split("\n").filter(Boolean) })} className="input-x !py-2 !text-sm font-mono-x" />
-          ) : (
-            <input value={v[f.k] || ""} onChange={(e) => onChange({ [f.k]: e.target.value })} className="input-x !py-2 !text-sm" />
-          )}
-        </label>
-        )
-      ))}
+        if (f.type === "image") {
+          return <ImageField key={key} label={f.label} value={v[f.k] || ""} onChange={commitField(f.k)} testId={testId} />;
+        }
+        return (
+          <label key={key} className="block">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">{f.label}</div>
+            {f.type === "textarea" && f.format ? (
+              <FormattedTextareaField f={f} value={v[f.k] || ""} onCommit={commitField(f.k)} testId={testId} />
+            ) : f.type === "textarea" ? (
+              <TextareaField value={v[f.k] || ""} rows={f.rows} onCommit={commitField(f.k)} testId={testId} />
+            ) : f.type === "select" ? (
+              <select value={v[f.k] || ""} onChange={(e) => commitField(f.k)(e.target.value)} className="input-x !py-2 !text-sm">
+                {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ) : f.type === "checkbox" ? (
+              <div className="flex items-center gap-2 pt-1"><input type="checkbox" checked={!!v[f.k]} onChange={(e) => commitField(f.k)(e.target.checked)} /> <span className="text-xs text-zinc-400">{f.label}</span></div>
+            ) : f.type === "number" ? (
+              <input type="number" value={v[f.k] ?? ""} onChange={(e) => commitField(f.k)(Number(e.target.value))} className="input-x !py-2 !text-sm" />
+            ) : f.type === "list" ? (
+              <ListField value={v[f.k]} onCommit={commitField(f.k)} />
+            ) : (
+              <TextField value={v[f.k] || ""} onCommit={commitField(f.k)} testId={testId} />
+            )}
+          </label>
+        );
+      })}
     </div>
   );
 }
