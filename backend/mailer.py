@@ -104,11 +104,65 @@ def _tpl_ticket_delivery(p):
     )
 
 
+def _order_rows(order):
+    return "".join(
+        f'<tr><td style="padding:4px 0">{i.get("name","")}'
+        + (f' · {i["size"]}' if i.get("size") else "")
+        + f'</td><td style="text-align:center">{i.get("quantity",1)}</td>'
+        f'<td style="text-align:right">{float(i.get("line_total_ron",0)):.2f} RON</td></tr>'
+        for i in order.get("items", [])
+    )
+
+
+def _tpl_shop_order_paid(p):
+    """Doubles as the receipt: the emailed summary an order confirmation has to carry
+    under EU distance-selling rules, with the VAT split shown."""
+    o = p.get("order", {})
+    addr = o.get("shipping_address", {})
+    ship_to = ", ".join(filter(None, [
+        addr.get("full_name", ""), addr.get("line1", ""), addr.get("line2", ""),
+        addr.get("postal_code", ""), addr.get("city", ""), addr.get("country", ""),
+    ]))
+    return f"Order confirmed — {o.get('order_id', '')}", _wrap(
+        "Thank you for your order",
+        f'<p>We have your payment. You will get another email when it ships.</p>'
+        f'<table style="width:100%;border-collapse:collapse;font-size:14px">{_order_rows(o)}</table>'
+        f'<hr style="border:none;border-top:1px solid #eee;margin:12px 0">'
+        f'<p style="font-size:14px">Subtotal: {float(o.get("subtotal_ron", 0)):.2f} RON<br>'
+        f'Shipping ({o.get("shipping_zone", "")}): {float(o.get("shipping_ron", 0)):.2f} RON<br>'
+        f'<strong>Total: {float(o.get("total_ron", 0)):.2f} RON</strong><br>'
+        f'<span style="color:#888">Includes VAT ({int(float(o.get("vat_rate", 0.19)) * 100)}%): '
+        f'{float(o.get("vat_amount_ron", 0)):.2f} RON</span></p>'
+        f'<p style="font-size:13px">Shipping to: {ship_to}</p>'
+        + (f'<p style="font-size:12px;color:#888">Invoice #{o["invoice_no"]} is on your orders page.</p>'
+           if o.get("invoice_no") else "")
+        + f'<p><a href="{p.get("orders_url", "")}" style="display:inline-block;background:#111;'
+          f'color:#fff;padding:12px 20px;text-decoration:none">View your orders</a></p>',
+    )
+
+
+def _tpl_shop_order_shipped(p):
+    o = p.get("order", {})
+    tracking = o.get("tracking_number") or ""
+    carrier = o.get("carrier") or ""
+    return f"Your order has shipped — {o.get('order_id', '')}", _wrap(
+        "On its way",
+        f'<p>Your order is with the courier.</p>'
+        + (f'<p style="font-size:14px">{carrier} tracking: <strong>{tracking}</strong></p>'
+           if tracking else "")
+        + f'<table style="width:100%;border-collapse:collapse;font-size:14px">{_order_rows(o)}</table>'
+        f'<p><a href="{p.get("orders_url", "")}" style="display:inline-block;background:#111;'
+        f'color:#fff;padding:12px 20px;text-decoration:none">View your orders</a></p>',
+    )
+
+
 TEMPLATES = {
     "verify_email": _tpl_verify_email,
     "password_reset": _tpl_password_reset,
     "newsletter_confirm": _tpl_newsletter_confirm,
     "ticket_delivery": _tpl_ticket_delivery,
+    "shop_order_paid": _tpl_shop_order_paid,
+    "shop_order_shipped": _tpl_shop_order_shipped,
 }
 
 

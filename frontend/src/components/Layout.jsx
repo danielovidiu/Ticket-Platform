@@ -2,16 +2,38 @@ import React, { useEffect, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { useAuth, startLogin } from "../auth";
 import { http } from "../api";
-import { Menu, X } from "lucide-react";
+import { Menu, X, ShoppingBag } from "lucide-react";
+import { useCart } from "../lib/cart";
 
 // These routes are always present in nav — CMS pages fold in-between and after.
 const CORE_NAV_BEFORE = [];
 const CORE_NAV_AFTER = [
   { to: "/events", label: "Events" },
+  { to: "/shop", label: "Shop" },
   { to: "/artists", label: "Artists" },
   { to: "/archive", label: "Archive" },
   { to: "/gallery", label: "Gallery" },
 ];
+
+/** Cart entry point. Always visible so the shop reads as a shop, but the count only
+ * exists once signed in — carts live on the account, not in this browser. */
+const CartLink = ({ onNavigate }) => {
+  const { cart } = useCart();
+  const count = cart?.count || 0;
+  return (
+    <Link to="/cart" onClick={onNavigate} data-testid="cart-link"
+          className="btn-primary !py-2 !px-3 !text-[10px] relative inline-flex items-center gap-2">
+      <ShoppingBag size={13} />
+      <span>Cart</span>
+      {count > 0 && (
+        <span data-testid="cart-count"
+              className="bg-[color:var(--accent)] text-black px-1.5 min-w-[18px] text-center font-mono-x text-[10px] leading-[16px]">
+          {count}
+        </span>
+      )}
+    </Link>
+  );
+};
 
 const Header = ({ cmsNav }) => {
   const { user, logout } = useAuth();
@@ -39,9 +61,11 @@ const Header = ({ cmsNav }) => {
           ))}
         </nav>
         <div className="hidden lg:flex flex-wrap items-center gap-2">
+          <CartLink />
           {user ? (
             <>
               <Link to="/my-tickets" data-testid="my-tickets-link" className="btn-primary !py-2 !px-3 !text-[10px]">My Tickets</Link>
+              <Link to="/my-orders" data-testid="my-orders-link" className="btn-primary !py-2 !px-3 !text-[10px]">Orders</Link>
               <Link to="/settings" data-testid="settings-link" className="btn-primary !py-2 !px-3 !text-[10px]">Account</Link>
               {user.role === "admin" && <Link to="/admin" data-testid="admin-link" className="btn-primary !py-2 !px-3 !text-[10px]">Admin</Link>}
               {(user.role === "admin" || user.role === "editor") && <Link to="/cms" data-testid="cms-link" className="btn-primary !py-2 !px-3 !text-[10px]">CMS</Link>}
@@ -60,9 +84,11 @@ const Header = ({ cmsNav }) => {
         <div className="lg:hidden hairline-b bg-[color:var(--bg,#050505)]">
           <div className="px-6 py-6 flex flex-col gap-4 font-mono-x uppercase text-sm">
             {nav.map((n) => <NavLink key={n.to} to={n.to} onClick={() => setOpen(false)} className="text-zinc-300">{n.label}</NavLink>)}
+            <CartLink onNavigate={() => setOpen(false)} />
             {user ? (
               <>
                 <Link to="/my-tickets" onClick={() => setOpen(false)}>My Tickets</Link>
+                <Link to="/my-orders" onClick={() => setOpen(false)}>Orders</Link>
                 <Link to="/settings" onClick={() => setOpen(false)}>Account</Link>
                 {user.role === "admin" && <Link to="/admin" onClick={() => setOpen(false)}>Admin</Link>}
                 {(user.role === "admin" || user.role === "editor") && <Link to="/cms" onClick={() => setOpen(false)}>CMS</Link>}

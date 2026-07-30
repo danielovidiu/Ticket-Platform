@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import urlencode, quote
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 from pydantic import BaseModel, Field
 from PIL import Image
 from reportlab.lib.pagesizes import A4
@@ -1969,6 +1970,120 @@ async def create_checkout(body: CheckoutIn, request: Request, user=Depends(get_c
     return {"url": checkout_url, "session_id": session_id}
 
 
+# Romanian standard VAT, currently 21%. Both tickets and merchandise sit at this rate;
+# prices everywhere are stored GROSS (VAT-inclusive, as Romanian retail quotes them) and
+# the net and VAT components are derived from the total at invoice time.
+#
+# This is only the STARTING value. The live rate is a single editable setting (see
+# get_vat_rate below) so a statutory change is an edit in the admin UI, not a redeploy —
+# and one field covers tickets and the shop rather than each keeping its own.
+VAT_RATE_DEFAULT = float(os.environ.get("VAT_RATE", "0.21"))
+
+
+async def get_vat_rate() -> float:
+    """The VAT rate to apply to something being invoiced right now.
+
+    Read per invoice rather than cached at import: a rate change has to take effect on
+    the next order without restarting every serverless instance. Already-issued invoices
+    are unaffected — each one stores the rate it was raised under, which is what makes a
+    rate change safe to apply at any point in a fiscal year.
+    """
+    doc = await db.site_settings.find_one({"_id": "billing"}, {"_id": 0, "vat_rate": 1})
+    rate = (doc or {}).get("vat_rate")
+    return float(rate) if isinstance(rate, (int, float)) else VAT_RATE_DEFAULT
+
+
+async def set_vat_rate(rate: float) -> float:
+    if not (0 <= rate < 1):
+        raise HTTPException(400, "VAT rate is a fraction, e.g. 0.21 for 21%")
+    await db.site_settings.update_one({"_id": "billing"}, {"$set": {"vat_rate": float(rate)}}, upsert=True)
+    return await get_vat_rate()
+
+_invoice_counter_ready = False
+
+
+async def _next_invoice_number() -> int:
+    """Allocate the next invoice number atomically.
+
+    Fiscal numbering has to be one unbroken sequence per series, so tickets and shop
+    orders draw from the same counter. This was previously `max(number) + 1` — a read
+    followed by a write, which hands two concurrent finalizes the same number and
+    produces two invoices claiming to be SNTY-001234.
+
+    The counter is seeded once per process from whatever has already been issued, with
+    `$max` so racing instances converge on the same floor instead of resetting it.
+    """
+    global _invoice_counter_ready
+    if not _invoice_counter_ready:
+        latest = await db.invoices.find({}, {"_id": 0, "number": 1}).sort("number", -1).limit(1).to_list(1)
+        floor = max(999, latest[0]["number"] if latest else 999)
+        await db.counters.update_one({"_id": "invoice_number"}, {"$max": {"seq": floor}}, upsert=True)
+        _invoice_counter_ready = True
+    doc = await db.counters.find_one_and_update(
+        {"_id": "invoice_number"}, {"$inc": {"seq": 1}},
+        return_document=ReturnDocument.AFTER, upsert=True,
+    )
+    return int(doc["seq"])
+
+
+async def issue_invoice(*, user_id: str, total: float, net: float, vat_amount: float,
+                        vat_rate: float, lines: Optional[List[dict]] = None,
+                        meta: Optional[dict] = None) -> dict:
+    """Write one invoice row. `lines` is the multi-line form the shop uses; ticket
+    invoices carry event_id/quantity in `meta` instead and render from that."""
+    inv = {
+        "invoice_id": new_id("inv"),
+        "number": await _next_invoice_number(),
+        "series": "SNTY",
+        "user_id": user_id,
+        "issued_at": now_utc().isoformat(),
+        "currency": "RON",
+        "total": round(total, 2),
+        "net": round(net, 2),
+        "vat_rate": vat_rate,
+        "vat_amount": round(vat_amount, 2),
+        **({"lines": lines} if lines else {}),
+        **(meta or {}),
+    }
+    await db.invoices.insert_one(dict(inv))
+    return {k: v for k, v in inv.items() if k != "_id"}
+
+
+async def create_stripe_session(*, user: dict, total_ron: float, metadata: dict,
+                                line_items: List[dict], success_path: str, cancel_path: str):
+    """Open a Checkout Session (or simulate one) and return (session_id, url).
+
+    Redirect targets are built from PUBLIC_APP_URL rather than anything the client sent —
+    the ticket path takes an `origin_url` from the request body, which is the open-redirect
+    noted as M7 in the audit and is not repeated here.
+    """
+    success_url = f"{PUBLIC_APP_URL}{success_path}"
+    cancel_url = f"{PUBLIC_APP_URL}{cancel_path}"
+
+    if PAYMENTS_MODE == "fake":
+        session_id = f"cs_local_{uuid.uuid4().hex}"
+        return session_id, f"{success_url.replace('{CHECKOUT_SESSION_ID}', session_id)}&mock=1"
+
+    session = await asyncio.to_thread(
+        stripe_sdk.checkout.Session.create,
+        mode="payment",
+        customer=await _stripe_customer_id(user),
+        line_items=[{
+            "price_data": {
+                "currency": "ron",
+                "unit_amount": int(round(float(li["amount_ron"]) * 100)),
+                "product_data": {"name": li["name"]},
+            },
+            "quantity": int(li.get("quantity", 1)),
+        } for li in line_items],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata=metadata,
+        payment_intent_data={"metadata": metadata},
+    )
+    return session.id, session.url
+
+
 async def _finalize_paid_reservation(reservation_id: str):
     """Idempotently create tickets and invoice when payment is confirmed."""
     r = await db.reservations.find_one({"reservation_id": reservation_id}, {"_id": 0})
@@ -2018,28 +2133,15 @@ async def _finalize_paid_reservation(reservation_id: str):
         )
 
     # Create invoice
-    latest = await db.invoices.find({}, {"_id": 0}).sort("number", -1).limit(1).to_list(1)
-    next_num = (latest[0]["number"] + 1) if latest else 1000
-    vat_rate = 0.19  # Romanian standard VAT for entertainment (simplified)
+    vat_rate = await get_vat_rate()  # the one sitewide rate, shared with the shop
     total = r["total_ron"]
     net = round(total / (1 + vat_rate), 2)
     vat_amount = round(total - net, 2)
-    invoice = {
-        "invoice_id": new_id("inv"),
-        "number": next_num,
-        "series": "SNTY",
-        "reservation_id": reservation_id,
-        "user_id": r["user_id"],
-        "event_id": r["event_id"],
-        "issued_at": now_utc().isoformat(),
-        "currency": "RON",
-        "total": total,
-        "net": net,
-        "vat_rate": vat_rate,
-        "vat_amount": vat_amount,
-        "quantity": r["quantity"],
-    }
-    await db.invoices.insert_one(invoice)
+    invoice = await issue_invoice(
+        user_id=r["user_id"], total=total, net=net, vat_amount=vat_amount, vat_rate=vat_rate,
+        meta={"reservation_id": reservation_id, "event_id": r["event_id"], "quantity": r["quantity"]},
+    )
+    next_num = invoice["number"]
 
     # Deliver tickets by email (transactional — no marketing opt-in needed). QR PNGs
     # are attached. Wrapped so a mail failure never rolls back a paid order.
@@ -2096,8 +2198,20 @@ async def payment_status(session_id: str, request: Request):
         {"$set": {"payment_status": new_status, "status": session_status}},
     )
     if new_status == "paid":
-        await _finalize_paid_reservation(tx["reservation_id"])
+        await _finalize_transaction(tx)
     return await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+
+
+async def _finalize_transaction(tx: dict):
+    """Route a paid transaction to whichever thing it was paying for.
+
+    Tickets and the shop share the Checkout Session plumbing and this webhook, so the
+    transaction row carries `kind` and dispatch happens here rather than by guessing from
+    which id field is present."""
+    if tx.get("kind") == "shop_order":
+        await SHOP["finalize_paid_order"](tx["order_id"])
+    else:
+        await _finalize_paid_reservation(tx["reservation_id"])
 
 
 async def _mark_paid_and_finalize(session_id: str):
@@ -2107,7 +2221,7 @@ async def _mark_paid_and_finalize(session_id: str):
     await db.payment_transactions.update_one(
         {"session_id": session_id}, {"$set": {"payment_status": "paid"}},
     )
-    await _finalize_paid_reservation(tx["reservation_id"])
+    await _finalize_transaction(tx)
 
 
 @api.post("/webhook/stripe")
@@ -2197,8 +2311,16 @@ async def invoice_pdf(invoice_id: str, user=Depends(get_current_user)):
     if inv["user_id"] != user["user_id"] and user.get("role") != "admin":
         raise HTTPException(403, "Forbidden")
 
-    ev = await db.events.find_one({"event_id": inv["event_id"]}, {"_id": 0}) or {}
+    # Two shapes share this collection and this renderer: a ticket invoice references an
+    # event and a quantity, a shop invoice carries its own `lines`.
+    ev = await db.events.find_one({"event_id": inv.get("event_id")}, {"_id": 0}) or {}
     buyer = await db.users.find_one({"user_id": inv["user_id"]}, {"_id": 0}) or {}
+    lines = inv.get("lines") or [{
+        "description": f"Ticket · {ev.get('title', '')}",
+        "quantity": inv.get("quantity", 1),
+        "total": inv["total"],
+    }]
+    order = await db.shop_orders.find_one({"order_id": inv.get("order_id")}, {"_id": 0}) or {}
 
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -2213,27 +2335,37 @@ async def invoice_pdf(invoice_id: str, user=Depends(get_current_user)):
     c.setFont("Helvetica", 10)
     c.drawString(40, H - 138, f"Issued: {inv['issued_at'][:19].replace('T', ' ')} UTC")
     c.drawString(40, H - 155, f"Bill to: {buyer.get('name', '')} <{buyer.get('email', '')}>")
-    c.drawString(40, H - 172, f"Event: {ev.get('title', '')}")
-    venue_line = ", ".join(filter(None, [ev.get("venue", ""), ev.get("city", "")]))
-    c.drawString(40, H - 189, f"Venue: {venue_line}")
+    if order:
+        addr = order.get("shipping_address", {})
+        c.drawString(40, H - 172, "Ship to: " + ", ".join(filter(None, [
+            addr.get("full_name", ""), addr.get("line1", ""), addr.get("line2", ""),
+            addr.get("postal_code", ""), addr.get("city", ""), addr.get("country", ""),
+        ]))[:110])
+        c.drawString(40, H - 189, f"Order: {order.get('order_id', '')}")
+    else:
+        c.drawString(40, H - 172, f"Event: {ev.get('title', '')}")
+        venue_line = ", ".join(filter(None, [ev.get("venue", ""), ev.get("city", "")]))
+        c.drawString(40, H - 189, f"Venue: {venue_line}")
 
     y = H - 240
     c.setFont("Helvetica-Bold", 10)
     c.drawString(40, y, "DESCRIPTION")
-    c.drawString(340, y, "QTY")
-    c.drawString(400, y, "NET (RON)")
-    c.drawString(480, y, "VAT")
-    c.drawString(530, y, "TOTAL")
+    c.drawString(400, y, "QTY")
+    c.drawString(500, y, "TOTAL (RON)")
     c.line(40, y - 4, 570, y - 4)
     y -= 22
     c.setFont("Helvetica", 10)
-    c.drawString(40, y, f"Ticket · {ev.get('title', '')}")
-    c.drawString(340, y, str(inv["quantity"]))
-    c.drawString(400, y, f"{inv['net']:.2f}")
-    c.drawString(480, y, f"{inv['vat_amount']:.2f}")
-    c.drawString(530, y, f"{inv['total']:.2f}")
+    for line in lines:
+        # Each line is gross; net and VAT are shown once for the whole invoice below,
+        # which is what a single-rate invoice needs.
+        c.drawString(40, y, str(line.get("description", ""))[:64])
+        c.drawString(400, y, str(line.get("quantity", 1)))
+        c.drawString(500, y, f"{float(line.get('total', 0)):.2f}")
+        y -= 16
+        if y < 140:  # keep clear of the totals block
+            break
 
-    y -= 50
+    y -= 34
     c.setFont("Helvetica-Bold", 11)
     c.drawString(400, y, "Net:")
     c.drawString(500, y, f"{inv['net']:.2f} RON")
@@ -2246,7 +2378,10 @@ async def invoice_pdf(invoice_id: str, user=Depends(get_current_user)):
     c.drawString(500, y, f"{inv['total']:.2f} RON")
 
     c.setFont("Helvetica-Oblique", 8)
-    c.drawString(40, 50, "All sales final unless event cancelled. This is a proforma invoice for the MVP.")
+    c.drawString(40, 50, "Goods remain returnable under EU distance-selling rules for 14 days. "
+                         if order else
+                         "All sales final unless event cancelled. ")
+    c.drawString(40, 38, "This is a proforma invoice for the MVP.")
 
     c.showPage()
     c.save()
@@ -2883,6 +3018,35 @@ register_cms_routes(api, db, require_admin, require_admin_or_editor)
 from mailer import init_mailer, send_mail  # noqa: E402
 init_mailer(db, logger)
 
+# The webshop gets the shared pieces handed to it rather than importing this module,
+# which would be a cycle. SHOP exposes the two hooks server.py calls back into:
+# finalising a paid order (from the webhook) and sweeping expired stock holds.
+from types import SimpleNamespace  # noqa: E402
+from shop_routes import register_shop_routes  # noqa: E402
+
+SHOP = register_shop_routes(api, SimpleNamespace(
+    db=db,
+    logger=logger,
+    now_utc=now_utc,
+    new_id=new_id,
+    parse_dt=parse_dt,
+    get_current_user=get_current_user,
+    require_admin=require_admin,
+    rate_limit=rate_limit,
+    # Keyed on any string rather than the caller's IP — the shop uses it per account.
+    rate_check_key=_email_rate_check,
+    profile_complete=_profile_complete,
+    create_stripe_session=create_stripe_session,
+    issue_invoice=issue_invoice,
+    send_mail=send_mail,
+    audit=_audit,
+    public_app_url=PUBLIC_APP_URL,
+    # One rate for the whole site: the shop reads and writes the same setting the
+    # ticket invoices use, so there is a single field to change when the law does.
+    get_vat_rate=get_vat_rate,
+    set_vat_rate=set_vat_rate,
+))
+
 app.include_router(api)
 
 # CORS. Credentialed requests (cookies) can NEVER be paired with a wildcard origin —
@@ -3054,6 +3218,20 @@ async def init_indexes():
         await db.processed_stripe_events.create_index("event_id", unique=True)
         await db.newsletter_subscriptions.create_index("email", unique=True)
         await db.gallery.create_index([("event_id", 1), ("sort_order", 1)])
+        # Webshop. The variant index backs the atomic stock hold, which filters on
+        # product_id plus a variant with enough stock on every add-to-cart and checkout.
+        await db.products.create_index("product_id", unique=True)
+        await db.products.create_index("slug", unique=True)
+        await db.products.create_index([("is_published", 1), ("sort_order", 1)])
+        await db.products.create_index("variants.variant_id")
+        await db.products.create_index("variants.sku")
+        await db.carts.create_index("user_id", unique=True)
+        await db.shop_orders.create_index("order_id", unique=True)
+        await db.shop_orders.create_index([("user_id", 1), ("created_at", -1)])
+        # The expiry sweep looks for pending orders past their hold; without this it is a
+        # collection scan on every catalogue read.
+        await db.shop_orders.create_index([("status", 1), ("hold_expires_at", 1)])
+        await db.invoices.create_index("number", unique=True)
         logger.info("Indexes ensured")
     except Exception:
         logger.exception("init_indexes failed")

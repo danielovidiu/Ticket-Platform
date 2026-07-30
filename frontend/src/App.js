@@ -3,6 +3,7 @@ import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "./auth";
+import { CartProvider } from "./lib/cart";
 import Layout from "./components/Layout";
 import DynamicPage from "./pages/DynamicPage";
 import Events from "./pages/Events";
@@ -14,6 +15,12 @@ import Artists from "./pages/Artists";
 import ArtistDetail from "./pages/ArtistDetail";
 import Archive from "./pages/Archive";
 import Gallery from "./pages/Gallery";
+import Shop from "./pages/Shop";
+import ProductDetail from "./pages/ProductDetail";
+import Cart from "./pages/Cart";
+import ShopCheckout from "./pages/ShopCheckout";
+import ShopSuccess from "./pages/ShopSuccess";
+import MyOrders from "./pages/MyOrders";
 import Admin from "./pages/Admin";
 import Scan from "./pages/Scan";
 import CMSEditor from "./pages/CMSEditor";
@@ -71,6 +78,14 @@ function AppRouter() {
         {/* The sitewide gallery's own slug. Gallery redirects to the canonical one when
             the slug in the URL isn't the configured one. */}
         <Route path="/gallery/:slug" element={<Gallery />} />
+        {/* Webshop. /shop/checkout and /shop/success are declared before /shop/:slug so
+            they aren't swallowed by the product route. */}
+        <Route path="/shop" element={<Shop />} />
+        <Route path="/shop/checkout" element={<ShopCheckout />} />
+        <Route path="/shop/success" element={<ShopSuccess />} />
+        <Route path="/shop/:slug" element={<ProductDetail />} />
+        <Route path="/cart" element={<Cart />} />
+        <Route path="/my-orders" element={<MyOrders />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/scan" element={<Scan />} />
         <Route path="/cms" element={<CMSEditor />} />
@@ -92,10 +107,14 @@ export default function App() {
     <div className="App">
       <BrowserRouter>
         <AuthProvider>
-          <ThemeLoader />
-          <Toaster theme="dark" position="top-right" toastOptions={{ style: { background: "#050505", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", borderRadius: 0 } }} />
-          <AppRouter />
-          <CookieConsent />
+          {/* Inside AuthProvider: the cart belongs to the signed-in account and is
+              refetched when that changes. */}
+          <CartProvider>
+            <ThemeLoader />
+            <Toaster theme="dark" position="top-right" toastOptions={{ style: { background: "#050505", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", borderRadius: 0 } }} />
+            <AppRouter />
+            <CookieConsent />
+          </CartProvider>
         </AuthProvider>
       </BrowserRouter>
     </div>

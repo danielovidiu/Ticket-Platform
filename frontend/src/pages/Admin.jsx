@@ -8,8 +8,10 @@ import { FormatToolbar } from "../lib/richText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 import AlbumManager from "../components/AlbumManager";
 import ImageField from "../components/ImageField";
+import { ShopProducts, ShopOrders, ShopSettings } from "../components/ShopAdmin";
 
-const TABS = ["stats", "events", "orders", "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
+const TABS = ["stats", "events", "orders", "shop", "shop orders", "shop settings",
+              "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
 
 export default function Admin() {
   const { user, loading } = useAuth();
@@ -32,6 +34,9 @@ export default function Admin() {
         {tab === "stats" && <Stats />}
         {tab === "events" && <Events />}
         {tab === "orders" && <Orders />}
+        {tab === "shop" && <ShopProducts />}
+        {tab === "shop orders" && <ShopOrders />}
+        {tab === "shop settings" && <ShopSettings />}
         {tab === "artists" && <Artists />}
         {tab === "projects" && <Projects />}
         {tab === "discounts" && <Discounts />}
