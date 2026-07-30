@@ -179,6 +179,14 @@ APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
 # serverless host. It only changes lifecycle assumptions (see the shutdown hook), never
 # behaviour a request can observe.
 SERVERLESS = bool(os.environ.get("VERCEL", "").strip())
+
+# Which build is running, for GET /api/health. Vercel injects VERCEL_GIT_COMMIT_SHA on
+# every deployment; GIT_COMMIT is the portable fallback to set by hand elsewhere (a
+# Dockerfile ARG, a CI variable). Empty means "nobody told us", which the endpoint
+# reports as-is rather than guessing.
+COMMIT_SHA = (os.environ.get("VERCEL_GIT_COMMIT_SHA")
+              or os.environ.get("GIT_COMMIT") or "").strip()
+
 # Public origin of the FRONTEND (where OAuth callbacks and email links send users
 # back to). Its scheme also decides how session cookies are scoped (below).
 PUBLIC_APP_URL = os.environ.get("PUBLIC_APP_URL", "http://localhost:3000").rstrip("/")
@@ -887,6 +895,50 @@ def _public_user(u: Optional[dict]) -> Optional[dict]:
 async def _send_verification(user_id: str, email: str):
     token = make_token("email-verify", user_id)
     await send_mail("verify_email", email, {"verify_url": f"{PUBLIC_APP_URL}/verify?token={token}"})
+
+
+@api.get("/health", dependencies=[Depends(rate_limit("health", 60, 60))])
+async def health():
+    """Which build is live, and whether its migrations have run against this database.
+
+    Answering "is the fix deployed?" previously meant inspecting the deployment in the
+    Vercel dashboard and probing an endpoint that only exists after the commit you care
+    about. This turns it into one request.
+
+    The two version fields are the useful part. `schema_version_expected` is the constant
+    compiled into the running code; `schema_version` is what the database records having
+    completed. Equal means init finished and every migration behind that number has run.
+    Expected ahead of actual means the new code is live but has not yet cold-started into
+    its migrations — which is exactly the window where a backfill looks like it failed.
+
+    Deliberately unauthenticated, so it works from a monitor with no session, and
+    deliberately narrow for the same reason: nothing here describes how the app is
+    configured. PAYMENTS_MODE in particular stays out — it is the single most useful
+    thing an attacker could learn, because the fake-payment fallback issues real tickets
+    for free (audit C1), and it is verified from the deployment's own environment
+    variables rather than from the open internet.
+
+    SCHEMA_VERSION is defined further down the module; the lookup happens per request, by
+    which point it exists.
+    """
+    recorded = None
+    db_ok = True
+    try:
+        marker = await db.app_meta.find_one({"_id": "init"}, {"_id": 0, "version": 1})
+        recorded = (marker or {}).get("version")
+    except Exception:
+        # A health check that 500s tells a monitor less than one that says which half is
+        # broken: the process is clearly up, or this handler would not be running.
+        logger.exception("health: could not read the init marker")
+        db_ok = False
+
+    return {
+        "ok": db_ok and recorded == SCHEMA_VERSION,
+        "commit": COMMIT_SHA,
+        "schema_version": recorded,
+        "schema_version_expected": SCHEMA_VERSION,
+        "db": db_ok,
+    }
 
 
 @api.post("/auth/register", dependencies=[Depends(rate_limit("auth_register", 5, 300))])

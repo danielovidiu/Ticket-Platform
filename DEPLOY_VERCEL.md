@@ -98,8 +98,27 @@ backend at all.)
 ## 5. Verify
 
 ```bash
-curl -s https://<your-domain>/api/events | head -c 200
+curl -s https://<your-domain>/api/health
 ```
+
+```json
+{"ok":true,"commit":"9275e58…","schema_version":3,"schema_version_expected":3,"db":true}
+```
+
+`commit` is the build that is actually serving traffic — Vercel injects
+`VERCEL_GIT_COMMIT_SHA` on every deployment, so this is how you confirm a fix reached
+production without reading the dashboard. Set `GIT_COMMIT` by hand on any other host.
+
+The two version fields are the migration check. `schema_version_expected` is compiled
+into the running code; `schema_version` is what the database records having completed.
+Equal (and `ok: true`) means init finished and every migration behind that number has
+run. Expected ahead of actual means the new build is live but has not yet cold-started
+into its migrations — the window in which a backfill looks like it silently failed.
+
+The endpoint is unauthenticated so a monitor can read it, and deliberately says nothing
+about how the app is configured. Keep it that way: `PAYMENTS_MODE` in particular must
+never appear here, because the fake-payment fallback issues real tickets for free
+(SECURITY_AUDIT.md C1) and this URL is public.
 
 Then check the function logs for `Indexes ensured`. That line comes from the startup
 hook, which also tells you whether the admin bootstrap found your account.
