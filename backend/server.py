@@ -3121,7 +3121,9 @@ async def security_headers(request: Request, call_next):
 
 # Bump when a change below needs to run against an already-initialised database.
 # 2: users gained first_name/last_name (split out of the single `name`).
-SCHEMA_VERSION = 2
+# 3: news_opt_in backfilled into newsletter_subscriptions (opt-ins taken before the
+#    two were kept in step were invisible to the admin tab and the CSV export).
+SCHEMA_VERSION = 3
 
 
 @app.on_event("startup")
@@ -3246,6 +3248,11 @@ async def init_indexes():
     except Exception:
         logger.exception("migrate_user_names failed")
 
+    try:
+        await migrate_newsletter_optins()
+    except Exception:
+        logger.exception("migrate_newsletter_optins failed")
+
 
 async def migrate_session_token_hashes():
     """Replace plaintext session tokens with their SHA-256 (audit M2).
@@ -3330,6 +3337,54 @@ async def migrate_user_names():
         fixed += 1
     if fixed:
         logger.info("Backfilled first/last name for %d user(s)", fixed)
+
+
+async def migrate_newsletter_optins():
+    """Create subscriber rows for opt-ins taken before the two were kept in step.
+
+    `news_opt_in` on the user document and the `newsletter_subscriptions` collection were
+    disconnected until _sync_newsletter_subscription landed, and that function only runs
+    when a consent is *written* — at registration, on a Settings toggle, or when
+    verify_email promotes a pending row. Anyone who ticked the box before it existed still
+    has the flag and no row, so the admin Newsletter tab and the CSV export cannot see
+    them, permanently, because nothing else reconciles the two.
+
+    This only ever inserts. An address that already has a row is left exactly as it
+    stands — including an unsubscribed one. That case is the reason this does not just
+    call _sync_newsletter_subscription: the unsubscribe endpoint marks the subscription
+    and does not clear `news_opt_in`, so a stale true on the user document would let a
+    migration resurrect a subscription somebody explicitly ended. Nobody is consenting at
+    boot; the more specific signal wins. `$setOnInsert` with no `$set` makes that
+    race-safe against a second cold start rather than merely likely.
+
+    Status follows the same rule as the Settings path: a verified address has already
+    proved itself and needs no double opt-in, an unverified one lands pending and
+    verify_email promotes it later.
+    """
+    now_iso = now_utc().isoformat()
+    added = 0
+    async for u in db.users.find({"news_opt_in": True}, {"_id": 0, "email": 1, "email_verified_at": 1}):
+        email = (u.get("email") or "").strip().lower()
+        if not email:
+            continue
+        confirmed = bool(u.get("email_verified_at"))
+        result = await db.newsletter_subscriptions.update_one(
+            {"email": email},
+            {"$setOnInsert": {
+                "sub_id": new_id("sub"),
+                "email": email,
+                "source": "backfill",
+                "status": "confirmed" if confirmed else "pending",
+                "created_at": now_iso,
+                "confirmed_at": now_iso if confirmed else None,
+                "unsubscribed_at": None,
+            }},
+            upsert=True,
+        )
+        if result.upserted_id is not None:
+            added += 1
+    if added:
+        logger.info("Backfilled %d newsletter subscription(s) from news_opt_in", added)
 
 
 @app.on_event("shutdown")

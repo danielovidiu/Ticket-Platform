@@ -211,7 +211,15 @@ def sweep_stale_test_users(older_than_hours: int = 1):
     # Fixture-created content uses a TEST_ title/name prefix by convention.
     db.events.delete_many({"title": {"$regex": "^TEST_"}, "created_at": {"$lt": cutoff}})
     db.contact_messages.delete_many({"name": {"$regex": "^TEST_"}, "created_at": {"$lt": cutoff}})
-    db.newsletter_subscriptions.delete_many({"email": {"$regex": "^TEST_"}, "created_at": {"$lt": cutoff}})
+    # Subscriptions were only ever swept on a "TEST_" email prefix, which no fixture
+    # actually uses — registration opt-ins land as pytest-…@pytest.invalid and the rate
+    # limit test writes source="rl-test", so neither matched and both accumulated
+    # (187 rows in one local database). Match how they are really named.
+    db.newsletter_subscriptions.delete_many({"created_at": {"$lt": cutoff}, "$or": [
+        {"email": {"$regex": f"@{TEST_EMAIL_DOMAIN}$"}},
+        {"email": {"$regex": "^TEST_"}},
+        {"source": "rl-test"},
+    ]})
     return len(stale)
 
 
