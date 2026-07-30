@@ -43,10 +43,10 @@ both are the kind of thing that gets exploited within days of a public launch.
 | M1 | **Fixed** | Security-headers middleware; path-specific CSP |
 | M2 | **Fixed** | `sha256` at rest, migrated in place with no forced logout |
 | L5 | **Fixed** | Bearer clients could not actually log out (found while fixing M2) |
-| H1 | **Open** | Pinned by an `xfail(strict=True)` regression test. Now the top priority |
+| H1 | **Open — half fixed** | App-side `TRUSTED_IP_HEADER` shipped; uvicorn's `proxy_headers` default still rewrites `request.client.host`, so the bypass survives. Pinned by an `xfail(strict=True)` regression test. Top priority |
 | M3–M12, L1–L4 | Open | See the remediation plan |
 | Stale deps | **Fixed** | 126 → 38 runtime packages; `starlette` past CVE-2024-47874 |
-| Test suite | **Fixed** | 115 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
+| Test suite | **Fixed** | 240 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
 
 ---
 
@@ -189,6 +189,43 @@ password.
 
 **Fix.** Only honour `X-Forwarded-For` from a configured trusted-proxy CIDR; otherwise
 use `request.client.host`. Run uvicorn with `--forwarded-allow-ips` set to the proxy.
+
+#### Status: part one done, part two outstanding — still exploitable **[re-verified]**
+
+`TRUSTED_IP_HEADER` implements the first sentence: no forwarding header is believed
+unless it is named, and unset is the default. The second sentence was never applied, and
+it turns out to carry the fix rather than merely reinforce it.
+
+`_client_ip()` falls back to `request.client.host` believing it to be the socket peer.
+Under uvicorn it is not. `proxy_headers` defaults to `True` and `forwarded_allow_ips` to
+`127.0.0.1` (uvicorn 0.51.0), so `ProxyHeadersMiddleware` overwrites `request.client.host`
+from `X-Forwarded-For` before the ASGI app is called, for every client on that allowlist —
+which includes any reverse proxy sharing the host. The application's own guard is applied
+to a value that was already substituted underneath it.
+
+Re-verified against `/api/contact` (limit 5/60s), default `uvicorn server:app`,
+`TRUSTED_IP_HEADER` unset:
+
+```
+no header:                200 200 200 200 200 429 429 429 429
+rotating X-Forwarded-For: 200 200 200 200 200 200 200 200 200
+```
+
+The `xfail(strict=True)` marker is therefore still correct and must stay. Note the
+consequence for reviewers: this finding cannot be closed by reading `server.py`, because
+the defect lives in how the process is launched.
+
+Scope by deployment shape:
+
+| Shape | Exposed? |
+|---|---|
+| `uvicorn` on a laptop or a container, direct | Yes, from any client the allowlist covers (`127.0.0.1` by default) |
+| `uvicorn` behind nginx/Caddy on the same host | Yes — the proxy is on the allowlist, so a client-supplied header is honoured unless the proxy replaces it |
+| Vercel Python runtime (current production) | No — the uvicorn CLI is not what serves requests there |
+
+Remaining work: pass `--forwarded-allow-ips` naming the real proxy (or `""` when nothing
+fronts the app), or set `FORWARDED_ALLOW_IPS`. This becomes urgent with the planned move
+off Vercel to a container, which is exactly the shape in the second row.
 
 ### H2 — Rate-limiter state grows without bound (memory-exhaustion DoS) — FIXED
 

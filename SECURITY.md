@@ -69,6 +69,29 @@ longer be used to exhaust memory, but it still cannot stop a determined attacker
 can choose their own bucket by setting a header, which leaves `/api/newsletter` and
 `/api/auth/forgot-password` usable as mail-bomb amplifiers against third parties.
 
+**Half of the fix is in, and the half that is missing cancels it.** `TRUSTED_IP_HEADER`
+now gates which forwarding header the application will believe, and unset means "believe
+none of them". That is correct as far as it goes, but `_client_ip()` then falls back to
+`request.client.host` on the assumption that it is the socket peer — and under uvicorn it
+is not. `proxy_headers` defaults to `True` and `forwarded_allow_ips` to `127.0.0.1`, so
+uvicorn's `ProxyHeadersMiddleware` rewrites `request.client.host` from `X-Forwarded-For`
+before the application is reached, for any client on that allowlist. A reverse proxy on
+the same host is on that allowlist by default, which is the standard container layout.
+
+Reproduced against `/api/contact` (limit 5/60s) on a default `uvicorn server:app`, with
+`TRUSTED_IP_HEADER` unset:
+
+```
+no header:                200 200 200 200 200 429 429 429 429
+rotating X-Forwarded-For: 200 200 200 200 200 200 200 200 200
+```
+
+So the application-level guard cannot be verified by reading `server.py` alone — the
+process that runs it has to be checked too. Pass `--forwarded-allow-ips` naming the real
+proxy, or `""` when nothing fronts the app. This matters most for the planned move off
+Vercel: Vercel's Python runtime does not invoke the uvicorn CLI, so a container running
+uvicorn behind nginx inherits an exposure the current deployment does not have.
+
 Code at each of these points carries a `SECURITY [id]` comment keyed to the audit:
 
 ```bash

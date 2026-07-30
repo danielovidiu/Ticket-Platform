@@ -1,21 +1,21 @@
 # Supersanity
 
 Ticketing platform for a Bucharest music & performance collective — public site, CMS,
-box office (reserve → Stripe checkout → QR ticket), door scanner, and a self-owned,
-GDPR/CAN-SPAM-aware user-management stack.
+box office (reserve → Stripe checkout → QR ticket), door scanner, a merchandise webshop,
+and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 
 - **Backend**: FastAPI + MongoDB (Motor), single module `backend/server.py` (+
-  `cms_routes.py`, `mailer.py`, `storage.py`).
+  `cms_routes.py`, `shop_routes.py`, `mailer.py`, `storage.py`).
 - **Frontend**: React 19 (CRA/craco), `frontend/`.
 - **Deploying**: one Vercel project, two services — see **[DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md)**.
 
 > **Status: hardening in progress.**
-> A security audit found one critical and three high-severity issues. **All four are now
-> fixed** — C1 (payment bypass), H1 (spoofable rate-limit key), H2 (limiter memory DoS)
-> and H3 (admin takeover) — along with M1 (security headers) and M2 (plaintext session
-> tokens). See **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)** and the checklist below
-> before deploying, and note that **P1–P3 are still open**, including M3: there is no
-> CSRF token or Origin check on state-changing routes.
+> A security audit found one critical and three high-severity issues. **Three are fixed** —
+> C1 (payment bypass), H2 (limiter memory DoS) and H3 (admin takeover) — along with M1
+> (security headers) and M2 (plaintext session tokens). **H1 (spoofable rate-limit key)
+> is only half fixed and is still exploitable under uvicorn** — see the checklist below.
+> **P1–P3 remain open**, including M3: there is no CSRF token or Origin check on
+> state-changing routes. Full detail in **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**.
 
 ## Run it locally
 
@@ -58,14 +58,30 @@ The audit's P0 items.
       `Permissions-Policy` and a path-specific CSP on every response, plus HSTS on HTTPS.
 - [x] **Session tokens hashed at rest.** *(M2)* Only `sha256(token)` is stored; existing
       sessions were migrated in place without logging anyone out.
-- [x] **Trusted-proxy handling.** *(H1)* `X-Forwarded-For` used to be trusted
-      unconditionally, so every rate limit was bypassable by rotating the header
-      (verified) and `/api/newsletter` and `/api/auth/forgot-password` worked as
-      mail-bomb amplifiers. Forwarding headers are now believed only when
-      `TRUSTED_IP_HEADER` names one; unset — the default — means the socket peer is
-      used. Set it to `x-vercel-forwarded-for` on Vercel, or to `x-forwarded-for` behind
-      a proxy that **replaces** rather than appends to the header. Getting this wrong in
-      the other direction is silent, so leave it blank if you are not sure.
+- [ ] **Trusted-proxy handling.** *(H1 — half done, still exploitable)* `X-Forwarded-For`
+      used to be trusted unconditionally, so every rate limit was bypassable by rotating
+      the header and `/api/newsletter` and `/api/auth/forgot-password` worked as mail-bomb
+      amplifiers. The application-level half shipped: forwarding headers are believed only
+      when `TRUSTED_IP_HEADER` names one. Set it to `x-vercel-forwarded-for` on Vercel, or
+      to `x-forwarded-for` behind a proxy that **replaces** rather than appends.
+
+      **The other half did not, and it defeats the first.** `_client_ip()` falls back to
+      `request.client.host` believing it to be the socket peer. Under uvicorn it is not:
+      `proxy_headers` defaults to `True` and `forwarded_allow_ips` to `127.0.0.1`, so
+      uvicorn rewrites `request.client.host` from `X-Forwarded-For` before the app ever
+      sees the request — for any client on the allowlist, which includes every reverse
+      proxy on the same host. Verified against `/api/contact` (limit 5/60s) on a default
+      `uvicorn server:app`:
+
+      ```
+      no header:              200 200 200 200 200 429 429 429 429
+      rotating X-Forwarded-For: 200 200 200 200 200 200 200 200 200
+      ```
+
+      The audit's remediation was always two-part; only part one was done. Run uvicorn
+      with `--forwarded-allow-ips` naming the proxy (or `""` when nothing fronts it), or
+      set `FORWARDED_ALLOW_IPS`. This is the top open item — see
+      [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) H1.
 
 Configuration the app already enforces (it refuses to start otherwise): `APP_ENV=production`,
 a 32-byte `SESSION_SECRET`, and an explicit `CORS_ORIGINS` allowlist. `SESSION_SECRET` is
@@ -89,6 +105,23 @@ intended for development only (see the deployment checklist). Setting a real `sk
 plus `STRIPE_WEBHOOK_SECRET` switches to live Stripe Checkout, with fulfillment on a
 signature-verified, idempotent webhook and tickets delivered by email with QR attachments.
 
+## Webshop
+
+Merchandise alongside the tickets: admin-managed catalogue with per-product size
+variants, a cart persisted per signed-in account in MongoDB, and Stripe Checkout in RON.
+No guest checkout — an account is required, so orders always have an owner.
+
+Stock is **held at checkout**, not on payment, by a single filtered `$inc` that only
+matches a variant with enough left; abandoned orders release their hold after
+`HOLD_MINUTES`. Fulfilment moves pending → paid → shipped → delivered, and the paid
+transition comes only from the Stripe webhook, never the client.
+
+Prices are VAT-inclusive. The rate starts from `VAT_RATE` (0.21 — Romania's standard
+rate since August 2025) and is editable at runtime in **Admin → Shop settings**, so a
+statutory change needs no redeploy. Invoices store the rate they were issued under, so
+changing it never rewrites history. Fiscal numbering is one unbroken series, allocated
+by an atomic counter.
+
 ## Compliance
 
 Consent logging, newsletter double opt-in + one-click unsubscribe, data export, and
@@ -109,7 +142,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**115 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
+**240 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
 everything else (Mongo URL, database name) comes from `backend/.env`, the same file the
 server reads. If the server isn't running the whole session skips with one clear message
 instead of a wall of connection errors.
@@ -117,8 +150,10 @@ instead of a wall of connection errors.
 The single `xfail` is deliberate: it is audit finding H1 (X-Forwarded-For rate-limit
 bypass), recorded as `xfail(strict=True)` so the gap stays visible *and* so fixing it
 turns the suite red until the marker is removed. That mechanism has already earned its
-keep — M1 was marked the same way, and closing it forced the marker's removal rather than
-letting the stale expectation sit there.
+keep twice. M1 was marked the same way, and closing it forced the marker's removal rather
+than letting the stale expectation sit there. And when this README began claiming H1 was
+fixed, the marker was what proved otherwise — the test still fails, because the fix is
+only half applied (see the checklist above). Trust the marker over the prose.
 
 Test data is namespaced (`@pytest.invalid` addresses, `TEST_` title prefixes), removed at
 teardown, and swept on start if a previous run was interrupted.
@@ -132,13 +167,27 @@ teardown, and swept on start if a previous run was interrupted.
 
 | Path | What it is |
 |---|---|
-| `backend/server.py` | API: auth, ticketing, payments, admin, uploads. Security-relevant spots are marked `SECURITY [id]`, keyed to the audit — `grep -rn "SECURITY \[" backend frontend/src` |
+| `backend/server.py` | API: auth, ticketing, payments, admin, uploads, invoices. Security-relevant spots are marked `SECURITY [id]`, keyed to the audit — `grep -rn "SECURITY \[" backend frontend/src` |
 | `backend/cms_routes.py` | CMS pages, theme, nav |
+| `backend/shop_routes.py` | Webshop: catalogue, cart, checkout, orders, fulfilment |
+| `backend/storage.py` | Media uploads — Vercel Blob when `BLOB_READ_WRITE_TOKEN` is set, local `./uploads` otherwise |
 | `backend/mailer.py` | Resend / `db.outbox` mail abstraction |
+| `backend/tests/` | Integration suite (see **Tests**); `support.py` holds the fixtures and cleanup |
 | `backend/requirements.in` | Intended direct dependencies. `requirements.txt` is an unfiltered freeze — ~60 of its 126 packages are unused |
 | `frontend/src/` | React app |
+| `DEPLOY_VERCEL.md` | Deploying to Vercel + Atlas, and verifying a deploy via `/api/health` |
 | `SECURITY.md` | How the security model works, and its known gaps |
 | `SECURITY_AUDIT.md` | Full audit: findings, attack paths, remediation plan |
 | `auth_testing.md` | Manual auth test flows |
 | `CMS_GUIDE.md` | CMS usage |
-| `test_reports/` | **Stale.** Pre-rewrite QA artifacts; safe to delete |
+| `test_reports/`, `test_result.md` | **Stale.** Pre-rewrite QA artifacts; safe to delete |
+
+## Is it deployed?
+
+```bash
+curl -s https://<your-domain>/api/health
+```
+
+Returns the commit serving traffic plus the schema version the database has migrated to,
+so "did my fix actually ship?" is one request rather than a dashboard hunt. Details in
+[DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md).
