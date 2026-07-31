@@ -25,7 +25,7 @@ import pytest
 import requests
 
 from support import (API, db, mint_user, patient, TEST_EMAIL_DOMAIN, TIMEOUT,
-                     registered_user_doc, _created_user_ids)
+                     registered_user_doc, skip_if_rate_limited, _created_user_ids)
 
 PASSWORD = "pytest-passw0rd"
 
@@ -34,15 +34,8 @@ def _new_email():
     return f"pytest-{uuid.uuid4().hex[:12]}@{TEST_EMAIL_DOMAIN}"
 
 
-def _skip_if_rate_limited(r, what):
-    """/auth/register and /auth/login are rate-limited per IP, and this suite runs
-    every test from one IP — TestRateLimitAuthLogin exists precisely to spend the login
-    budget. Their windows are five minutes, too long for `patient` to wait out, so a
-    collision is reported as "didn't run" rather than as a failure of the rule under
-    test. Anything else is a real result and surfaces normally."""
-    if r.status_code == 429:
-        pytest.skip(f"{what}: rate-limit budget spent by another test in this window")
-    return r
+# Lives in support.py now — test_security_hardening needs the same guard.
+_skip_if_rate_limited = skip_if_rate_limited
 
 
 @pytest.fixture(scope="module")

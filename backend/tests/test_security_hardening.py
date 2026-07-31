@@ -22,7 +22,7 @@ import pytest
 import requests
 
 from support import (BASE_URL, API, db, mint_user, register_user, registered_user_doc,
-                     hash_token, TEST_EMAIL_DOMAIN)
+                     hash_token, skip_if_rate_limited, TEST_EMAIL_DOMAIN)
 
 
 def _mint_session(role: str):
@@ -62,7 +62,9 @@ class TestAdminBootstrap:
         until the emailed verification link is clicked.
         """
         email = f"pytest-{uuid.uuid4().hex[:12]}@{TEST_EMAIL_DOMAIN}"
-        r = register_user(email)
+        # Registration is 5-per-5-minutes per IP and the whole suite shares one. A spent
+        # budget says nothing about which role gets assigned, so skip rather than fail.
+        r = skip_if_rate_limited(register_user(email), "registration")
         assert r.status_code == 200, r.text
         assert r.json().get("verification_required") is True, "registration handed out a session"
         assert registered_user_doc(email).get("role") == "user", "registration granted a privileged role"

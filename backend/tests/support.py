@@ -20,6 +20,7 @@ import contextlib
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+import pytest
 import requests
 from pymongo import MongoClient
 
@@ -137,6 +138,23 @@ def mint_user(role: str = "user") -> tuple:
 
     _created_user_ids.append(user_id)
     return bearer(token), user_id, email
+
+
+def skip_if_rate_limited(r, what):
+    """Report a spent rate-limit budget as "didn't run" rather than as a failure.
+
+    /auth/register and /auth/login are limited per IP, and the whole suite runs from one
+    — TestRateLimitAuthLogin exists precisely to spend the login budget. Their windows
+    are five minutes, too long to wait out mid-run, so a collision says nothing about
+    the rule under test. Anything other than 429 is a real result and surfaces normally.
+
+    Lived in test_account_and_gallery.py until test_security_hardening needed it too:
+    that module asserted 200 outright and so went red whenever an earlier test had
+    already spent the registrations.
+    """
+    if r.status_code == 429:
+        pytest.skip(f"{what}: rate-limit budget spent by another test in this window")
+    return r
 
 
 def register_user(email: str = None, password: str = "pytest-passw0rd", **extra):
