@@ -336,12 +336,23 @@ export default function CMSEditor() {
       toast.error(typeof d === "string" ? d : "Could not set the homepage");
     }
   };
-  /** Hide or show a built-in link. Core rows have no editor panel to host this, and
-   * hiding is the only removal they allow — the route behind them stays live. */
+  /** Hide or show a row in the site nav.
+   *
+   * For a core link this is the only removal there is — the route behind it stays live
+   * either way. For an authored page it is the same `in_nav` the props panel exposes as
+   * a checkbox, just reachable without opening the page first. */
   const toggleNavVisibility = async (p) => {
-    await http.patch(`/admin/cms/pages/${p.page_id}`, { in_nav: !p.in_nav });
+    const next = !p.in_nav;
+    await http.patch(`/admin/cms/pages/${p.page_id}`, { in_nav: next });
     const r = await http.get("/admin/cms/pages");
     setPages(r.data);
+    // The props panel renders its checkbox from `page`, not from `pages`. Without this
+    // the two disagree about the page currently open until it is reselected.
+    if (pageRef.current?.page_id === p.page_id) {
+      const merged = { ...pageRef.current, in_nav: next };
+      pageRef.current = merged;
+      setPage(merged);
+    }
     navChanged();
   };
   const updatePageMeta = async (patch) => {
@@ -509,15 +520,19 @@ export default function CMSEditor() {
                       )}
                       <button onClick={() => movePage(i, -1)} title="Move up" className="text-zinc-500 hover:text-white"><ChevronUp size={12} /></button>
                       <button onClick={() => movePage(i, 1)} title="Move down" className="text-zinc-500 hover:text-white"><ChevronDown size={12} /></button>
-                      {core ? (
-                        <button onClick={() => toggleNavVisibility(p)}
-                                title={p.in_nav === false ? "Show in nav" : "Hide from nav"}
-                                data-testid={`cms-nav-toggle-${p.slug}`}
-                                className="text-zinc-500 hover:text-white">
-                          {p.in_nav === false ? <EyeOff size={12} /> : <Eye size={12} />}
-                        </button>
-                      ) : (
-                        <button onClick={() => deletePage(p.page_id)} className="text-zinc-500 hover:text-[color:var(--accent)]"><Trash2 size={12} /></button>
+                      {/* Every row can be hidden from the nav. For an authored page this
+                          is the same in_nav the props panel exposes, reachable without
+                          opening the page; for a core link it is the only removal there
+                          is. Deleting stays exclusive to authored pages. */}
+                      <button onClick={() => toggleNavVisibility(p)}
+                              title={p.in_nav === false ? "Show in nav" : "Hide from nav"}
+                              data-testid={`cms-nav-toggle-${p.slug}`}
+                              className="text-zinc-500 hover:text-white">
+                        {p.in_nav === false ? <EyeOff size={12} /> : <Eye size={12} />}
+                      </button>
+                      {!core && (
+                        <button onClick={() => deletePage(p.page_id)} title="Delete page"
+                                className="text-zinc-500 hover:text-[color:var(--accent)]"><Trash2 size={12} /></button>
                       )}
                     </div>
                   </li>
