@@ -7,6 +7,7 @@ import { BlockRenderer } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
 import { FormatToolbar } from "../lib/richText";
 import ImageField from "../components/ImageField";
+import { navChanged } from "../lib/nav";
 
 // Wait this long after the last edit before saving...
 const AUTOSAVE_MS = 1200;
@@ -292,6 +293,8 @@ export default function CMSEditor() {
     // the debounce window has to go up first or it silently doesn't get published.
     await saveNow();
     await http.post(`/admin/cms/pages/${page.page_id}/publish`);
+    // A page only enters the nav on its first publish — /cms/nav filters unpublished out.
+    navChanged();
     toast.success("Published live");
     const r = await http.get(`/admin/cms/pages/${page.page_id}`);
     loadPage(r.data);
@@ -318,6 +321,7 @@ export default function CMSEditor() {
     const r = await http.get("/admin/cms/pages");
     setPages(r.data);
     setCurrentId(r.data.find((p) => p.kind !== "core")?.page_id || null);
+    navChanged();
   };
   /** Hide or show a built-in link. Core rows have no editor panel to host this, and
    * hiding is the only removal they allow — the route behind them stays live. */
@@ -325,6 +329,7 @@ export default function CMSEditor() {
     await http.patch(`/admin/cms/pages/${p.page_id}`, { in_nav: !p.in_nav });
     const r = await http.get("/admin/cms/pages");
     setPages(r.data);
+    navChanged();
   };
   const updatePageMeta = async (patch) => {
     // The response carries the server's copy of the draft, which is behind whatever is
@@ -335,6 +340,8 @@ export default function CMSEditor() {
     setPage(merged);
     const list = await http.get("/admin/cms/pages");
     setPages(list.data);
+    // title / nav_label / in_nav all show up in the header.
+    navChanged();
   };
   const movePage = async (idx, dir) => {
     const j = idx + dir;
@@ -344,6 +351,7 @@ export default function CMSEditor() {
     await http.post("/admin/cms/pages/reorder", { order });
     const r = await http.get("/admin/cms/pages");
     setPages(r.data);
+    navChanged();
   };
 
   // ----- Theme -----

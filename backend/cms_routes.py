@@ -322,7 +322,11 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
     @api.post("/cms/seed")
     async def cms_seed(user=Depends(require_admin)):
         """Seed demo CMS pages + theme. Idempotent. Admin only."""
-        existing = await db.cms_pages.count_documents({})
+        # Authored pages only. This used to count the whole collection, which stopped
+        # being a "has anyone written anything yet?" question the moment the core nav
+        # rows started living here too: they are created at boot, so the count was never
+        # zero and a fresh install silently seeded nothing while reporting success.
+        existing = await db.cms_pages.count_documents({"kind": {"$ne": "core"}})
         if existing > 0:
             return {"seeded": False, "reason": "already has data"}
 

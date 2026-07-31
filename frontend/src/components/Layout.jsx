@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth, startLogin } from "../auth";
 import { http } from "../api";
 import { Menu, X, ShoppingBag, ChevronDown, User } from "lucide-react";
 import { useCart } from "../lib/cart";
+import { onNavChanged } from "../lib/nav";
 
 /** Nav shown before /cms/nav answers.
  *
@@ -208,9 +209,16 @@ const Footer = () => (
 
 export default function Layout({ children }) {
   const [cmsNav, setCmsNav] = useState([]);
-  useEffect(() => {
+  const loadNav = useCallback(() => {
     http.get("/cms/nav").then((r) => setCmsNav(r.data)).catch(() => setCmsNav([]));
   }, []);
+  // Load once, then again whenever the CMS says the nav changed. Layout never unmounts
+  // during client-side navigation, so without the subscription an editor who reorders
+  // pages and returns to the site keeps seeing the order from when the tab was opened.
+  useEffect(() => {
+    loadNav();
+    return onNavChanged(loadNav);
+  }, [loadNav]);
   // The header and footer are common to every page — including full-screen tools
   // like Scan and the CMS editor.
   return (
