@@ -186,7 +186,11 @@ export function useQrCamera(onScan) {
   const lastDecodeAtRef = useRef(0);
   const lastRef = useRef({ code: "", at: 0 });
   const onScanRef = useRef(onScan);
+  const pausedRef = useRef(false);
+  const trackRef = useRef(null);
   const [scanning, setScanning] = useState(false);
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
 
   // The frame loop closes over onScan once; keep it pointing at the current one.
   useEffect(() => { onScanRef.current = onScan; }, [onScan]);
@@ -205,11 +209,13 @@ export function useQrCamera(onScan) {
   const stop = useCallback(() => {
     runningRef.current = false;
     busyRef.current = false;
+    pausedRef.current = false;
     cancelFrame();
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    trackRef.current = null;
     const video = videoRef.current;
     if (video) {
       try { video.pause(); } catch { /* already paused or detached */ }
@@ -217,7 +223,41 @@ export function useQrCamera(onScan) {
     }
     detectorRef.current = null;
     setScanning(false);
+    setTorchSupported(false);
+    setTorchOn(false); // the torch dies with the track; don't leave the UI claiming it's lit
   }, [cancelFrame]);
+
+  /** Hold the decode loop without dropping the camera.
+   *
+   * A verdict stays on screen until someone dismisses it, and the frame loop must not
+   * keep reading in the meantime: the same ticket sitting in front of the lens would
+   * re-fire the moment the 3s debounce lapsed, replacing the verdict the door staff were
+   * still reading. The stream stays live so resuming is instant. */
+  const pause = useCallback(() => { pausedRef.current = true; }, []);
+  const resume = useCallback(() => {
+    // Restart the debounce on the code just handled rather than forgetting it. The guest
+    // is often still standing there with the ticket in frame when NEXT is pressed, and
+    // clearing the memory made it re-scan itself instantly — the verdict reappeared
+    // before anyone could look up. A different ticket still registers immediately.
+    lastRef.current = { ...lastRef.current, at: Date.now() };
+    pausedRef.current = false;
+  }, []);
+
+  /** Torch, where the device exposes it — Android Chrome mostly does, iOS does not. */
+  const toggleTorch = useCallback(async () => {
+    const track = trackRef.current;
+    if (!track) return;
+    const next = !torchOn;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: next }] });
+      setTorchOn(next);
+    } catch {
+      // Some devices advertise the capability and then refuse it. Don't leave the
+      // button showing a state the lamp isn't in.
+      setTorchOn(false);
+      setTorchSupported(false);
+    }
+  }, [torchOn]);
 
   /* Frame loop.
    *
@@ -245,6 +285,7 @@ export function useQrCamera(onScan) {
   pumpRef.current = async (now) => {
     if (!runningRef.current) return;
     scheduleFrame(); // queue the next frame first, so one bad decode cannot end the loop
+    if (pausedRef.current) return; // a verdict is on screen, waiting to be dismissed
     if (busyRef.current) return; // previous decode still running — skip, don't pile up
     if (now - lastDecodeAtRef.current < DECODE_MIN_INTERVAL_MS) return;
 
@@ -306,6 +347,11 @@ export function useQrCamera(onScan) {
       return { error: describeCameraError(err) };
     }
     streamRef.current = stream;
+    trackRef.current = stream.getVideoTracks()[0] || null;
+    // getCapabilities is itself absent on some browsers; torch stays hidden there.
+    const caps = trackRef.current?.getCapabilities?.();
+    setTorchSupported(!!caps && "torch" in caps);
+    setTorchOn(false);
     video.srcObject = stream;
 
     // Reveal the preview before waiting on it. The element is display:none while idle,
@@ -329,6 +375,7 @@ export function useQrCamera(onScan) {
     }
 
     runningRef.current = true;
+    pausedRef.current = false;
     lastDecodeAtRef.current = 0;
     lastRef.current = { code: "", at: 0 };
     scheduleFrame();
@@ -337,5 +384,5 @@ export function useQrCamera(onScan) {
 
   useEffect(() => stop, [stop]);
 
-  return { videoRef, scanning, start, stop };
+  return { videoRef, scanning, start, stop, pause, resume, torchSupported, torchOn, toggleTorch };
 }
