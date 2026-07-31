@@ -31,7 +31,7 @@ export default function MyOrders() {
   if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
   if (!user) return (
     <div className="max-w-xl mx-auto px-6 py-24 text-center">
-      <h1 className="font-display text-4xl uppercase font-black tracking-tighter">Sign in to see your orders</h1>
+      <h1 className="font-display text-3xl sm:text-4xl uppercase font-black tracking-tighter break-words">Sign in to see your orders</h1>
       <button onClick={() => startLogin("/my-orders")} className="btn-accent mt-8">SIGN IN</button>
     </div>
   );
@@ -39,7 +39,7 @@ export default function MyOrders() {
   return (
     <div className="max-w-[1100px] mx-auto px-6 md:px-10 py-16">
       <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Account</div>
-      <h1 className="font-display text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">My Orders</h1>
+      <h1 className="font-display text-4xl sm:text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">My Orders</h1>
 
       {orders === null ? (
         <div className="mt-10 font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Loading…</div>

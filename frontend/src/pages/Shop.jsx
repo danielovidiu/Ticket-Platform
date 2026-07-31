@@ -24,11 +24,17 @@ function ProductCard({ p }) {
           </div>
         )}
       </div>
-      <div className="flex-1 flex flex-col justify-between gap-2 p-3">
-        <div className="font-display uppercase font-bold leading-tight">{p.name}</div>
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="font-mono-x text-sm">{ron(p.price_ron)}</span>
-          <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500">{p.category}</span>
+      <div className="flex-1 flex flex-col justify-between gap-2 p-3 min-w-0">
+        {/* break-words, because a product name is one uppercase token often enough
+            ("MIDNIGHT") to overflow a half-width card on a 375px screen. */}
+        <div className="font-display uppercase font-bold leading-tight break-words">{p.name}</div>
+        {/* Wraps below the price rather than being pushed out of the card: at two
+            columns on mobile these two sit in ~126px, and "149.00 RON" next to
+            "accessories" needs 146px. The category yields first — it is the lesser
+            of the two — and truncates only once wrapping is not enough. */}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-2 min-w-0">
+          <span className="font-mono-x text-sm whitespace-nowrap">{ron(p.price_ron)}</span>
+          <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 min-w-0 truncate">{p.category}</span>
         </div>
       </div>
     </Link>
@@ -80,7 +86,7 @@ export default function Shop() {
   return (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
       <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Merchandise</div>
-      <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-2">Shop</h1>
+      <h1 className="font-display text-4xl sm:text-5xl md:text-7xl uppercase font-black tracking-tighter mt-2">Shop</h1>
 
       <div className="mt-10 flex flex-wrap gap-2 items-center" data-testid="shop-filters">
         <Chip active={!category} onClick={() => setFilter("category", "")} testId="filter-all">All</Chip>

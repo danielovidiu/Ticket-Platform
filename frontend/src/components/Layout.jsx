@@ -24,7 +24,7 @@ const FALLBACK_NAV = [
  * One list so the desktop dropdown and the mobile sheet cannot drift apart. */
 const ACCOUNT_LINKS = [
   { to: "/my-tickets", label: "My Tickets", testid: "my-tickets-link" },
-  { to: "/my-orders", label: "Orders", testid: "my-orders-link" },
+  { to: "/my-orders", label: "My Orders", testid: "my-orders-link" },
   { to: "/settings", label: "Profile", testid: "settings-link" },
   { to: "/admin", label: "Admin", testid: "admin-link", roles: ["admin"] },
   { to: "/cms", label: "CMS", testid: "cms-link", roles: ["admin", "editor"] },
@@ -95,7 +95,9 @@ const AccountMenu = ({ user, logout }) => {
               aria-haspopup="menu" aria-expanded={open}
               className="btn-accent inline-flex items-center gap-2">
         <User size={13} />
-        <span>Profile</span>
+        {/* "Account" is the menu, "Profile" is the settings page nested inside it —
+            they are deliberately different words so the label is not repeated twice. */}
+        <span>Account</span>
         <ChevronDown size={13} className={open ? "rotate-180 transition-transform" : "transition-transform"} />
       </button>
       {open && (

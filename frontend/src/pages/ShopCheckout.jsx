@@ -53,7 +53,7 @@ export default function ShopCheckout() {
   if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
   if (!user) return (
     <div className="max-w-xl mx-auto px-6 py-24 text-center">
-      <h1 className="font-display text-4xl uppercase font-black tracking-tighter">Sign in to check out</h1>
+      <h1 className="font-display text-3xl sm:text-4xl uppercase font-black tracking-tighter break-words">Sign in to check out</h1>
       <p className="mt-4 text-zinc-400 text-sm">An account is required — it's where your order and invoice live.</p>
       <button onClick={() => startLogin("/shop/checkout")} className="btn-accent mt-8">SIGN IN</button>
     </div>
@@ -103,7 +103,7 @@ export default function ShopCheckout() {
   return (
     <div className="max-w-[1100px] mx-auto px-6 md:px-10 py-16">
       <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Merchandise</div>
-      <h1 className="font-display text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">Checkout</h1>
+      <h1 className="font-display text-4xl sm:text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">Checkout</h1>
 
       <form onSubmit={submit} className="mt-10 grid lg:grid-cols-12 gap-8 items-start">
         <div className="lg:col-span-7 border border-white/10 bg-[#0F0F0F] p-6 space-y-4">
@@ -112,11 +112,16 @@ export default function ShopCheckout() {
           <Field label="Phone" k="phone" type="tel" placeholder="+40 721 234 567" />
           <Field label="Address" k="line1" required placeholder="Street and number" />
           <Field label="Address line 2" k="line2" placeholder="Block, flat, floor (optional)" />
-          <div className="grid grid-cols-2 gap-4">
+          {/* One column until there is room for two. Two address fields side by side in
+              a 375px viewport leave ~150px each, which truncates the placeholder before
+              the user has typed anything. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="City" k="city" required />
             <Field label="County / region" k="county" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          {/* Same reason, and the country select is the worse case: its options are full
+              country names, and a narrow select clips them rather than wrapping. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Postal code" k="postal_code" required />
             <label className="block">
               <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-1 font-mono-x">Country</div>
@@ -146,18 +151,18 @@ export default function ShopCheckout() {
           {totals && (
             <div className="mt-5 pt-4 border-t border-white/10 space-y-2 font-mono-x text-sm">
               <div className="flex justify-between"><span className="text-zinc-400">Subtotal</span><span>{ron(totals.subtotal)}</span></div>
-              <div className="flex justify-between">
-                <span className="text-zinc-400">Shipping ({totals.zone})</span>
-                <span data-testid="checkout-shipping">{totals.shipping === 0 ? "Free" : ron(totals.shipping)}</span>
+              <div className="flex justify-between gap-3">
+                <span className="text-zinc-400 min-w-0 truncate">Shipping ({totals.zone})</span>
+                <span data-testid="checkout-shipping" className="shrink-0">{totals.shipping === 0 ? "Free" : ron(totals.shipping)}</span>
               </div>
               <div className="flex justify-between text-base pt-2 border-t border-white/10">
                 <span>Total</span><span data-testid="checkout-total">{ron(totals.total)}</span>
               </div>
               {/* Romanian retail prices are quoted VAT-inclusive, so the split is shown
                   rather than added — the total above is what gets charged. */}
-              <div className="flex justify-between text-[10px] uppercase tracking-[0.2em] text-zinc-500 pt-1">
-                <span>of which VAT ({Math.round(settings.vat_rate * 100)}%)</span>
-                <span data-testid="checkout-vat">{ron(totals.vat)}</span>
+              <div className="flex justify-between gap-3 text-[10px] uppercase tracking-[0.2em] text-zinc-500 pt-1">
+                <span className="min-w-0">of which VAT ({Math.round(settings.vat_rate * 100)}%)</span>
+                <span data-testid="checkout-vat" className="shrink-0">{ron(totals.vat)}</span>
               </div>
             </div>
           )}

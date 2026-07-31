@@ -24,7 +24,7 @@ export default function Cart() {
   if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
   if (!user) return (
     <div className="max-w-xl mx-auto px-6 py-24 text-center">
-      <h1 className="font-display text-4xl uppercase font-black tracking-tighter">Sign in to see your cart</h1>
+      <h1 className="font-display text-3xl sm:text-4xl uppercase font-black tracking-tighter break-words">Sign in to see your cart</h1>
       <p className="mt-4 text-zinc-400 text-sm">Your cart is saved to your account, so it follows you between devices.</p>
       <button onClick={() => startLogin("/cart")} className="btn-accent mt-8">SIGN IN</button>
     </div>
@@ -54,7 +54,7 @@ export default function Cart() {
   return (
     <div className="max-w-[1100px] mx-auto px-6 md:px-10 py-16">
       <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Merchandise</div>
-      <h1 className="font-display text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">Cart</h1>
+      <h1 className="font-display text-4xl sm:text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">Cart</h1>
 
       {empty ? (
         <div className="mt-12 border border-dashed border-white/10 p-12 text-center">
@@ -75,7 +75,9 @@ export default function Cart() {
                 </Link>
                 <div className="min-w-0 flex-1">
                   <Link to={`/shop/${l.slug}`} className="font-display uppercase font-bold hover:underline break-words">{l.name}</Link>
-                  <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1">
+                  {/* break-words: wide letter-spacing on a SKU pushes this past a 320px
+                      card, and "M · TEE-OBS-M" has no plain space to wrap at. */}
+                  <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1 break-words">
                     {[l.size, l.sku].filter(Boolean).join(" · ")}
                   </div>
                   {!l.purchasable && (
