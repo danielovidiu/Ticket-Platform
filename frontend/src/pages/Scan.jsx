@@ -8,6 +8,10 @@ export default function Scan() {
   const { user, loading } = useAuth();
   const [manual, setManual] = useState("");
   const [result, setResult] = useState(null);
+  // Kept apart from `result` on purpose. `result` is a verdict on a ticket and paints the
+  // whole screen red for INVALID; a camera that won't open is not a bad ticket, and
+  // showing "INVALID" for it told door staff the guest should be turned away.
+  const [cameraError, setCameraError] = useState(null);
   const { enqueue } = useOfflineScanQueue();
 
   const submit = async (code) => {
@@ -30,8 +34,9 @@ export default function Scan() {
 
   const handleStart = async () => {
     setResult(null);
+    setCameraError(null);
     const r = await start();
-    if (r?.error) setResult({ valid: false, reason: r.error });
+    if (r?.error) setCameraError(r.error);
   };
 
   if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
@@ -57,13 +62,23 @@ export default function Scan() {
       <div className="p-4 md:p-8 max-w-2xl mx-auto space-y-6">
         <div className="border-2 border-current p-6">
           <div className="font-mono-x text-xs uppercase tracking-[0.3em]">Camera</div>
+          {/* The <video> stays mounted and is hidden while idle, rather than being
+              rendered only when scanning. start() needs a real element to attach the
+              stream to, and it runs before React would have created one. */}
+          <video ref={videoRef} muted playsInline
+                 data-testid="scanner-video"
+                 className={scanning ? "w-full mt-4 border border-current" : "hidden"} />
           {!scanning ? (
             <button onClick={handleStart} data-testid="start-camera" className="btn-accent w-full mt-4"><Camera className="inline mr-2" size={16} /> START SCANNER</button>
           ) : (
-            <>
-              <video ref={videoRef} className="w-full mt-4 border border-current" muted playsInline />
-              <button onClick={stop} className="btn-primary w-full mt-2">STOP</button>
-            </>
+            <button onClick={stop} data-testid="stop-camera" className="btn-primary w-full mt-2">STOP</button>
+          )}
+          {cameraError && (
+            <div data-testid="camera-error"
+                 className="mt-4 border border-current/40 p-3 font-mono-x text-[11px] uppercase tracking-[0.15em] leading-relaxed opacity-80">
+              {cameraError}
+              <div className="mt-1 opacity-70">Enter the code by hand below.</div>
+            </div>
           )}
         </div>
 
