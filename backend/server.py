@@ -3152,7 +3152,16 @@ async def security_headers(request: Request, call_next):
     # referrer leak is a credential leak. This is the cheapest half of that fix; moving
     # the tokens out of the query string entirely is audit item P1.6.
     response.headers.setdefault("Referrer-Policy", "no-referrer")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    # camera=(self), not camera=(): an empty allowlist denies the camera to every origin
+    # INCLUDING this one, so getUserMedia is rejected with NotAllowedError and the browser
+    # never even prompts. That is what broke the door scanner on every device — it read as
+    # "access denied" with no permission dialog to grant. Microphone and geolocation stay
+    # fully denied; nothing here asks for them.
+    #
+    # On Vercel the document is served by the frontend service, so vercel.json carries the
+    # header that actually governs the scanner page; this one matters the moment anything
+    # serves the SPA from here instead.
+    response.headers.setdefault("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
 
     # Only meaningful over TLS, and actively unhelpful on http dev where it would pin the
     # browser to a scheme localhost isn't serving.

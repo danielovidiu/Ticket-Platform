@@ -65,7 +65,10 @@ export default function Scan() {
           {/* The <video> stays mounted and is hidden while idle, rather than being
               rendered only when scanning. start() needs a real element to attach the
               stream to, and it runs before React would have created one. */}
-          <video ref={videoRef} muted playsInline
+          {/* autoplay as well as muted + playsInline: iOS will refuse to start an
+              inline stream without all three, and playsInline alone leaves the frame
+              pipeline idle until something calls play(). */}
+          <video ref={videoRef} autoPlay muted playsInline
                  data-testid="scanner-video"
                  className={scanning ? "w-full mt-4 border border-current" : "hidden"} />
           {!scanning ? (
