@@ -343,15 +343,52 @@ export default function CMSEditor() {
     // title / nav_label / in_nav all show up in the header.
     navChanged();
   };
-  const movePage = async (idx, dir) => {
+  /** Save a new page order. The arrows and the drag handler both go through here, so
+   *  the two cannot drift apart.
+   *
+   *  Optimistic: the list already shows `next` before the request goes out, because a
+   *  row that snaps back to its old position for the length of a round trip reads as a
+   *  failed drag. On an actual failure it re-reads the server rather than leaving the
+   *  sidebar showing an order that was never saved — which is the bug this whole area
+   *  had in a different form. */
+  const persistOrder = async (next) => {
+    setPages(next);
+    try {
+      await http.post("/admin/cms/pages/reorder", { order: next.map((p) => p.page_id) });
+      navChanged();
+    } catch {
+      toast.error("Could not save the new order");
+      const r = await http.get("/admin/cms/pages");
+      setPages(r.data);
+    }
+  };
+
+  const movePage = (idx, dir) => {
     const j = idx + dir;
     if (j < 0 || j >= pages.length) return;
-    const order = pages.map((p) => p.page_id);
-    [order[idx], order[j]] = [order[j], order[idx]];
-    await http.post("/admin/cms/pages/reorder", { order });
-    const r = await http.get("/admin/cms/pages");
-    setPages(r.data);
-    navChanged();
+    const next = [...pages];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    persistOrder(next);
+  };
+
+  // ----- Nav drag & drop -----
+  // Its own ref, deliberately not shared with the block list's `dragIdx`: both lists are
+  // on screen at once and a drag started in one must not be droppable into the other.
+  const navDragIdx = useRef(null);
+  const onNavDragStart = (i) => (e) => {
+    navDragIdx.current = i;
+    e.dataTransfer.effectAllowed = "move";
+  };
+  const onNavDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; };
+  const onNavDrop = (i) => (e) => {
+    e.preventDefault();
+    const from = navDragIdx.current;
+    navDragIdx.current = null;
+    if (from == null || from === i) return;
+    const next = [...pages];
+    const [moved] = next.splice(from, 1);
+    next.splice(i, 0, moved);
+    persistOrder(next);
   };
 
   // ----- Theme -----
@@ -417,7 +454,10 @@ export default function CMSEditor() {
         {/* LEFT: pages + blocks */}
         <aside className="col-span-12 md:col-span-3 xl:col-span-2 border-r border-white/10 overflow-y-auto p-3 space-y-4">
           <div>
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 mb-2">Navigation</div>
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">Navigation</div>
+            {/* Dragging has no affordance of its own, so say so. The arrows stay: they
+                are the keyboard-reachable path, and drag-and-drop is not. */}
+            <div className="font-mono-x text-[9px] uppercase tracking-[0.2em] text-zinc-600 mt-1 mb-2">Drag to reorder</div>
             {/* One list, in nav order, holding both authored pages and the built-in
                 sections. The arrows reorder across the whole thing, which is the only
                 way the two kinds can be interleaved — before this, core links were
@@ -428,7 +468,12 @@ export default function CMSEditor() {
                 return (
                   <li key={p.page_id}
                       data-testid={`cms-nav-row-${p.slug}`}
-                      className={`flex items-center justify-between border px-2 py-1.5 text-xs ${p.page_id === currentId ? "border-white bg-white/10" : "border-white/10"} ${p.in_nav === false ? "opacity-50" : ""}`}>
+                      draggable
+                      onDragStart={onNavDragStart(i)}
+                      onDragOver={onNavDragOver}
+                      onDrop={onNavDrop(i)}
+                      title="Drag to reorder"
+                      className={`flex items-center justify-between border px-2 py-1.5 text-xs cursor-move ${p.page_id === currentId ? "border-white bg-white/10" : "border-white/10"} ${p.in_nav === false ? "opacity-50" : ""}`}>
                     {core ? (
                       <span className="flex-1 truncate text-zinc-400" title={`Built-in section — ${p.route}`}>
                         {p.nav_label || p.title}
