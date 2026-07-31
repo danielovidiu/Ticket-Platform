@@ -56,7 +56,10 @@ export default function CMSEditor() {
     if (!user || (user.role !== "admin" && user.role !== "editor")) return;
     http.get("/admin/cms/pages").then((r) => {
       setPages(r.data);
-      if (r.data[0] && !currentId) setCurrentId(r.data[0].page_id);
+      // Open the first *editable* page. Core nav rows sort into this list by nav_order
+      // and can be first, and they have no blocks to open.
+      const firstPage = r.data.find((p) => p.kind !== "core");
+      if (firstPage && !currentId) setCurrentId(firstPage.page_id);
     });
     http.get("/admin/cms/theme").then((r) => {
       setTheme(r.data);
@@ -314,7 +317,14 @@ export default function CMSEditor() {
     await http.delete(`/admin/cms/pages/${pid}`);
     const r = await http.get("/admin/cms/pages");
     setPages(r.data);
-    setCurrentId(r.data[0]?.page_id || null);
+    setCurrentId(r.data.find((p) => p.kind !== "core")?.page_id || null);
+  };
+  /** Hide or show a built-in link. Core rows have no editor panel to host this, and
+   * hiding is the only removal they allow — the route behind them stays live. */
+  const toggleNavVisibility = async (p) => {
+    await http.patch(`/admin/cms/pages/${p.page_id}`, { in_nav: !p.in_nav });
+    const r = await http.get("/admin/cms/pages");
+    setPages(r.data);
   };
   const updatePageMeta = async (patch) => {
     // The response carries the server's copy of the draft, which is behind whatever is
@@ -399,18 +409,43 @@ export default function CMSEditor() {
         {/* LEFT: pages + blocks */}
         <aside className="col-span-12 md:col-span-3 xl:col-span-2 border-r border-white/10 overflow-y-auto p-3 space-y-4">
           <div>
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 mb-2">Pages</div>
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 mb-2">Navigation</div>
+            {/* One list, in nav order, holding both authored pages and the built-in
+                sections. The arrows reorder across the whole thing, which is the only
+                way the two kinds can be interleaved — before this, core links were
+                hardcoded in the header and always came last. */}
             <ul className="space-y-1">
-              {pages.map((p, i) => (
-                <li key={p.page_id} className={`flex items-center justify-between border px-2 py-1.5 text-xs ${p.page_id === currentId ? "border-white bg-white/10" : "border-white/10"}`}>
-                  <button onClick={() => selectPage(p.page_id)} className="text-left flex-1 truncate">{p.title}</button>
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => movePage(i, -1)} className="text-zinc-500 hover:text-white"><ChevronUp size={12} /></button>
-                    <button onClick={() => movePage(i, 1)} className="text-zinc-500 hover:text-white"><ChevronDown size={12} /></button>
-                    <button onClick={() => deletePage(p.page_id)} className="text-zinc-500 hover:text-[color:var(--accent)]"><Trash2 size={12} /></button>
-                  </div>
-                </li>
-              ))}
+              {pages.map((p, i) => {
+                const core = p.kind === "core";
+                return (
+                  <li key={p.page_id}
+                      data-testid={`cms-nav-row-${p.slug}`}
+                      className={`flex items-center justify-between border px-2 py-1.5 text-xs ${p.page_id === currentId ? "border-white bg-white/10" : "border-white/10"} ${p.in_nav === false ? "opacity-50" : ""}`}>
+                    {core ? (
+                      <span className="flex-1 truncate text-zinc-400" title={`Built-in section — ${p.route}`}>
+                        {p.nav_label || p.title}
+                        <span className="ml-1 text-[9px] uppercase tracking-[0.2em] text-zinc-600">link</span>
+                      </span>
+                    ) : (
+                      <button onClick={() => selectPage(p.page_id)} className="text-left flex-1 truncate">{p.title}</button>
+                    )}
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => movePage(i, -1)} title="Move up" className="text-zinc-500 hover:text-white"><ChevronUp size={12} /></button>
+                      <button onClick={() => movePage(i, 1)} title="Move down" className="text-zinc-500 hover:text-white"><ChevronDown size={12} /></button>
+                      {core ? (
+                        <button onClick={() => toggleNavVisibility(p)}
+                                title={p.in_nav === false ? "Show in nav" : "Hide from nav"}
+                                data-testid={`cms-nav-toggle-${p.slug}`}
+                                className="text-zinc-500 hover:text-white">
+                          {p.in_nav === false ? <EyeOff size={12} /> : <Eye size={12} />}
+                        </button>
+                      ) : (
+                        <button onClick={() => deletePage(p.page_id)} className="text-zinc-500 hover:text-[color:var(--accent)]"><Trash2 size={12} /></button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </div>
 

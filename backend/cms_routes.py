@@ -12,6 +12,70 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 
+# The built-in sections. These are React routes, not CMS pages — there are no blocks to
+# edit — but they sit in the same navigation bar as the pages, so they are stored in
+# `cms_pages` as `kind: "core"` rows purely to take part in `nav_order`. That is what
+# makes the whole bar reorderable from one list instead of the core links being frozen
+# after whatever the CMS happens to emit.
+#
+# The default orders continue the seeded pages (home 0, mission 1, contact 2), so an
+# existing site upgrades to exactly the arrangement it already displayed.
+CORE_NAV_ITEMS = [
+    # (slug, label, route, default nav_order)
+    ("core-events", "Events", "/events", 3),
+    ("core-shop", "Shop", "/shop", 4),
+    ("core-artists", "Artists", "/artists", 5),
+    ("core-archive", "Archive", "/archive", 6),
+    ("core-gallery", "Gallery", "/gallery", 7),
+]
+
+
+def page_route(slug: str) -> str:
+    """Where a CMS page lives in the router.
+
+    Three slugs predate the generic /p/<slug> route and keep their own paths. This used
+    to be a conditional expression inside the header component, which meant the frontend
+    had to know the routing table in order to draw a link; now the nav payload carries a
+    ready-made href and the header just renders it.
+    """
+    return {"home": "/", "mission": "/mission", "contact": "/contact"}.get(slug, f"/p/{slug}")
+
+
+async def ensure_core_nav_items(db):
+    """Create the core nav rows once. Never touches one that already exists.
+
+    Order, label and visibility are editable afterwards, so re-running this must not
+    reset an arrangement somebody chose — `$setOnInsert` with no `$set` is what
+    guarantees that, and it makes the call safe on every boot and race-safe between two
+    cold starts.
+    """
+    created = 0
+    for slug, label, route, order in CORE_NAV_ITEMS:
+        result = await db.cms_pages.update_one(
+            {"slug": slug},
+            {"$setOnInsert": {
+                "page_id": f"nav_{uuid.uuid4().hex[:16]}",
+                "slug": slug,
+                "kind": "core",
+                "route": route,
+                "title": label,
+                "nav_label": label,
+                "nav_order": order,
+                "in_nav": True,
+                # No blocks, no draft, no versions: there is nothing to author here. The
+                # editor keys off `kind` and refuses to open one.
+                "draft": None,
+                "published": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+            upsert=True,
+        )
+        if result.upserted_id is not None:
+            created += 1
+    return created
+
+
 def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_editor):
     """Attach all CMS endpoints to the provided api router."""
 
@@ -64,13 +128,26 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
 
     @api.get("/cms/nav")
     async def get_public_nav():
+        """The whole navigation bar, in order, with hrefs resolved.
+
+        Core rows qualify on `kind` rather than on `published`: they have no blocks to
+        publish, so the published check that (correctly) hides an unfinished page would
+        otherwise hide every built-in section permanently.
+        """
         cursor = db.cms_pages.find(
-            {"in_nav": True, "published": {"$ne": None}},
-            {"_id": 0, "page_id": 1, "slug": 1, "nav_label": 1, "title": 1, "nav_order": 1},
+            {"in_nav": True, "$or": [{"kind": "core"}, {"published": {"$ne": None}}]},
+            {"_id": 0, "slug": 1, "nav_label": 1, "title": 1, "nav_order": 1,
+             "kind": 1, "route": 1},
         ).sort("nav_order", 1)
         items = await cursor.to_list(200)
         return [
-            {"slug": p["slug"], "label": p.get("nav_label") or p["title"]} for p in items
+            {
+                "slug": p["slug"],
+                "label": p.get("nav_label") or p["title"],
+                "route": p["route"] if p.get("kind") == "core" else page_route(p["slug"]),
+                "kind": p.get("kind") or "page",
+            }
+            for p in items
         ]
 
     # ---------- Admin/Editor ----------
@@ -162,9 +239,18 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
 
     @api.delete("/admin/cms/pages/{page_id}")
     async def admin_delete_page(page_id: str, user=Depends(require_admin_or_editor)):
-        r = await db.cms_pages.delete_one({"page_id": page_id})
-        if r.deleted_count == 0:
+        existing = await db.cms_pages.find_one({"page_id": page_id}, {"_id": 0, "kind": 1})
+        # `is None`, not falsiness: a page created before `kind` existed projects down to
+        # an empty dict, which is falsy, and `if not existing` reported every one of them
+        # as 404 instead of deleting it.
+        if existing is None:
             raise HTTPException(404, "Page not found")
+        # Deleting one would drop a section of the site out of the nav with no way to get
+        # it back from the UI, and the route it points at would still be live and
+        # reachable. Hide it with `in_nav` instead — that is reversible.
+        if existing.get("kind") == "core":
+            raise HTTPException(400, "Built-in nav links cannot be deleted — hide them instead")
+        await db.cms_pages.delete_one({"page_id": page_id})
         return {"ok": True}
 
     @api.post("/admin/cms/pages/reorder")

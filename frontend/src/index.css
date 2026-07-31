@@ -135,3 +135,9 @@ body {
     border-top-color: inherit; border-bottom-color: inherit;
   }
 }
+
+/* Horizontal scroll without a visible bar. The header nav scrolls rather than wrapping,
+   so its row height stays constant no matter how many pages the CMS adds — a scrollbar
+   across the middle of the header would defeat the point. */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

@@ -304,3 +304,88 @@ def test_admin_stats_regression():
     d = r.json()
     for k in ("revenue_ron", "total_orders", "total_tickets", "scanned", "events"):
         assert k in d
+
+
+# ---------- Core nav links (built-in sections, reorderable from the CMS) ----------
+
+CORE_SLUGS = {"core-events", "core-shop", "core-artists", "core-archive", "core-gallery"}
+
+
+def test_core_links_appear_in_public_nav_with_routes():
+    """They have no blocks and are never published, so they qualify on `kind` instead —
+    the published filter that hides an unfinished page would otherwise hide them all."""
+    nav = requests.get(f"{API}/cms/nav", timeout=15).json()
+    core = {i["slug"]: i for i in nav if i.get("kind") == "core"}
+    assert CORE_SLUGS <= set(core), f"missing core links: {CORE_SLUGS - set(core)}"
+    assert core["core-shop"]["route"] == "/shop"
+    assert core["core-events"]["label"] == "Events"
+
+
+def test_nav_resolves_hrefs_for_authored_pages():
+    """The header renders `route` verbatim now, so the routing table lives server-side.
+    Three slugs predate /p/<slug> and must keep their own paths."""
+    nav = {i["slug"]: i["route"] for i in requests.get(f"{API}/cms/nav", timeout=15).json()}
+    assert nav.get("home") == "/"
+    assert nav.get("mission") == "/mission"
+    assert nav.get("contact") == "/contact"
+
+
+def test_nav_is_returned_in_nav_order():
+    nav = requests.get(f"{API}/cms/nav", timeout=15).json()
+    pages = requests.get(f"{API}/admin/cms/pages", headers=_b(EDITOR_TOKEN), timeout=15).json()
+    order = {p["slug"]: p["nav_order"] for p in pages}
+    seen = [order[i["slug"]] for i in nav if i["slug"] in order]
+    assert seen == sorted(seen), f"nav came back out of order: {seen}"
+
+
+def test_core_link_can_be_reordered_among_pages():
+    """The point of the whole change: a built-in section can be moved ahead of an
+    authored page. Before this, core links were hardcoded in the header and always last."""
+    editor = _b(EDITOR_TOKEN)
+    pages = requests.get(f"{API}/admin/cms/pages", headers=editor, timeout=15).json()
+    original = [p["page_id"] for p in pages]
+    gallery = next(p for p in pages if p["slug"] == "core-gallery")
+
+    moved = [pid for pid in original if pid != gallery["page_id"]]
+    moved.insert(0, gallery["page_id"])
+    try:
+        r = requests.post(f"{API}/admin/cms/pages/reorder", json={"order": moved},
+                          headers=editor, timeout=15)
+        assert r.status_code == 200
+        nav = requests.get(f"{API}/cms/nav", timeout=15).json()
+        assert nav[0]["slug"] == "core-gallery", [i["slug"] for i in nav]
+    finally:
+        # Leave the arrangement exactly as found — every other test reads this nav.
+        requests.post(f"{API}/admin/cms/pages/reorder", json={"order": original},
+                      headers=editor, timeout=15)
+
+
+def test_core_link_cannot_be_deleted():
+    """Deleting one would strip a section from the nav with no way back from the UI,
+    while the route behind it stayed live. Hiding is the reversible alternative."""
+    editor = _b(EDITOR_TOKEN)
+    pages = requests.get(f"{API}/admin/cms/pages", headers=editor, timeout=15).json()
+    core = next(p for p in pages if p["slug"] == "core-shop")
+
+    r = requests.delete(f"{API}/admin/cms/pages/{core['page_id']}", headers=editor, timeout=15)
+    assert r.status_code == 400, r.text
+    assert "cannot be deleted" in r.json()["detail"].lower()
+
+    still = requests.get(f"{API}/admin/cms/pages", headers=editor, timeout=15).json()
+    assert any(p["slug"] == "core-shop" for p in still), "core link disappeared anyway"
+
+
+def test_core_link_can_be_hidden_and_restored():
+    editor = _b(EDITOR_TOKEN)
+    pages = requests.get(f"{API}/admin/cms/pages", headers=editor, timeout=15).json()
+    core = next(p for p in pages if p["slug"] == "core-archive")
+    try:
+        requests.patch(f"{API}/admin/cms/pages/{core['page_id']}", json={"in_nav": False},
+                       headers=editor, timeout=15)
+        slugs = [i["slug"] for i in requests.get(f"{API}/cms/nav", timeout=15).json()]
+        assert "core-archive" not in slugs, slugs
+    finally:
+        requests.patch(f"{API}/admin/cms/pages/{core['page_id']}", json={"in_nav": True},
+                       headers=editor, timeout=15)
+    slugs = [i["slug"] for i in requests.get(f"{API}/cms/nav", timeout=15).json()]
+    assert "core-archive" in slugs, slugs

@@ -3064,7 +3064,7 @@ async def seed_demo(user=Depends(require_admin)):
 
 # ---------- Register ----------
 
-from cms_routes import register_cms_routes  # noqa: E402
+from cms_routes import register_cms_routes, ensure_core_nav_items  # noqa: E402
 register_cms_routes(api, db, require_admin, require_admin_or_editor)
 
 from mailer import init_mailer, send_mail  # noqa: E402
@@ -3175,7 +3175,8 @@ async def security_headers(request: Request, call_next):
 # 2: users gained first_name/last_name (split out of the single `name`).
 # 3: news_opt_in backfilled into newsletter_subscriptions (opt-ins taken before the
 #    two were kept in step were invisible to the admin tab and the CSV export).
-SCHEMA_VERSION = 3
+# 4: the built-in nav links became reorderable `kind: "core"` rows in cms_pages.
+SCHEMA_VERSION = 4
 
 
 @app.on_event("startup")
@@ -3304,6 +3305,13 @@ async def init_indexes():
         await migrate_newsletter_optins()
     except Exception:
         logger.exception("migrate_newsletter_optins failed")
+
+    try:
+        created = await ensure_core_nav_items(db)
+        if created:
+            logger.info("Created %d core nav item(s)", created)
+    except Exception:
+        logger.exception("ensure_core_nav_items failed")
 
 
 async def migrate_session_token_hashes():
