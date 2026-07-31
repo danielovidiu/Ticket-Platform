@@ -58,7 +58,8 @@ function AppRouter() {
     <Layout>
       <ProfileGate>
       <Routes>
-        <Route path="/" element={<DynamicPage slugOverride="home" />} />
+        {/* Which page this is, is a CMS setting — not the slug "home". */}
+        <Route path="/" element={<DynamicPage home />} />
         <Route path="/mission" element={<DynamicPage slugOverride="mission" />} />
         <Route path="/contact" element={<DynamicPage slugOverride="contact" />} />
         <Route path="/terms" element={<DynamicPage slugOverride="terms" />} />

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { http } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
-import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History } from "lucide-react";
+import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home } from "lucide-react";
 import { BlockRenderer } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
 import { FormatToolbar } from "../lib/richText";
@@ -323,6 +323,19 @@ export default function CMSEditor() {
     setCurrentId(r.data.find((p) => p.kind !== "core")?.page_id || null);
     navChanged();
   };
+  /** Make this page answer "/". Exactly one page can, so this is a radio, not a toggle. */
+  const setAsHome = async (p) => {
+    try {
+      await http.post(`/admin/cms/pages/${p.page_id}/home`);
+      const r = await http.get("/admin/cms/pages");
+      setPages(r.data);
+      navChanged(); // its nav link becomes "/" instead of /p/<slug>
+      toast.success(`“${p.nav_label || p.title}” is now the homepage`);
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Could not set the homepage");
+    }
+  };
   /** Hide or show a built-in link. Core rows have no editor panel to host this, and
    * hiding is the only removal they allow — the route behind them stays live. */
   const toggleNavVisibility = async (p) => {
@@ -480,9 +493,20 @@ export default function CMSEditor() {
                         <span className="ml-1 text-[9px] uppercase tracking-[0.2em] text-zinc-600">link</span>
                       </span>
                     ) : (
-                      <button onClick={() => selectPage(p.page_id)} className="text-left flex-1 truncate">{p.title}</button>
+                      <button onClick={() => selectPage(p.page_id)} className="text-left flex-1 truncate">
+                        {p.title}
+                        {p.is_home && <span className="ml-1 text-[9px] uppercase tracking-[0.2em] text-zinc-500">home</span>}
+                      </button>
                     )}
                     <div className="flex items-center gap-1">
+                      {!core && (
+                        <button onClick={() => setAsHome(p)} disabled={!!p.is_home}
+                                title={p.is_home ? "This page answers /" : "Make this the homepage"}
+                                data-testid={`cms-nav-home-${p.slug}`}
+                                className={p.is_home ? "text-white" : "text-zinc-600 hover:text-white"}>
+                          <Home size={12} />
+                        </button>
+                      )}
                       <button onClick={() => movePage(i, -1)} title="Move up" className="text-zinc-500 hover:text-white"><ChevronUp size={12} /></button>
                       <button onClick={() => movePage(i, 1)} title="Move down" className="text-zinc-500 hover:text-white"><ChevronDown size={12} /></button>
                       {core ? (

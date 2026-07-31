@@ -3064,7 +3064,7 @@ async def seed_demo(user=Depends(require_admin)):
 
 # ---------- Register ----------
 
-from cms_routes import register_cms_routes, ensure_core_nav_items  # noqa: E402
+from cms_routes import register_cms_routes, ensure_core_nav_items, ensure_home_page  # noqa: E402
 register_cms_routes(api, db, require_admin, require_admin_or_editor)
 
 from mailer import init_mailer, send_mail  # noqa: E402
@@ -3176,7 +3176,8 @@ async def security_headers(request: Request, call_next):
 # 3: news_opt_in backfilled into newsletter_subscriptions (opt-ins taken before the
 #    two were kept in step were invisible to the admin tab and the CSV export).
 # 4: the built-in nav links became reorderable `kind: "core"` rows in cms_pages.
-SCHEMA_VERSION = 4
+# 5: the homepage is designated by an is_home flag rather than by the slug "home".
+SCHEMA_VERSION = 5
 
 
 @app.on_event("startup")
@@ -3312,6 +3313,13 @@ async def init_indexes():
             logger.info("Created %d core nav item(s)", created)
     except Exception:
         logger.exception("ensure_core_nav_items failed")
+
+    try:
+        adopted = await ensure_home_page(db)
+        if adopted:
+            logger.info("No homepage was set; adopted %r for /", adopted)
+    except Exception:
+        logger.exception("ensure_home_page failed")
 
 
 async def migrate_session_token_hashes():

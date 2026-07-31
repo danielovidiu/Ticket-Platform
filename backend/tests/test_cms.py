@@ -389,3 +389,72 @@ def test_core_link_can_be_hidden_and_restored():
                        headers=editor, timeout=15)
     slugs = [i["slug"] for i in requests.get(f"{API}/cms/nav", timeout=15).json()]
     assert "core-archive" in slugs, slugs
+
+
+# ---------- Homepage designation ----------
+
+def _pages(editor):
+    return requests.get(f"{API}/admin/cms/pages", headers=editor, timeout=15).json()
+
+
+def _current_home(editor):
+    return next((p for p in _pages(editor) if p.get("is_home")), None)
+
+
+def test_home_endpoint_serves_a_page_whatever_its_slug():
+    """The point of the flag: "/" must not depend on a page being called "home"."""
+    r = requests.get(f"{API}/cms/home", timeout=15)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["blocks"], "the homepage came back with no content"
+    for k in ("page_id", "slug", "title", "blocks"):
+        assert k in body
+
+
+def test_home_page_links_to_the_root_in_nav():
+    home = requests.get(f"{API}/cms/home", timeout=15).json()
+    nav = requests.get(f"{API}/cms/nav", timeout=15).json()
+    entry = next((n for n in nav if n["slug"] == home["slug"]), None)
+    if entry is None:
+        pytest.skip("the homepage is not in the nav on this install")
+    assert entry["route"] == "/", f"homepage should link to / not {entry['route']}"
+
+
+def test_setting_home_moves_the_flag_and_never_leaves_two():
+    editor = _b(EDITOR_TOKEN)
+    original = _current_home(editor)
+    other = next(p for p in _pages(editor)
+                 if p.get("kind") != "core" and p.get("published")
+                 and (original is None or p["page_id"] != original["page_id"]))
+    try:
+        r = requests.post(f"{API}/admin/cms/pages/{other['page_id']}/home", headers=editor, timeout=15)
+        assert r.status_code == 200, r.text
+        flagged = [p["slug"] for p in _pages(editor) if p.get("is_home")]
+        assert flagged == [other["slug"]], f"expected exactly one homepage, got {flagged}"
+        assert requests.get(f"{API}/cms/home", timeout=15).json()["slug"] == other["slug"]
+    finally:
+        if original:
+            requests.post(f"{API}/admin/cms/pages/{original['page_id']}/home", headers=editor, timeout=15)
+
+
+def test_core_link_cannot_be_the_homepage():
+    """A built-in link is a React route with no blocks — there is nothing to render."""
+    editor = _b(EDITOR_TOKEN)
+    core = next(p for p in _pages(editor) if p["slug"] == "core-shop")
+    r = requests.post(f"{API}/admin/cms/pages/{core['page_id']}/home", headers=editor, timeout=15)
+    assert r.status_code == 400, r.text
+    assert not any(p.get("is_home") and p["slug"] == "core-shop" for p in _pages(editor))
+
+
+def test_unpublished_page_cannot_be_the_homepage():
+    """/cms/home reads the published copy, so a draft-only page would blank the root."""
+    editor = _b(EDITOR_TOKEN)
+    slug = f"test-cms-{uuid.uuid4().hex[:8]}"
+    created = requests.post(f"{API}/admin/cms/pages", json={"slug": slug, "title": "Draft Only"},
+                            headers=editor, timeout=15).json()
+    try:
+        r = requests.post(f"{API}/admin/cms/pages/{created['page_id']}/home", headers=editor, timeout=15)
+        assert r.status_code == 400, r.text
+        assert "publish" in r.json()["detail"].lower()
+    finally:
+        requests.delete(f"{API}/admin/cms/pages/{created['page_id']}", headers=editor, timeout=15)

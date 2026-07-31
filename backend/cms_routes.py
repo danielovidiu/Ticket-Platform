@@ -41,6 +41,45 @@ def page_route(slug: str) -> str:
     return {"home": "/", "mission": "/mission", "contact": "/contact"}.get(slug, f"/p/{slug}")
 
 
+async def home_page_doc(db, projection=None):
+    """The page that answers "/".
+
+    "/" used to be hardcoded to the slug `home`, which made the front page depend on a
+    string nobody could edit — slug is immutable through the API on purpose. A site whose
+    homepage was authored under any other slug served a 404 at its root with no way to
+    repair it from the CMS. So the homepage is now something a page *is*, not something
+    its slug happens to spell.
+
+    The `home` slug stays as a fallback so installs that predate the flag keep working
+    without being migrated first.
+    """
+    doc = await db.cms_pages.find_one({"is_home": True, "kind": {"$ne": "core"}}, projection)
+    if doc is None:
+        doc = await db.cms_pages.find_one({"slug": "home", "kind": {"$ne": "core"}}, projection)
+    return doc
+
+
+async def ensure_home_page(db):
+    """Guarantee something answers "/". Returns the slug adopted, or None.
+
+    Only ever fills a vacuum: if a page is already flagged, or a `home` slug exists to
+    fall back on, this does nothing. Otherwise it adopts the first published page in the
+    nav, because a site with pages but no root is broken in the most visible way possible
+    and the first nav entry is what a reader would have been shown anyway.
+    """
+    if await home_page_doc(db, {"_id": 0, "slug": 1}) is not None:
+        return None
+    first = await db.cms_pages.find_one(
+        {"kind": {"$ne": "core"}, "in_nav": True, "published": {"$ne": None}},
+        {"_id": 0, "page_id": 1, "slug": 1},
+        sort=[("nav_order", 1)],
+    )
+    if first is None:
+        return None
+    await db.cms_pages.update_one({"page_id": first["page_id"]}, {"$set": {"is_home": True}})
+    return first["slug"]
+
+
 async def ensure_core_nav_items(db):
     """Create the core nav rows once. Never touches one that already exists.
 
@@ -119,6 +158,22 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             "blocks": p["published"].get("blocks", []),
         }
 
+    @api.get("/cms/home")
+    async def get_public_home():
+        """The page behind "/". Same shape as /cms/pages/{slug}, so the renderer is
+        identical — the root just asks a different question to find its page."""
+        p = await home_page_doc(db, {"_id": 0})
+        if not p or not p.get("published"):
+            # 404 rather than an empty 200: the frontend distinguishes "no homepage has
+            # been chosen" from "the homepage failed to load", and tells an editor which.
+            raise HTTPException(404, "No homepage is set")
+        return {
+            "page_id": p["page_id"],
+            "slug": p["slug"],
+            "title": p["title"],
+            "blocks": p["published"].get("blocks", []),
+        }
+
     @api.get("/cms/theme")
     async def get_public_theme():
         t = await db.cms_theme.find_one({"doc_id": "theme_current"}, {"_id": 0})
@@ -137,14 +192,21 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         cursor = db.cms_pages.find(
             {"in_nav": True, "$or": [{"kind": "core"}, {"published": {"$ne": None}}]},
             {"_id": 0, "slug": 1, "nav_label": 1, "title": 1, "nav_order": 1,
-             "kind": 1, "route": 1},
+             "kind": 1, "route": 1, "is_home": 1},
         ).sort("nav_order", 1)
         items = await cursor.to_list(200)
+
+        def route_for(p):
+            if p.get("kind") == "core":
+                return p["route"]
+            # The homepage links to the root, whatever its slug spells.
+            return "/" if p.get("is_home") else page_route(p["slug"])
+
         return [
             {
                 "slug": p["slug"],
                 "label": p.get("nav_label") or p["title"],
-                "route": p["route"] if p.get("kind") == "core" else page_route(p["slug"]),
+                "route": route_for(p),
                 "kind": p.get("kind") or "page",
             }
             for p in items
@@ -252,6 +314,29 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             raise HTTPException(400, "Built-in nav links cannot be deleted — hide them instead")
         await db.cms_pages.delete_one({"page_id": page_id})
         return {"ok": True}
+
+    @api.post("/admin/cms/pages/{page_id}/home")
+    async def admin_set_home(page_id: str, user=Depends(require_admin_or_editor)):
+        """Make this page answer "/". Exactly one page holds the flag.
+
+        Clearing then setting is two writes, so two editors racing could momentarily
+        leave none or two flagged. home_page_doc() resolves either state to a single
+        page rather than erroring, and the next save settles it — worth more than a
+        transaction for a button one person presses.
+        """
+        p = await db.cms_pages.find_one({"page_id": page_id}, {"_id": 0, "kind": 1, "slug": 1, "published": 1})
+        if p is None:
+            raise HTTPException(404, "Page not found")
+        if p.get("kind") == "core":
+            raise HTTPException(400, "Built-in links are routes, not pages — they have no content to show at /")
+        if not p.get("published"):
+            # "/" reads the published copy, so a draft-only page would blank the root.
+            raise HTTPException(400, "Publish this page before making it the homepage")
+        await db.cms_pages.update_many({"is_home": True}, {"$set": {"is_home": False}})
+        await db.cms_pages.update_one(
+            {"page_id": page_id}, {"$set": {"is_home": True, "updated_at": now_iso()}},
+        )
+        return {"ok": True, "slug": p["slug"]}
 
     @api.post("/admin/cms/pages/reorder")
     async def admin_reorder(body: ReorderIn, user=Depends(require_admin_or_editor)):
