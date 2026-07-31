@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, Cookie, Header, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from urllib.parse import urlencode, quote
+from urllib.parse import urlencode, quote, urlsplit
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 from pydantic import BaseModel, Field
@@ -192,6 +192,29 @@ COMMIT_SHA = (os.environ.get("VERCEL_GIT_COMMIT_SHA")
 PUBLIC_APP_URL = os.environ.get("PUBLIC_APP_URL", "http://localhost:3000").rstrip("/")
 POLICY_VERSION = os.environ.get("POLICY_VERSION", "2026-07-22")
 
+
+def _is_public_deployment() -> bool:
+    """Is this instance reachable by strangers?
+
+    Every dangerous default in this file used to be gated on APP_ENV == "production"
+    alone — one operator-set string, and the failure mode of forgetting it was to run a
+    public site with development semantics. So the question is asked of the environment
+    instead of taken on trust, and any one of these is enough:
+
+      * APP_ENV says so.
+      * We are on a serverless host (Vercel sets VERCEL=1 itself — nobody has to remember).
+      * The public origin is https on something that is not a loopback name.
+
+    Wrong in the safe direction: the worst case is a developer on an https tunnel being
+    told to configure Stripe properly.
+    """
+    if APP_ENV == "production" or SERVERLESS:
+        return True
+    if not PUBLIC_APP_URL.startswith("https://"):
+        return False
+    host = (urlsplit(PUBLIC_APP_URL).hostname or "").lower()
+    return host not in {"localhost", "127.0.0.1", "::1", ""} and not host.endswith(".local")
+
 # Feature flag for the mandatory phone number. OFF by default: an account needs a first
 # name and a surname, and the phone is collected but optional. Set REQUIRE_PHONE=1 to
 # make it mandatory everywhere at once — registration, the profile form, and the
@@ -214,34 +237,54 @@ logger = logging.getLogger("supersanity")
 # giving away tickets. It used to be selected silently whenever STRIPE_API_KEY was
 # absent or malformed — a typo in the key was enough. It is now opt-in only:
 #
-#   LOCAL_FAKE_PAYMENTS=1   -> fake, and refused outright under APP_ENV=production
+#   LOCAL_FAKE_PAYMENTS=1   -> fake, and refused outright on a public deployment
 #   STRIPE_API_KEY=sk_...   -> stripe (STRIPE_WEBHOOK_SECRET then mandatory)
-#   neither                 -> hard startup failure in production; loud warning in dev
+#   neither                 -> hard startup failure on a public deployment; warning in dev
 #
 # There is deliberately no path where a missing or malformed key quietly downgrades a
-# production deployment to the simulator.
+# reachable deployment to the simulator.
+#
+# The trigger is _is_public_deployment(), not APP_ENV alone. Keying purely on APP_ENV left
+# one unset variable between a live site and giving tickets away: a Vercel deployment with
+# no APP_ENV took the dev branch and selected the simulator silently, and the only symptom
+# was a warning in a log nobody reads. Vercel sets VERCEL=1 on its own, so that case now
+# fails closed whether or not anyone remembered APP_ENV.
+_FAKE_OVERRIDE = os.environ.get("I_ACCEPT_FREE_TICKETS_IN_PUBLIC", "").strip() == "1"
 if os.environ.get("LOCAL_FAKE_PAYMENTS", "").strip() == "1":
-    if APP_ENV == "production":
+    if _is_public_deployment() and not _FAKE_OVERRIDE:
         raise RuntimeError(
             "LOCAL_FAKE_PAYMENTS=1 is a development-only simulator that issues tickets "
             "without payment, and it exposes unauthenticated order-finalizing endpoints. "
-            "It cannot be used with APP_ENV=production."
+            "This instance looks publicly reachable "
+            f"(APP_ENV={APP_ENV!r}, serverless={SERVERLESS}, PUBLIC_APP_URL={PUBLIC_APP_URL!r}). "
+            "Configure a real STRIPE_API_KEY, or set I_ACCEPT_FREE_TICKETS_IN_PUBLIC=1 if "
+            "this deployment genuinely sells nothing."
         )
     PAYMENTS_MODE = "fake"
 elif STRIPE_API_KEY.startswith("sk_"):
     PAYMENTS_MODE = "stripe"
-elif APP_ENV == "production":
+elif _is_public_deployment() and not _FAKE_OVERRIDE:
     raise RuntimeError(
-        "STRIPE_API_KEY must be a live 'sk_...' key when APP_ENV=production. Refusing to "
-        "start: without one the app would fall back to the fake payment simulator and "
-        "hand out tickets for free."
+        "STRIPE_API_KEY must be a live 'sk_...' key on a public deployment. Refusing to "
+        "start: without one the app falls back to the fake payment simulator and hands "
+        "out tickets for free. "
+        f"(APP_ENV={APP_ENV!r}, serverless={SERVERLESS}, PUBLIC_APP_URL={PUBLIC_APP_URL!r}). "
+        "Set I_ACCEPT_FREE_TICKETS_IN_PUBLIC=1 to run a demo that sells nothing."
     )
 else:
     PAYMENTS_MODE = "fake"
-    logger.warning(
-        "No STRIPE_API_KEY set — using the FAKE payment simulator. Orders finalize with "
-        "no payment and no authentication. Development only; this is refused in production."
-    )
+    if _is_public_deployment():
+        # Deliberately chosen, so it starts — but it must never be a quiet condition.
+        logger.critical(
+            "PUBLIC DEPLOYMENT RUNNING THE FAKE PAYMENT SIMULATOR "
+            "(I_ACCEPT_FREE_TICKETS_IN_PUBLIC=1). Anyone who can reach this instance can "
+            "issue themselves tickets and invoices for free."
+        )
+    else:
+        logger.warning(
+            "No STRIPE_API_KEY set — using the FAKE payment simulator. Orders finalize with "
+            "no payment and no authentication. Development only; refused on a public host."
+        )
 
 if PAYMENTS_MODE == "stripe":
     stripe_sdk.api_key = STRIPE_API_KEY
@@ -284,18 +327,25 @@ if not SESSION_SECRET:
 # CSP, X-Frame-Options, nosniff, or Referrer-Policy. The Referrer-Policy gap matters most
 # because email-verification and password-reset tokens travel in the URL query string.
 COOKIE_SECURE = PUBLIC_APP_URL.startswith("https://")
-# The default below assumes the API is on a different origin from the frontend, which is
-# what "none" is for. When they are the SAME origin — the Vercel services layout serves
-# the frontend and /api from one domain — that assumption is wrong and needlessly costly:
-# SameSite=None means the session cookie rides along on cross-site requests, and this app
-# has no CSRF token or Origin check to catch them (M3). Set COOKIE_SAMESITE=lax there.
-COOKIE_SAMESITE = os.environ.get("COOKIE_SAMESITE", "").strip().lower() or (
-    "none" if COOKIE_SECURE else "lax"
-)
+# "lax" is the default, unconditionally. It used to default to "none" whenever the origin
+# was https, on the assumption that the API sits on a different origin from the frontend —
+# but that is the minority layout (Vercel serves the frontend and /api from one domain),
+# and getting it wrong is silent and expensive: SameSite=None means the session cookie
+# rides along on cross-site requests, and this app has no CSRF token or Origin check to
+# catch them (M3). So the safe value is what you get for free, and the permissive one has
+# to be asked for. A deployment that genuinely needs "none" finds out immediately —
+# sign-in stops sticking — rather than never finding out at all.
+COOKIE_SAMESITE = os.environ.get("COOKIE_SAMESITE", "").strip().lower() or "lax"
 if COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     raise RuntimeError(f"COOKIE_SAMESITE must be lax, strict or none (got {COOKIE_SAMESITE!r})")
 if COOKIE_SAMESITE == "none" and not COOKIE_SECURE:
     raise RuntimeError("COOKIE_SAMESITE=none requires an https PUBLIC_APP_URL; browsers drop the cookie otherwise")
+if COOKIE_SAMESITE == "none":
+    logger.warning(
+        "COOKIE_SAMESITE=none — the session cookie is sent on cross-site requests and "
+        "this app has no CSRF token or Origin check (audit M3). Only correct when the "
+        "frontend really is on another site."
+    )
 
 # OAuth providers — each is fully optional. A provider whose vars are unset simply
 # doesn't appear in GET /auth/methods and its start/callback endpoints return 404.
