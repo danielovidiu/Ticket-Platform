@@ -94,3 +94,8 @@ credentials.json
 
 # Generated knowledge graph (graphify) — regenerable, 3.4MB, not source
 graphify-out/
+# Added by `vercel link`, which writes a .env.local holding an OIDC token. Kept, but
+# narrowed: bare `.env*` matches at any depth and would have hidden backend/.env.example,
+# which is this project's configuration documentation and is meant to be committed.
+.env*
+!.env.example

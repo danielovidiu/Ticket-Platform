@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
 import { useAuth, startLogin } from "../auth";
@@ -10,6 +10,56 @@ import { Lightbox } from "../components/ui/lightbox";
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }).toUpperCase();
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+
+/**
+ * Clamp long copy to `lines` rendered rows, with a toggle to see the rest.
+ *
+ * Whether it overflows is measured, not guessed from the text length: a clamp is a
+ * function of the rendered width, so the same description spills at 375px and fits at
+ * 1280px. That also means a short event description gets no pointless "Show more".
+ *
+ * The measurement only runs while collapsed. Once expanded, scrollHeight equals
+ * clientHeight, and a naive re-measure would decide there was nothing to clamp and
+ * remove the button the reader needs to collapse it again.
+ */
+function Collapsible({ lines = 10, testId, children }) {
+  const ref = useRef(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) return undefined;
+    const measure = () => setOverflows(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [expanded, children]);
+
+  return (
+    <div data-testid={testId}>
+      {/* Clamping counts rendered rows across the block children renderRich emits, which
+          is what "the first ten rows" means — not the first ten paragraphs. Written as an
+          inline style rather than line-clamp-[10] so `lines` is a real prop: Tailwind
+          generates classes by scanning source text and cannot see a runtime value. */}
+      <div ref={ref}
+           className={expanded ? undefined : "overflow-hidden"}
+           style={expanded ? undefined : {
+             display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: lines,
+           }}>
+        {children}
+      </div>
+      {(overflows || expanded) && (
+        <button onClick={() => setExpanded((v) => !v)}
+                data-testid={`${testId}-toggle`} aria-expanded={expanded}
+                className="mt-4 font-mono-x text-[11px] uppercase tracking-[0.2em] text-zinc-400 hover:text-white underline underline-offset-4">
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function EventDetail() {
   const { slug } = useParams();
@@ -94,7 +144,16 @@ export default function EventDetail() {
   if (!event) return <div className="p-16 text-center text-zinc-500 font-mono-x uppercase text-xs tracking-[0.3em]">Loading…</div>;
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10">
+    /* Three grid blocks rather than two columns, so the DOM order IS the mobile order:
+       photo and title, then the box office, then the description, then the album. The
+       box office used to be the second of two columns, which put the buy button below
+       the entire description and gallery on a phone — the one thing a visitor came for,
+       past everything they had to scroll through first.
+
+       On md the box office spans both rows of the left stack, which is what gives the
+       sticky card a tall enough containing block to travel in, exactly as the two-column
+       version did. */
+    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10 items-start">
       <div className="md:col-span-7">
         <div className="aspect-[4/3] overflow-hidden border border-white/10">
           <img src={mediaUrl(event.image_url)} alt={event.title} className="w-full h-full object-cover" />
@@ -105,49 +164,9 @@ export default function EventDetail() {
         <h1 data-testid="event-title" className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-4 leading-none">
           {event.title}
         </h1>
-        <div className="mt-8">{renderRich(event.description, { paraClassName: "text-zinc-300 text-lg leading-relaxed max-w-2xl mt-4 first:mt-0" })}</div>
-
-        {event.gallery && event.gallery.length > 0 && (
-          <div className="mt-12">
-            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500 mb-4">Album · {event.gallery.length}</div>
-            <div className="columns-2 sm:columns-3 gap-2">
-              {event.gallery.map((g, i) => (
-                <button
-                  key={g.gallery_id}
-                  onClick={() => setLbIndex(i)}
-                  data-testid={`album-thumb-${i}`}
-                  className="mb-2 block w-full break-inside-avoid relative group"
-                >
-                  {g.media_type === "video" ? (
-                    <>
-                      {/* Prefer the poster captured at upload: it renders at the same
-                          size as a photo and costs one image request instead of a
-                          video decode per tile. Items without a poster fall back. */}
-                      {g.thumbnail_url && g.thumbnail_url !== g.image_url ? (
-                        <img src={mediaUrl(g.thumbnail_url)} alt={g.caption || ""} loading="lazy" className="w-full object-cover" />
-                      ) : (
-                        <video src={mediaUrl(g.image_url)} className="w-full object-cover" muted preload="metadata" />
-                      )}
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/10 transition-colors">
-                        <Play size={28} className="text-white" fill="white" />
-                      </div>
-                    </>
-                  ) : (
-                    <img
-                      src={mediaUrl(g.thumbnail_url || g.image_url)}
-                      alt={g.caption || ""}
-                      loading="lazy"
-                      className="w-full object-cover group-hover:opacity-80 transition-opacity"
-                    />
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
-      <div className="md:col-span-5">
+      <div className="md:col-span-5 md:row-span-2">
         <div className="border border-white/10 bg-[#0F0F0F] p-6 md:p-8 sticky top-24">
           <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Box Office</div>
           <div className="font-display text-2xl uppercase font-bold mt-2">Buy Tickets</div>
@@ -220,6 +239,51 @@ export default function EventDetail() {
             </>
           )}
         </div>
+      </div>
+
+      <div className="md:col-span-7 md:col-start-1">
+        <Collapsible lines={10} testId="event-description">
+          {renderRich(event.description, { paraClassName: "text-zinc-300 text-lg leading-relaxed max-w-2xl mt-4 first:mt-0" })}
+        </Collapsible>
+
+        {event.gallery && event.gallery.length > 0 && (
+          <div className="mt-12">
+            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500 mb-4">Album · {event.gallery.length}</div>
+            <div className="columns-2 sm:columns-3 gap-2">
+              {event.gallery.map((g, i) => (
+                <button
+                  key={g.gallery_id}
+                  onClick={() => setLbIndex(i)}
+                  data-testid={`album-thumb-${i}`}
+                  className="mb-2 block w-full break-inside-avoid relative group"
+                >
+                  {g.media_type === "video" ? (
+                    <>
+                      {/* Prefer the poster captured at upload: it renders at the same
+                          size as a photo and costs one image request instead of a
+                          video decode per tile. Items without a poster fall back. */}
+                      {g.thumbnail_url && g.thumbnail_url !== g.image_url ? (
+                        <img src={mediaUrl(g.thumbnail_url)} alt={g.caption || ""} loading="lazy" className="w-full object-cover" />
+                      ) : (
+                        <video src={mediaUrl(g.image_url)} className="w-full object-cover" muted preload="metadata" />
+                      )}
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/10 transition-colors">
+                        <Play size={28} className="text-white" fill="white" />
+                      </div>
+                    </>
+                  ) : (
+                    <img
+                      src={mediaUrl(g.thumbnail_url || g.image_url)}
+                      alt={g.caption || ""}
+                      loading="lazy"
+                      className="w-full object-cover group-hover:opacity-80 transition-opacity"
+                    />
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {lbIndex !== null && (
