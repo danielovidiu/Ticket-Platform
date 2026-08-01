@@ -65,38 +65,67 @@ export default function Cart() {
         <div className="mt-10 grid lg:grid-cols-12 gap-8 items-start">
           <div className="lg:col-span-8 space-y-3" data-testid="cart-lines">
             {cart.items.map((l) => (
+              /* One card per line item, two blocks inside it: what the thing is, and what
+                 you can do to it. They stack on a phone and sit on one row from sm up.
+
+                 Everything used to share a single wrapping flex row, so the name competed
+                 for width with an 80px thumbnail and the quantity stepper and got about
+                 135px — narrow enough that break-words shattered it mid-word
+                 ("OBSIDIA / N / LONGSL / EEVE"). Splitting the row means the name gets the
+                 full width beside the thumbnail (~227px at 375px) and wraps at spaces. */
               <div key={l.variant_id}
-                   className={`border p-3 flex flex-wrap sm:flex-nowrap items-center gap-4 ${
+                   className={`border p-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4 ${
                      l.purchasable ? "border-white/10 bg-[#0F0F0F]" : "border-[color:var(--accent)] bg-[#0F0F0F]"}`}
                    data-testid={`cart-line-${l.variant_id}`}>
-                <Link to={`/shop/${l.slug}`} className="w-20 h-20 shrink-0 overflow-hidden border border-white/10">
-                  {l.image ? <img src={mediaUrl(l.image)} alt="" className="w-full h-full object-cover" />
-                           : <div className="w-full h-full bg-[#151515]" />}
-                </Link>
-                <div className="min-w-0 flex-1">
-                  <Link to={`/shop/${l.slug}`} className="font-display uppercase font-bold hover:underline break-words">{l.name}</Link>
-                  {/* break-words: wide letter-spacing on a SKU pushes this past a 320px
-                      card, and "M · TEE-OBS-M" has no plain space to wrap at. */}
-                  <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1 break-words">
-                    {[l.size, l.sku].filter(Boolean).join(" · ")}
-                  </div>
-                  {!l.purchasable && (
-                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-[color:var(--accent)] mt-1">
-                      {!l.published ? "No longer sold" : l.available === 0 ? "Sold out" : `Only ${l.available} left`}
+                <div className="flex items-start gap-3 min-w-0 sm:flex-1">
+                  <Link to={`/shop/${l.slug}`} className="w-16 h-16 sm:w-20 sm:h-20 shrink-0 overflow-hidden border border-white/10">
+                    {l.image ? <img src={mediaUrl(l.image)} alt="" className="w-full h-full object-cover" />
+                             : <div className="w-full h-full bg-[#151515]" />}
+                  </Link>
+                  <div className="min-w-0 flex-1">
+                    {/* block, so the link is a full-width line box rather than an inline
+                        run the following text can crowd. break-words stays as the last
+                        resort for a genuinely unbreakable name. */}
+                    <Link to={`/shop/${l.slug}`}
+                          className="block font-display uppercase font-bold leading-tight hover:underline break-words">
+                      {l.name}
+                    </Link>
+                    {/* break-words: wide letter-spacing on a SKU pushes this past a 320px
+                        card, and "M · TEE-OBS-M" has no plain space to wrap at. */}
+                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1 break-words">
+                      {[l.size, l.sku].filter(Boolean).join(" · ")}
                     </div>
-                  )}
+                    {!l.purchasable && (
+                      <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-[color:var(--accent)] mt-1">
+                        {!l.published ? "No longer sold" : l.available === 0 ? "Sold out" : `Only ${l.available} left`}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setQty(l, l.quantity - 1)} disabled={busy === l.variant_id || l.quantity <= 1}
-                          className="btn-primary !py-1 !px-3 disabled:opacity-30" aria-label="Decrease quantity">−</button>
-                  <span className="font-mono-x w-8 text-center" data-testid={`qty-${l.variant_id}`}>{l.quantity}</span>
-                  <button onClick={() => setQty(l, l.quantity + 1)} disabled={busy === l.variant_id || l.quantity >= Math.min(20, l.available)}
-                          className="btn-primary !py-1 !px-3 disabled:opacity-30" aria-label="Increase quantity">+</button>
+                {/* Its own row on a phone, separated by a rule so the card reads as two
+                    parts; inline and right-aligned once there is room. */}
+                {/* flex-wrap with the amount and the remove button kept together: at 320px
+                    the stepper, the amount and ✕ need ~262px against 248px of card, so the
+                    pair drops to its own line instead of pushing the grid wider than the
+                    screen. ml-auto keeps it right-aligned whichever line it lands on. */}
+                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-white/10 pt-3
+                                sm:flex-nowrap sm:border-t-0 sm:pt-0 sm:justify-end sm:gap-x-4 sm:shrink-0">
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setQty(l, l.quantity - 1)} disabled={busy === l.variant_id || l.quantity <= 1}
+                            className="btn-primary !py-1 !px-3 disabled:opacity-30" aria-label="Decrease quantity">−</button>
+                    <span className="font-mono-x w-8 text-center" data-testid={`qty-${l.variant_id}`}>{l.quantity}</span>
+                    <button onClick={() => setQty(l, l.quantity + 1)} disabled={busy === l.variant_id || l.quantity >= Math.min(20, l.available)}
+                            className="btn-primary !py-1 !px-3 disabled:opacity-30" aria-label="Increase quantity">+</button>
+                  </div>
+                  <div className="flex items-center gap-2 ml-auto sm:gap-4">
+                    {/* tabular-nums so amounts line up down the column instead of jittering. */}
+                    <div className="font-mono-x text-sm text-right tabular-nums whitespace-nowrap sm:w-28">{ron(l.line_total_ron)}</div>
+                    <button onClick={() => remove(l)} disabled={busy === l.variant_id}
+                            data-testid={`remove-${l.variant_id}`}
+                            aria-label={`Remove ${l.name}`}
+                            className="btn-primary !py-1 !px-3 !text-[10px] hover:!text-[color:var(--accent)]">✕</button>
+                  </div>
                 </div>
-                <div className="font-mono-x text-sm w-28 text-right">{ron(l.line_total_ron)}</div>
-                <button onClick={() => remove(l)} disabled={busy === l.variant_id}
-                        data-testid={`remove-${l.variant_id}`}
-                        className="btn-primary !py-1 !px-3 !text-[10px] hover:!text-[color:var(--accent)]">✕</button>
               </div>
             ))}
           </div>
