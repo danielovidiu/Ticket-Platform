@@ -56,14 +56,17 @@ export function Lightbox({ items, index, onClose, onIndexChange }) {
   if (!item) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black flex flex-col" onClick={onClose} data-testid="lightbox">
+    // scrim, not page: a full-screen photo viewer stays black whichever way the site's
+    // theme goes, for the same reason the strip and badges below do — the surround is
+    // there to disappear behind the photograph.
+    <div className="fixed inset-0 z-[60] bg-scrim flex flex-col" onClick={onClose} data-testid="lightbox">
       <div className="shrink-0 flex items-center justify-between gap-4 px-4 py-3" onClick={(e) => e.stopPropagation()}>
-        <span className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-400 truncate">{item.caption}</span>
+        <span className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-3 truncate">{item.caption}</span>
         <div className="flex items-center gap-4 shrink-0">
           {items.length > 1 && (
-            <span className="font-mono-x text-xs text-zinc-400" data-testid="lightbox-counter">{index + 1} / {items.length}</span>
+            <span className="font-mono-x text-xs text-ink-3" data-testid="lightbox-counter">{index + 1} / {items.length}</span>
           )}
-          <button onClick={onClose} className="text-white/70 hover:text-white" data-testid="lightbox-close"><X size={24} /></button>
+          <button onClick={onClose} className="text-ink/70 hover:text-ink" data-testid="lightbox-close"><X size={24} /></button>
         </div>
       </div>
 
@@ -76,7 +79,7 @@ export function Lightbox({ items, index, onClose, onIndexChange }) {
         onTouchEnd={onTouchEnd}
       >
         {items.length > 1 && (
-          <button onClick={() => go(-1)} className="absolute left-0 sm:left-4 z-10 p-3 text-white/70 hover:text-white" data-testid="lightbox-prev">
+          <button onClick={() => go(-1)} className="absolute left-0 sm:left-4 z-10 p-3 text-ink/70 hover:text-ink" data-testid="lightbox-prev">
             <ChevronLeft size={32} />
           </button>
         )}
@@ -90,7 +93,7 @@ export function Lightbox({ items, index, onClose, onIndexChange }) {
         </div>
 
         {items.length > 1 && (
-          <button onClick={() => go(1)} className="absolute right-0 sm:right-4 z-10 p-3 text-white/70 hover:text-white" data-testid="lightbox-next">
+          <button onClick={() => go(1)} className="absolute right-0 sm:right-4 z-10 p-3 text-ink/70 hover:text-ink" data-testid="lightbox-next">
             <ChevronRight size={32} />
           </button>
         )}
@@ -100,7 +103,7 @@ export function Lightbox({ items, index, onClose, onIndexChange }) {
           height never changes as you page through mixed-aspect photos. */}
       {items.length > 1 && (
         <div
-          className="shrink-0 border-t border-white/10 bg-black/60 overflow-x-auto overscroll-contain [scrollbar-width:thin]"
+          className="shrink-0 border-t border-ink/10 bg-scrim/60 overflow-x-auto overscroll-contain [scrollbar-width:thin]"
           onClick={(e) => e.stopPropagation()}
           data-testid="lightbox-ribbon"
         >
@@ -111,7 +114,7 @@ export function Lightbox({ items, index, onClose, onIndexChange }) {
                 onClick={() => onIndexChange(i)}
                 data-testid={`lightbox-ribbon-thumb-${i}`}
                 className={`relative shrink-0 snap-center w-[90px] h-[90px] sm:w-[300px] sm:h-[300px] overflow-hidden border-2 transition-opacity ${
-                  i === index ? "border-white opacity-100" : "border-transparent opacity-50 hover:opacity-90"
+                  i === index ? "border-ink opacity-100" : "border-transparent opacity-50 hover:opacity-90"
                 }`}
               >
                 {it.media_type === "video" && (!it.thumbnail_url || it.thumbnail_url === it.url) ? (
@@ -128,7 +131,7 @@ export function Lightbox({ items, index, onClose, onIndexChange }) {
                   />
                 )}
                 {it.media_type === "video" && (
-                  <span className="absolute bottom-1 right-1 bg-black/75 px-1.5 py-0.5 font-mono-x text-[9px] uppercase tracking-[0.15em] text-white">▶</span>
+                  <span className="absolute bottom-1 right-1 bg-scrim/75 px-1.5 py-0.5 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink">▶</span>
                 )}
               </button>
             ))}

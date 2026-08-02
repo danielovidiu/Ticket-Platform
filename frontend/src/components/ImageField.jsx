@@ -38,7 +38,7 @@ export default function ImageField({ value, onChange, label = "Image", testId = 
 
   return (
     <div data-testid={testId}>
-      <div className="text-[10px] text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">{label}</div>
+      <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">{label}</div>
       <div className="flex flex-wrap gap-2">
         <input
           placeholder="Paste an image URL, or upload →"
@@ -61,12 +61,12 @@ export default function ImageField({ value, onChange, label = "Image", testId = 
 
       {value && !broken && (
         <img src={mediaUrl(value)} alt="" onError={() => setBroken(true)}
-             className="mt-2 h-28 w-auto max-w-full object-cover border border-white/10" data-testid={`${testId}-preview`} />
+             className="mt-2 h-28 w-auto max-w-full object-cover border border-ink/10" data-testid={`${testId}-preview`} />
       )}
       {value && broken && (
         // A pasted URL that doesn't load is worth saying out loud — otherwise it only
         // shows up as an empty box on the live event page.
-        <div className="mt-2 border border-[color:var(--accent)] px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-[color:var(--accent)]">
+        <div className="mt-2 border border-brand px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-brand">
           This URL didn't load
         </div>
       )}

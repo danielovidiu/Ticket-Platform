@@ -52,9 +52,9 @@ export default function Scan() {
     if (r?.error) setCameraError(r.error);
   };
 
-  if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
+  if (loading) return <div className="p-16 text-center font-mono-x text-ink-4">Loading…</div>;
   if (!user) return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-black p-6">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-page p-6">
       <div className="font-display text-3xl uppercase font-black">DOOR SCANNER</div>
       <button onClick={() => startLogin("/scan")} className="btn-accent mt-6">SIGN IN</button>
     </div>
@@ -67,7 +67,7 @@ export default function Scan() {
   // Recolouring both meant dismissing a result had to unwind two things to get back to a
   // clean scanning screen.
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen bg-page text-ink">
       <div className="p-4 flex justify-between items-center hairline-b">
         <div className="font-display text-xl uppercase font-black">DOOR · {user.role.toUpperCase()}</div>
         <div className="font-mono-x text-[10px] uppercase tracking-[0.3em]">{user.email}</div>
@@ -90,7 +90,9 @@ export default function Scan() {
           <video ref={videoRef} autoPlay muted playsInline
                  data-testid="scanner-video"
                  className={scanning
-                   ? "w-full max-h-[45vh] object-cover bg-black mt-4 border border-current"
+                   /* scrim: this is the letterbox behind the camera feed, and a
+                      viewfinder matting stays black whatever the site theme is. */
+                   ? "w-full max-h-[45vh] object-cover bg-scrim mt-4 border border-current"
                    : "hidden"} />
           {!scanning ? (
             <button onClick={handleStart} data-testid="start-camera" className="btn-accent w-full mt-4"><Camera className="inline mr-2" size={16} /> START SCANNER</button>
@@ -100,7 +102,7 @@ export default function Scan() {
               {torchSupported && (
                 <button onClick={toggleTorch} data-testid="toggle-torch"
                         aria-pressed={torchOn}
-                        className={`btn-primary flex-1 ${torchOn ? "!bg-white !text-black" : ""}`}>
+                        className={`btn-primary flex-1 ${torchOn ? "!bg-ink !text-page" : ""}`}>
                   {torchOn ? <Zap className="inline mr-2" size={14} /> : <ZapOff className="inline mr-2" size={14} />}
                   FLASH
                 </button>
@@ -146,8 +148,8 @@ export default function Scan() {
  */
 function ScanResult({ result, onNext }) {
   const tone = result.valid
-    ? "bg-[color:var(--success)] text-black"
-    : "bg-[color:var(--accent)] text-white";
+    ? "bg-ok text-page"
+    : "bg-brand text-ink";
   return (
     <div role="alertdialog" aria-live="assertive" data-testid="scan-result"
          className={`fixed inset-0 z-50 ${tone} flex flex-col items-center justify-center text-center p-6 overflow-y-auto`}>

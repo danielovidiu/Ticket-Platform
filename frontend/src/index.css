@@ -5,17 +5,141 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===========================================================================
+   Design tokens.
+
+   Every colour in the app resolves through this block. Nothing in a component
+   names a colour directly any more — they use the semantic Tailwind utilities
+   declared in tailwind.config.js (bg-page, text-ink-4, border-line, …), which
+   in turn read these variables. That is what makes the CMS theme reach the
+   whole site instead of the eight or so places it used to.
+
+   applyTheme() in lib/cms.js writes the SOURCE OF TRUTH group at runtime from
+   the CMS theme document. Everything else is derived here, so a theme only has
+   to carry the handful of decisions a person actually makes.
+   =========================================================================== */
 :root {
+  /* --- Source of truth: written by applyTheme() from the CMS theme ------- */
   --bg: #050505;
   --surface: #0f0f0f;
-  --surface-2: #1a1a1a;
   --text: #ffffff;
-  --text-2: #a1a1aa;
-  --muted: #52525b;
+  --text-muted: #a1a1aa;
   --accent: #ff3333;
-  --accent-hover: #cc2929;
+  --accent-fg: #000000;
   --success: #e1ff00;
   --border: rgba(255, 255, 255, 0.1);
+
+  /* --- Channel mirrors ---------------------------------------------------
+     Tailwind can only apply an opacity modifier (border-ink/15, bg-ink/5) to a
+     colour it can see the channels of, so these carry the same three colours as
+     bare "R G B" triplets. applyTheme() keeps them in step with the hex values
+     above; they are never edited independently.
+
+     This is what let the sweep preserve every alpha exactly — border-white/15
+     became border-ink/15 and is still 15%, not rounded to a nearby token. */
+  --bg-rgb: 5 5 5;
+  --text-rgb: 255 255 255;
+  --accent-rgb: 255 51 51;
+
+  /* Scrims sit on top of photographs, so they stay dark in a light theme too —
+     a "light" scrim over a night-time press shot is just a washed-out photo. */
+  --scrim-rgb: 0 0 0;
+
+  /* --- Derived text ramp -------------------------------------------------
+     The design uses five levels of text. The CMS only asks for two of them, and
+     the other three are mixed from those, so an artist sets "text" and "muted"
+     and the whole ramp follows. The dim end mixes toward --bg rather than
+     toward black, which is what makes it go DARKER in a light theme instead of
+     washing out.
+
+     The percentages are fitted to the zinc-300/400/500/600 values they replace:
+     -2 lands on zinc-300 exactly, -4 and -5 within 5/255 on the blue channel
+     (the zinc ramp shifts hue slightly, which a two-colour mix cannot follow).
+     That difference is under 2% of a mid-grey and is not perceptible. */
+  --text-2: color-mix(in srgb, var(--text) 54%, var(--text-muted));
+  --text-3: var(--text-muted);
+  --text-4: color-mix(in srgb, var(--text-muted) 69%, var(--bg));
+  --text-5: color-mix(in srgb, var(--text-muted) 49%, var(--bg));
+
+  /* Hero art direction. The image is faded into the page rather than overlaid, so the
+     figure it fades TOWARD is the page colour — which means the same 0.4 that darkens a
+     photo against black washes it out against white. Raised for a light theme so the
+     picture stays a picture. Not a colour, so unlike the palette this one does branch on
+     data-theme. */
+  --hero-image-opacity: 0.4;
+
+  /* The raised surface — inputs, hover fills, the second tier of card. Nudged off
+     --surface toward the text colour, so it stays a step *away* from the page in
+     either direction rather than being pinned to a dark grey. The CMS does not ask
+     for it separately; one "surface" decision is enough for a person to make. */
+  --surface-2: color-mix(in srgb, var(--surface) 95%, var(--text));
+
+  /* --- Shape -------------------------------------------------------------
+     --radius is the global corner rounding. --btn-radius is separate because
+     the theme's `button_style` setting can make buttons fully round while cards
+     and inputs stay square; it falls back to --radius when it is "sharp". */
+  --radius: 0px;
+  --btn-radius: var(--radius);
+
+  /* --- Typography --------------------------------------------------------
+     Every font-family in the app resolves through these three — the classes
+     below, Tailwind's own font-sans/font-mono (see tailwind.config.js) and
+     preflight — so changing the type for the whole site means writing these
+     variables and nothing else. applyTheme() sets them from the CMS theme
+     document and pulls the family off Google Fonts at runtime; the families
+     named here are the defaults, and the only ones the @imports at the top of
+     this file preload. */
+  --font-display: "Clash Display";
+  --font-body: "Manrope";
+  --font-mono: "IBM Plex Mono";
+  /* Tracking is a property of the face, not of the layout: -0.02em is tuned to
+     Clash Display's tight default fit and looks cramped on a serif or a wide
+     grotesque. It is a variable so that swapping the display font doesn't
+     silently look broken. */
+  --font-display-tracking: -0.02em;
+}
+
+/* The shadcn/ui palette, kept deliberately separate.
+   ---------------------------------------------------------------------------
+   These used to be named --accent, --muted and --border, colliding with three
+   of the app tokens above. Because cascade layers rank an unlayered rule above
+   a layered one regardless of source order, the app's values won and every ui/
+   utility reading a collided name silently broke: `bg-accent` computed to
+   hsl(#FF3333) — invalid, so transparent — and the `* { border-color }` default
+   below resolved to white rather than to a hairline.
+
+   Only three ui/ components actually render (lightbox, and calendar + popover
+   behind the admin date picker); the rest are unused scaffolding. The ui- prefix
+   is what keeps the two systems from ever colliding again. */
+@layer base {
+  :root {
+    --ui-background: 0 0% 2%;
+    --ui-foreground: 0 0% 100%;
+    --ui-card: 0 0% 6%;
+    --ui-card-foreground: 0 0% 100%;
+    --ui-popover: 0 0% 2%;
+    --ui-popover-foreground: 0 0% 100%;
+    --ui-primary: 0 100% 60%;
+    --ui-primary-foreground: 0 0% 0%;
+    --ui-secondary: 0 0% 10%;
+    --ui-secondary-foreground: 0 0% 100%;
+    --ui-muted: 0 0% 15%;
+    --ui-muted-foreground: 0 0% 63%;
+    --ui-accent: 0 100% 60%;
+    --ui-accent-foreground: 0 0% 0%;
+    --ui-destructive: 0 100% 50%;
+    --ui-destructive-foreground: 0 0% 100%;
+    --ui-border: 0 0% 15%;
+    --ui-input: 0 0% 15%;
+    --ui-ring: 0 0% 100%;
+  }
+}
+
+@layer base {
+  /* The default border colour for anything given a border-width without one.
+     Points at the themed hairline; before the rename above it resolved to solid
+     white, which is why nothing in the app could afford to rely on it. */
+  * { border-color: var(--border); }
 }
 
 html, body, #root {
@@ -26,56 +150,33 @@ html, body, #root {
 
 body {
   margin: 0;
-  font-family: "Manrope", system-ui, sans-serif;
+  font-family: var(--font-body), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-::selection { background: var(--accent); color: #000; }
+::selection { background: var(--accent); color: var(--accent-fg); }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: #050505; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.35); }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: rgb(var(--text-rgb) / 0.15); }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--text-rgb) / 0.35); }
 
-@layer base {
-  :root {
-    --background: 0 0% 2%;
-    --foreground: 0 0% 100%;
-    --card: 0 0% 6%;
-    --card-foreground: 0 0% 100%;
-    --popover: 0 0% 2%;
-    --popover-foreground: 0 0% 100%;
-    --primary: 0 100% 60%;
-    --primary-foreground: 0 0% 0%;
-    --secondary: 0 0% 10%;
-    --secondary-foreground: 0 0% 100%;
-    --muted: 0 0% 15%;
-    --muted-foreground: 0 0% 63%;
-    --accent: 0 100% 60%;
-    --accent-foreground: 0 0% 0%;
-    --destructive: 0 100% 50%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 0 0% 15%;
-    --input: 0 0% 15%;
-    --ring: 0 0% 100%;
-    --radius: 0px;
-  }
-}
-
-@layer base {
-  * { @apply border-border; }
-}
-
-.font-display { font-family: "Clash Display", "Manrope", sans-serif; letter-spacing: -0.02em; }
-.font-mono-x { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+/* Display falls back to the body font rather than to generic sans: a theme that sets
+   only --font-body still reads as one typeface instead of dropping headings to Arial. */
+.font-display { font-family: var(--font-display), var(--font-body), system-ui, sans-serif; letter-spacing: var(--font-display-tracking); }
+.font-mono-x { font-family: var(--font-mono), ui-monospace, monospace; }
 
 .grain-overlay {
   position: fixed; inset: 0; pointer-events: none; z-index: 1;
+  /* Film grain reads as texture on a dark page and as dirt on a light one, so a
+     light theme gets a fraction of it. applyTheme() sets data-theme. */
   opacity: 0.04;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.6'/></svg>");
 }
+:root[data-theme="light"] .grain-overlay { opacity: 0.02; }
+:root[data-theme="light"] { --hero-image-opacity: 0.85; }
 
 .marquee { display: flex; overflow: hidden; }
 .marquee-track {
@@ -88,35 +189,42 @@ body {
 }
 
 .hard-shadow { box-shadow: 6px 6px 0 0 var(--accent); }
-.hard-shadow-white { box-shadow: 6px 6px 0 0 #ffffff; }
+.hard-shadow-white { box-shadow: 6px 6px 0 0 var(--text); }
 
+/* Buttons.
+   The hover state fills with the text colour and prints in the page colour —
+   an inversion rather than a hardcoded white-on-black. That is the whole trick
+   that makes these work in a light theme without a second set of rules. */
 .btn-primary {
-  border: 1px solid rgba(255,255,255,0.2);
-  background: transparent; color: #fff;
+  border: 1px solid rgb(var(--text-rgb) / 0.2);
+  background: transparent; color: var(--text);
   padding: 0.9rem 1.4rem; text-transform: uppercase;
   font-weight: 600; letter-spacing: 0.08em; font-size: 0.85rem;
+  border-radius: var(--btn-radius);
   transition: background-color 120ms linear, color 120ms linear, border-color 120ms linear;
   cursor: pointer;
 }
-.btn-primary:hover { background: #fff; color: #000; border-color: #fff; }
+.btn-primary:hover { background: var(--text); color: var(--bg); border-color: var(--text); }
 .btn-accent {
-  background: var(--accent); color: #000; border: 1px solid var(--accent);
+  background: var(--accent); color: var(--accent-fg); border: 1px solid var(--accent);
   padding: 0.9rem 1.4rem; text-transform: uppercase; font-weight: 700;
   letter-spacing: 0.08em; font-size: 0.85rem;
+  border-radius: var(--btn-radius);
   transition: background-color 120ms linear, color 120ms linear;
   cursor: pointer;
 }
-.btn-accent:hover { background: #fff; color: #000; border-color: #fff; }
+.btn-accent:hover { background: var(--text); color: var(--bg); border-color: var(--text); }
 
 .hairline { border-top: 1px solid var(--border); }
 .hairline-b { border-bottom: 1px solid var(--border); }
 
 .input-x {
-  background: transparent; border: 1px solid rgba(255,255,255,0.2); color: #fff;
+  background: transparent; border: 1px solid rgb(var(--text-rgb) / 0.2); color: var(--text);
   padding: 0.9rem 1rem; outline: none; width: 100%; font-family: inherit;
+  border-radius: var(--radius);
 }
-.input-x:focus { border-color: #fff; }
-.input-x::placeholder { color: #52525b; }
+.input-x:focus { border-color: var(--text); }
+.input-x::placeholder { color: var(--text-5); }
 
 /* Utility spacers */
 .section-y { padding-top: 6rem; padding-bottom: 6rem; }

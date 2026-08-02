@@ -26,7 +26,7 @@ export default function Settings() {
     }
   }, [user]);
 
-  if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
+  if (loading) return <div className="p-16 text-center font-mono-x text-ink-4">Loading…</div>;
   if (!user) return (
     <div className="max-w-xl mx-auto px-6 py-24 text-center">
       <h1 className="font-display text-4xl uppercase font-black tracking-tighter">Sign in to manage your account</h1>
@@ -69,27 +69,27 @@ export default function Settings() {
   };
 
   const Row = ({ k, label, desc }) => (
-    <label className="flex items-start gap-3 py-3 border-b border-white/10 cursor-pointer">
+    <label className="flex items-start gap-3 py-3 border-b border-ink/10 cursor-pointer">
       <input type="checkbox" checked={consents[k]} onChange={() => toggleConsent(k)} data-testid={`consent-${k}`} className="mt-1" />
       <span>
         <span className="block text-sm">{label}</span>
-        <span className="block text-xs text-zinc-500">{desc}</span>
+        <span className="block text-xs text-ink-4">{desc}</span>
       </span>
     </label>
   );
 
   return (
     <div className="max-w-2xl mx-auto px-6 md:px-10 py-16">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Account</div>
+      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Account</div>
       <h1 className="font-display text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">Settings</h1>
 
       <section className="mt-12">
-        <h2 className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-400 mb-4">Profile</h2>
-        <div className="text-xs text-zinc-500 mb-4">
+        <h2 className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-3 mb-4">Profile</h2>
+        <div className="text-xs text-ink-4 mb-4">
           {user.email}
           {user.email_verified_at
-            ? <span className="ml-2 text-[color:var(--success)]">✓ verified</span>
-            : <button onClick={resendVerify} className="ml-2 underline hover:text-white">Verify email</button>}
+            ? <span className="ml-2 text-ok">✓ verified</span>
+            : <button onClick={resendVerify} className="ml-2 underline hover:text-ink">Verify email</button>}
         </div>
         <div className="grid gap-3">
           <div className="grid grid-cols-2 gap-3">
@@ -99,7 +99,7 @@ export default function Settings() {
           <input type="tel" value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
                  placeholder={requirePhone ? "Phone number" : "Phone number (optional)"}
                  data-testid="settings-phone" className="input-x w-full" />
-          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
             {requirePhone ? "All three are required on every account." : "Name and surname are required on every account."}
           </div>
           <button onClick={saveProfile} className="btn-primary w-fit">Save profile</button>
@@ -107,17 +107,17 @@ export default function Settings() {
       </section>
 
       <section className="mt-12">
-        <h2 className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-400 mb-2">Communication preferences</h2>
+        <h2 className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-3 mb-2">Communication preferences</h2>
         <Row k="email_opt_in" label="Account &amp; event emails" desc="Order confirmations always send; this covers optional account updates." />
         <Row k="news_opt_in" label="Newsletter" desc="Announcements about upcoming events." />
         <Row k="promo_opt_in" label="Promotions" desc="Occasional offers and discounts." />
       </section>
 
       <section className="mt-12">
-        <h2 className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-400 mb-4">Your data</h2>
+        <h2 className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-3 mb-4">Your data</h2>
         <div className="flex flex-wrap gap-3">
           <button onClick={exportData} data-testid="export-data" className="btn-primary">Download my data</button>
-          <button onClick={deleteAccount} data-testid="delete-account" className="btn-primary !border-[color:var(--accent)] !text-[color:var(--accent)]">Delete account</button>
+          <button onClick={deleteAccount} data-testid="delete-account" className="btn-primary !border-brand !text-brand">Delete account</button>
         </div>
       </section>
     </div>

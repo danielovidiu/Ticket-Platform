@@ -39,7 +39,7 @@ export default function ResetPassword() {
     <div className="max-w-md mx-auto px-6 py-24">
       <h1 className="font-display text-4xl uppercase font-black tracking-tighter">Set a new password</h1>
       {done ? (
-        <p className="mt-6 text-zinc-300 text-sm">Password updated. Redirecting you to sign in…</p>
+        <p className="mt-6 text-ink-2 text-sm">Password updated. Redirecting you to sign in…</p>
       ) : (
         <form onSubmit={submit} className="mt-8 space-y-4">
           <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="New password" data-testid="reset-password" className="input-x w-full" />

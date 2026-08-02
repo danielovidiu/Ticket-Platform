@@ -257,6 +257,46 @@ def test_theme_draft_publish_flow():
     requests.post(f"{API}/admin/cms/theme/publish", headers=editor, timeout=15)
 
 
+def test_uploaded_font_reports_whether_the_theme_uses_it():
+    """`in_use` is what warns an editor before they delete the face their site is set in.
+
+    Lives here rather than in test_cms_fonts.py deliberately: it does a read-modify-write
+    of the theme draft, exactly as test_theme_draft_publish_flow above does, and xdist's
+    loadscope only guarantees that one module runs on one worker. Split across two files
+    the two tests would race and one would lose its update.
+    """
+    editor = _b(EDITOR_TOKEN)
+    family = f"InUse{uuid.uuid4().hex[:10]}"
+
+    up = requests.post(
+        f"{API}/admin/cms/fonts",
+        files={"file": ("InUse-Regular.woff2", b"wOF2" + b"\x00" * 256, "font/woff2")},
+        data={"family": family, "weight": "400", "style": "normal"},
+        headers=editor, timeout=20,
+    )
+    assert up.status_code == 200, up.text
+    font_id = up.json()["font_id"]
+
+    def row():
+        rows = requests.get(f"{API}/admin/cms/fonts", headers=editor, timeout=15).json()
+        return next(f for f in rows if f["font_id"] == font_id)
+
+    t = requests.get(f"{API}/admin/cms/theme", headers=editor, timeout=15).json()
+    original = dict(t.get("draft") or t["published"])
+    try:
+        assert row()["in_use"] is False
+
+        draft = dict(original)
+        draft["fonts"] = {**(original.get("fonts") or {}), "display": family}
+        r = requests.patch(f"{API}/admin/cms/theme", json={"draft": draft}, headers=editor, timeout=15)
+        assert r.status_code == 200, r.text
+
+        assert row()["in_use"] is True
+    finally:
+        requests.patch(f"{API}/admin/cms/theme", json={"draft": original}, headers=editor, timeout=15)
+        requests.delete(f"{API}/admin/cms/fonts/{font_id}", headers=editor, timeout=15)
+
+
 # ---------- Nav filtering ----------
 
 def test_nav_excludes_in_nav_false():

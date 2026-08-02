@@ -27,7 +27,7 @@ export default function DynamicPage({ slugOverride, home }) {
   }, [slug, home]);
 
   if (status === "loading") {
-    return <div className="p-16 text-center font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Loading…</div>;
+    return <div className="p-16 text-center font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Loading…</div>;
   }
   if (status === "notfound" || !page) {
     // At the root, "not found" means nobody has chosen a homepage — a setting, not a bad
@@ -35,9 +35,9 @@ export default function DynamicPage({ slugOverride, home }) {
     if (home) {
       return (
         <div className="p-16 text-center">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Nothing here yet</div>
+          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Nothing here yet</div>
           <h1 className="font-display text-4xl md:text-6xl uppercase font-black tracking-tighter mt-3">No homepage set</h1>
-          <p className="mt-6 text-zinc-400 text-sm">
+          <p className="mt-6 text-ink-3 text-sm">
             Pick one in the CMS — open Navigation and use the ⌂ button on the page that should answer this address.
           </p>
         </div>
@@ -45,7 +45,7 @@ export default function DynamicPage({ slugOverride, home }) {
     }
     return (
       <div className="p-16 text-center">
-        <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">404</div>
+        <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">404</div>
         <h1 className="font-display text-4xl md:text-6xl uppercase font-black tracking-tighter mt-3">Page not found</h1>
       </div>
     );

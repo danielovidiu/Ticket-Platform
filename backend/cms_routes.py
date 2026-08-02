@@ -6,10 +6,13 @@ renders everything dynamically from that data.
 """
 from datetime import datetime, timezone
 from typing import List, Optional
+import re
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+
+import storage
 
 
 # The built-in sections. These are React routes, not CMS pages — there are no blocks to
@@ -28,6 +31,49 @@ CORE_NAV_ITEMS = [
     ("core-archive", "Archive", "/archive", 6),
     ("core-gallery", "Gallery", "/gallery", 7),
 ]
+
+
+# ---------- Custom webfonts ----------
+#
+# A white-label site usually has to carry its own type: an artist's brand face is a
+# licensed file, not something on Google Fonts. Uploaded files go through the same media
+# backend as images (local disk on a laptop, Vercel Blob in production) and are served to
+# the browser by @font-face rules the frontend assembles from GET /cms/fonts.
+
+# The format is decided by the file's own signature, never by the client-declared
+# Content-Type. Browsers send wildly inconsistent types for fonts
+# (application/octet-stream, font/sfnt, application/x-font-ttf), so the declared value is
+# useless even before you consider that it is attacker-controlled — which is exactly the
+# weakness audit item M8 records about the image upload path. This route does not repeat
+# it: bytes that are not a font are rejected here rather than relying on `nosniff`
+# downstream.
+FONT_MAGIC = [
+    (b"wOF2", "woff2", ".woff2", "font/woff2"),
+    (b"wOFF", "woff", ".woff", "font/woff"),
+    (b"OTTO", "otf", ".otf", "font/otf"),
+    (b"\x00\x01\x00\x00", "ttf", ".ttf", "font/ttf"),
+    (b"true", "ttf", ".ttf", "font/ttf"),
+    (b"ttcf", "ttf", ".ttf", "font/ttf"),
+]
+
+# Well under the 25MB media cap: a subset woff2 is typically 20-80KB, and anything past a
+# couple of megabytes is a desktop-format file uploaded by mistake.
+MAX_FONT_BYTES = 5 * 1024 * 1024
+
+# The family name is interpolated into a generated `font-family:` declaration, so it is
+# restricted to characters that cannot close a CSS string or escape the rule. The
+# frontend escapes as well; this is the control, that is the backstop.
+FAMILY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
+
+FONT_STYLES = ("normal", "italic")
+
+
+def sniff_font_format(data: bytes):
+    """(format, extension, content_type) read off the file signature, or None."""
+    for magic, fmt, ext, ctype in FONT_MAGIC:
+        if data.startswith(magic):
+            return fmt, ext, ctype
+    return None
 
 
 def page_route(slug: str) -> str:
@@ -180,6 +226,26 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         if not t:
             return {"published": _default_theme()}
         return {"published": t.get("published", _default_theme())}
+
+    def _font_public(f):
+        return {"font_id": f["font_id"], "family": f["family"], "weight": f["weight"],
+                "style": f["style"], "url": f["url"], "format": f["format"]}
+
+    async def _fonts_sorted():
+        cursor = db.custom_fonts.find({}, {"_id": 0}).sort(
+            [("family", 1), ("weight", 1), ("style", 1)]
+        )
+        return await cursor.to_list(200)
+
+    @api.get("/cms/fonts")
+    async def get_public_fonts():
+        """Every uploaded face, for the @font-face rules the frontend injects at boot.
+
+        Public because what it feeds is public — these URLs are already served to anyone
+        who loads the site. Sorted so the generated CSS is byte-stable across requests
+        instead of following whatever order Mongo happens to return.
+        """
+        return [_font_public(f) for f in await _fonts_sorted()]
 
     @api.get("/cms/nav")
     async def get_public_nav():
@@ -401,6 +467,98 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             {"$set": {"draft": v["theme"], "updated_at": now_iso()}},
         )
         return await db.cms_theme.find_one({"doc_id": "theme_current"}, {"_id": 0})
+
+    # ---------- Custom fonts (admin) ----------
+
+    @api.get("/admin/cms/fonts")
+    async def admin_list_fonts(user=Depends(require_admin_or_editor)):
+        """The uploaded faces, each flagged with whether the theme currently names it.
+
+        `in_use` covers the draft as well as the published theme: deleting a face the
+        draft points at breaks the next publish, not the live site, which is the harder
+        failure to connect back to its cause.
+        """
+        fonts = await _fonts_sorted()
+        t = await db.cms_theme.find_one(
+            {"doc_id": "theme_current"}, {"_id": 0, "draft": 1, "published": 1}
+        ) or {}
+        in_use = {
+            (v or "").strip()
+            for key in ("draft", "published")
+            for v in ((t.get(key) or {}).get("fonts") or {}).values()
+        }
+        return [{**f, "in_use": f["family"] in in_use} for f in fonts]
+
+    @api.post("/admin/cms/fonts")
+    async def admin_upload_font(
+        file: UploadFile = File(...),
+        family: str = Form(...),
+        weight: int = Form(400),
+        style: str = Form("normal"),
+        user=Depends(require_admin_or_editor),
+    ):
+        """Store one font file as one (family, weight, style) face.
+
+        Re-uploading the same face replaces it, bytes included. Refusing instead would
+        make correcting a wrong file a two-step chore and buys no safety: the face is
+        identified by what it is for, not by which upload produced it.
+        """
+        family = (family or "").strip()
+        if not FAMILY_RE.match(family):
+            raise HTTPException(
+                400, "Family name: letters, numbers, spaces, hyphens and underscores only (max 64)"
+            )
+        if style not in FONT_STYLES:
+            raise HTTPException(400, "Style must be 'normal' or 'italic'")
+        if not 1 <= weight <= 1000:
+            raise HTTPException(400, "Weight must be between 1 and 1000")
+
+        data = await file.read()
+        if not data:
+            raise HTTPException(400, "That file is empty")
+        if len(data) > MAX_FONT_BYTES:
+            raise HTTPException(400, "Font too large (max 5MB) — upload a WOFF2 rather than a desktop OTF/TTF")
+
+        sniffed = sniff_font_format(data)
+        if not sniffed:
+            raise HTTPException(400, "That is not a font file — WOFF2, WOFF, TTF or OTF only")
+        fmt, ext, content_type = sniffed
+
+        url = await storage.save(f"font_{uuid.uuid4().hex}{ext}", data, content_type)
+        doc = {
+            "font_id": new_id("fnt"),
+            "family": family,
+            "weight": weight,
+            "style": style,
+            "url": url,
+            "format": fmt,
+            "size": len(data),
+            "filename": (file.filename or "")[:120],
+            "created_at": now_iso(),
+        }
+
+        # replace_one+upsert rather than delete-then-insert: it is one atomic operation, so
+        # two uploads of the same face racing each other cannot both pass a "does it exist"
+        # check and then collide on the unique index.
+        prev = await db.custom_fonts.find_one(
+            {"family": family, "weight": weight, "style": style}, {"_id": 0, "url": 1}
+        )
+        await db.custom_fonts.replace_one(
+            {"family": family, "weight": weight, "style": style}, dict(doc), upsert=True
+        )
+        if prev and prev.get("url") != url:
+            # After the write, never before: failing here leaves an orphaned object in the
+            # store, whereas failing the other way round leaves a face with no bytes.
+            await storage.delete(prev["url"])
+        return doc
+
+    @api.delete("/admin/cms/fonts/{font_id}")
+    async def admin_delete_font(font_id: str, user=Depends(require_admin_or_editor)):
+        doc = await db.custom_fonts.find_one_and_delete({"font_id": font_id})
+        if not doc:
+            raise HTTPException(404, "Font not found")
+        await storage.delete(doc.get("url"))
+        return {"deleted": font_id}
 
     # ---------- Seed ----------
 

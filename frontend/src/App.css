@@ -1,1 +1,4 @@
-.App { background: #050505; color: #fff; min-height: 100vh; }
+/* The app shell. Duplicates what index.css already sets on html/body/#root, but this
+   element sits between them and the page, so leaving it on a hardcoded near-black meant
+   a light theme repainted everything except the one div wrapping all of it. */
+.App { background: var(--bg); color: var(--text); min-height: 100vh; }

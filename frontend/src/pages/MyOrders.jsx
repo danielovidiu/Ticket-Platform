@@ -11,12 +11,12 @@ const STATUS_LABEL = {
   delivered: "Delivered", cancelled: "Cancelled", refunded: "Refunded",
 };
 const STATUS_CLASS = {
-  paid: "text-[color:var(--success)]",
-  shipped: "text-white",
-  delivered: "text-[color:var(--success)]",
-  pending: "text-zinc-500",
-  cancelled: "text-[color:var(--accent)]",
-  refunded: "text-[color:var(--accent)]",
+  paid: "text-ok",
+  shipped: "text-ink",
+  delivered: "text-ok",
+  pending: "text-ink-4",
+  cancelled: "text-brand",
+  refunded: "text-brand",
 };
 
 export default function MyOrders() {
@@ -28,7 +28,7 @@ export default function MyOrders() {
     http.get("/shop/orders").then((r) => setOrders(r.data)).catch(() => setOrders([]));
   }, [user]);
 
-  if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
+  if (loading) return <div className="p-16 text-center font-mono-x text-ink-4">Loading…</div>;
   if (!user) return (
     <div className="max-w-xl mx-auto px-6 py-24 text-center">
       <h1 className="font-display text-3xl sm:text-4xl uppercase font-black tracking-tighter break-words">Sign in to see your orders</h1>
@@ -38,25 +38,25 @@ export default function MyOrders() {
 
   return (
     <div className="max-w-[1100px] mx-auto px-6 md:px-10 py-16">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Account</div>
+      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Account</div>
       <h1 className="font-display text-4xl sm:text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">My Orders</h1>
 
       {orders === null ? (
-        <div className="mt-10 font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Loading…</div>
+        <div className="mt-10 font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Loading…</div>
       ) : orders.length === 0 ? (
-        <div className="mt-12 border border-dashed border-white/10 p-12 text-center">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">No orders yet</div>
+        <div className="mt-12 border border-dashed border-ink/10 p-12 text-center">
+          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">No orders yet</div>
           <Link to="/shop" className="btn-primary mt-6 inline-block">Browse the shop</Link>
         </div>
       ) : (
         <div className="mt-10 space-y-4" data-testid="orders-list">
           {orders.map((o) => (
-            <div key={o.order_id} className="border border-white/10 bg-[#0F0F0F] p-5" data-testid={`order-${o.order_id}`}>
+            <div key={o.order_id} className="border border-ink/10 bg-surface p-5" data-testid={`order-${o.order_id}`}>
               <div className="flex flex-wrap items-baseline justify-between gap-3">
-                <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 break-all">
+                <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 break-all">
                   {o.order_id} · {new Date(o.created_at).toLocaleDateString("en-GB")}
                 </div>
-                <div className={`font-mono-x text-[10px] uppercase tracking-[0.25em] ${STATUS_CLASS[o.status] || "text-zinc-400"}`}>
+                <div className={`font-mono-x text-[10px] uppercase tracking-[0.25em] ${STATUS_CLASS[o.status] || "text-ink-3"}`}>
                   {STATUS_LABEL[o.status] || o.status}
                 </div>
               </div>
@@ -65,21 +65,21 @@ export default function MyOrders() {
                 {o.items.map((l) => (
                   <div key={l.variant_id} className="flex items-center gap-3 text-sm">
                     <span className="min-w-0 flex-1 break-words">
-                      {l.name}{l.size ? ` · ${l.size}` : ""} <span className="text-zinc-500">×{l.quantity}</span>
+                      {l.name}{l.size ? ` · ${l.size}` : ""} <span className="text-ink-4">×{l.quantity}</span>
                     </span>
                     <span className="font-mono-x shrink-0">{ron(l.line_total_ron)}</span>
                   </div>
                 ))}
               </div>
 
-              <div className="mt-4 pt-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-3">
-                <div className="font-mono-x text-xs text-zinc-400">
-                  Shipping ({o.shipping_zone}) {ron(o.shipping_ron)} · <span className="text-white">Total {ron(o.total_ron)}</span>
-                  <span className="text-zinc-500"> · incl. VAT {ron(o.vat_amount_ron)}</span>
+              <div className="mt-4 pt-3 border-t border-ink/10 flex flex-wrap items-center justify-between gap-3">
+                <div className="font-mono-x text-xs text-ink-3">
+                  Shipping ({o.shipping_zone}) {ron(o.shipping_ron)} · <span className="text-ink">Total {ron(o.total_ron)}</span>
+                  <span className="text-ink-4"> · incl. VAT {ron(o.vat_amount_ron)}</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {o.tracking_number && (
-                    <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-400 self-center">
+                    <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-3 self-center">
                       {o.carrier} {o.tracking_number}
                     </span>
                   )}

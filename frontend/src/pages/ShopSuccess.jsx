@@ -52,12 +52,12 @@ export default function ShopSuccess() {
 
   return (
     <div className="max-w-2xl mx-auto px-6 py-24">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Merchandise</div>
+      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Merchandise</div>
       <h1 className="font-display text-4xl sm:text-5xl uppercase font-black tracking-tighter mt-2" data-testid="shop-success-heading">
         {state === "paid" ? "Order confirmed" : state === "error" ? "Something went wrong" : state === "pending" ? "Still processing" : "Confirming…"}
       </h1>
 
-      <p className="mt-6 text-zinc-300 text-sm leading-relaxed">
+      <p className="mt-6 text-ink-2 text-sm leading-relaxed">
         {state === "paid" && "Payment received. We've emailed you a receipt, and your invoice is on your orders page."}
         {state === "checking" && "One moment while we confirm the payment with Stripe."}
         {state === "pending" && "Your payment is taking a little longer to confirm. It will appear on your orders page as soon as it lands — no need to pay again."}
@@ -65,20 +65,20 @@ export default function ShopSuccess() {
       </p>
 
       {order && (
-        <div className="mt-8 border border-white/10 bg-[#0F0F0F] p-6" data-testid="success-order">
+        <div className="mt-8 border border-ink/10 bg-surface p-6" data-testid="success-order">
           {/* break-all: an order id is one unbroken token with no space to wrap at. */}
-          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 break-all">Order {order.order_id}</div>
+          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 break-all">Order {order.order_id}</div>
           <div className="mt-4 space-y-2">
             {order.items.map((l) => (
               <div key={l.variant_id} className="flex justify-between gap-3 text-sm">
                 {/* The name yields and wraps; the amount never does — a price broken
                     across two lines is unreadable. */}
-                <span className="min-w-0 break-words">{l.name}{l.size ? ` · ${l.size}` : ""} <span className="text-zinc-500">×{l.quantity}</span></span>
+                <span className="min-w-0 break-words">{l.name}{l.size ? ` · ${l.size}` : ""} <span className="text-ink-4">×{l.quantity}</span></span>
                 <span className="font-mono-x shrink-0">{ron(l.line_total_ron)}</span>
               </div>
             ))}
           </div>
-          <div className="mt-4 pt-3 border-t border-white/10 font-mono-x text-sm flex justify-between">
+          <div className="mt-4 pt-3 border-t border-ink/10 font-mono-x text-sm flex justify-between">
             <span>Total paid</span><span>{ron(order.total_ron)}</span>
           </div>
         </div>

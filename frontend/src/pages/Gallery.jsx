@@ -15,7 +15,7 @@ const hasPoster = (g) => g.media_type === "video" && g.thumbnail_url && g.thumbn
  * every card in it, instead of truncating or breaking alignment. */
 function Card({ testId, coverUrl, isVideo, isPoster, title, badge, onClick }) {
   return (
-    <button onClick={onClick} data-testid={testId} className="group flex flex-col h-full border border-white/10 text-left hover:border-white transition-colors">
+    <button onClick={onClick} data-testid={testId} className="group flex flex-col h-full border border-ink/10 text-left hover:border-ink transition-colors">
       <div className="aspect-square overflow-hidden relative shrink-0">
         {/* `coverUrl` is already a still when a poster exists, so it must render as
             an <img> even though the item is a video — feeding a JPEG to <video>
@@ -26,15 +26,15 @@ function Card({ testId, coverUrl, isVideo, isPoster, title, badge, onClick }) {
           <img src={coverUrl} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover group-hover:opacity-80 transition-opacity" />
         )}
         {isVideo && (
-          <div className="absolute top-2 left-2 bg-black/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-white">▶ Video</div>
+          <div className="absolute top-2 left-2 bg-scrim/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink">▶ Video</div>
         )}
         {badge && (
-          <div className="absolute bottom-2 right-2 bg-black/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-white">{badge}</div>
+          <div className="absolute bottom-2 right-2 bg-scrim/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink">{badge}</div>
         )}
       </div>
       {title && (
         <div className="flex-1 flex items-center p-3">
-          <div className="font-mono-x text-[10px] uppercase tracking-[0.25em] text-zinc-400">{title}</div>
+          <div className="font-mono-x text-[10px] uppercase tracking-[0.25em] text-ink-3">{title}</div>
         </div>
       )}
     </button>
@@ -66,12 +66,12 @@ export default function Gallery() {
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Documentation</div>
+      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Documentation</div>
       <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-2" data-testid="gallery-heading">
         {settings?.title || "Gallery"}
       </h1>
       {settings?.description && (
-        <p className="mt-4 max-w-2xl text-zinc-400 text-sm leading-relaxed" data-testid="gallery-intro">{settings.description}</p>
+        <p className="mt-4 max-w-2xl text-ink-3 text-sm leading-relaxed" data-testid="gallery-intro">{settings.description}</p>
       )}
 
       <div className="mt-12 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6 items-stretch">
@@ -99,7 +99,7 @@ export default function Gallery() {
           />
         ))}
         {eventAlbums.length === 0 && standalone.length === 0 && (
-          <div className="col-span-full border border-dashed border-white/10 p-10 text-center text-zinc-500 font-mono-x text-xs uppercase tracking-[0.3em]">Nothing here yet</div>
+          <div className="col-span-full border border-dashed border-ink/10 p-10 text-center text-ink-4 font-mono-x text-xs uppercase tracking-[0.3em]">Nothing here yet</div>
         )}
       </div>
 

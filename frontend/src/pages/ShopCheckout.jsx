@@ -50,11 +50,11 @@ export default function ShopCheckout() {
     return { subtotal, shipping, total, net, vat: total - net, zone: form.country === "RO" ? "RO" : "EU" };
   }, [settings, cart.subtotal_ron, form.country]);
 
-  if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
+  if (loading) return <div className="p-16 text-center font-mono-x text-ink-4">Loading…</div>;
   if (!user) return (
     <div className="max-w-xl mx-auto px-6 py-24 text-center">
       <h1 className="font-display text-3xl sm:text-4xl uppercase font-black tracking-tighter break-words">Sign in to check out</h1>
-      <p className="mt-4 text-zinc-400 text-sm">An account is required — it's where your order and invoice live.</p>
+      <p className="mt-4 text-ink-3 text-sm">An account is required — it's where your order and invoice live.</p>
       <button onClick={() => startLogin("/shop/checkout")} className="btn-accent mt-8">SIGN IN</button>
     </div>
   );
@@ -94,7 +94,7 @@ export default function ShopCheckout() {
 
   const Field = ({ label, k, required, type = "text", placeholder }) => (
     <label className="block">
-      <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-1 font-mono-x">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-1 font-mono-x">{label}</div>
       <input type={type} required={required} value={form[k]} placeholder={placeholder}
              onChange={(e) => set(k, e.target.value)} data-testid={`ship-${k}`} className="input-x w-full" />
     </label>
@@ -102,12 +102,12 @@ export default function ShopCheckout() {
 
   return (
     <div className="max-w-[1100px] mx-auto px-6 md:px-10 py-16">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Merchandise</div>
+      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Merchandise</div>
       <h1 className="font-display text-4xl sm:text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">Checkout</h1>
 
       <form onSubmit={submit} className="mt-10 grid lg:grid-cols-12 gap-8 items-start">
-        <div className="lg:col-span-7 border border-white/10 bg-[#0F0F0F] p-6 space-y-4">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Shipping address</div>
+        <div className="lg:col-span-7 border border-ink/10 bg-surface p-6 space-y-4">
+          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Shipping address</div>
           <Field label="Full name" k="full_name" required />
           <Field label="Phone" k="phone" type="tel" placeholder="+40 721 234 567" />
           <Field label="Address" k="line1" required placeholder="Street and number" />
@@ -124,43 +124,43 @@ export default function ShopCheckout() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Postal code" k="postal_code" required />
             <label className="block">
-              <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-1 font-mono-x">Country</div>
+              <div className="text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-1 font-mono-x">Country</div>
               <select value={form.country} onChange={(e) => set("country", e.target.value)}
                       data-testid="ship-country" className="input-x w-full">
                 {COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
               </select>
             </label>
           </div>
-          <p className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 leading-relaxed pt-2">
+          <p className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 leading-relaxed pt-2">
             We ship to Romania and the EU. Your address is used for this delivery and kept with the order only.
           </p>
         </div>
 
-        <div className="lg:col-span-5 border border-white/10 bg-[#0F0F0F] p-6 sticky top-24">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Order</div>
+        <div className="lg:col-span-5 border border-ink/10 bg-surface p-6 sticky top-24">
+          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Order</div>
           <div className="mt-4 space-y-2">
             {cart.items.map((l) => (
               <div key={l.variant_id} className="flex justify-between gap-3 text-sm">
                 <span className="min-w-0 break-words">
-                  {l.name}{l.size ? ` · ${l.size}` : ""} <span className="text-zinc-500">×{l.quantity}</span>
+                  {l.name}{l.size ? ` · ${l.size}` : ""} <span className="text-ink-4">×{l.quantity}</span>
                 </span>
                 <span className="font-mono-x shrink-0">{ron(l.line_total_ron)}</span>
               </div>
             ))}
           </div>
           {totals && (
-            <div className="mt-5 pt-4 border-t border-white/10 space-y-2 font-mono-x text-sm">
-              <div className="flex justify-between"><span className="text-zinc-400">Subtotal</span><span>{ron(totals.subtotal)}</span></div>
+            <div className="mt-5 pt-4 border-t border-ink/10 space-y-2 font-mono-x text-sm">
+              <div className="flex justify-between"><span className="text-ink-3">Subtotal</span><span>{ron(totals.subtotal)}</span></div>
               <div className="flex justify-between gap-3">
-                <span className="text-zinc-400 min-w-0 truncate">Shipping ({totals.zone})</span>
+                <span className="text-ink-3 min-w-0 truncate">Shipping ({totals.zone})</span>
                 <span data-testid="checkout-shipping" className="shrink-0">{totals.shipping === 0 ? "Free" : ron(totals.shipping)}</span>
               </div>
-              <div className="flex justify-between text-base pt-2 border-t border-white/10">
+              <div className="flex justify-between text-base pt-2 border-t border-ink/10">
                 <span>Total</span><span data-testid="checkout-total">{ron(totals.total)}</span>
               </div>
               {/* Romanian retail prices are quoted VAT-inclusive, so the split is shown
                   rather than added — the total above is what gets charged. */}
-              <div className="flex justify-between gap-3 text-[10px] uppercase tracking-[0.2em] text-zinc-500 pt-1">
+              <div className="flex justify-between gap-3 text-[10px] uppercase tracking-[0.2em] text-ink-4 pt-1">
                 <span className="min-w-0">of which VAT ({Math.round(settings.vat_rate * 100)}%)</span>
                 <span data-testid="checkout-vat" className="shrink-0">{ron(totals.vat)}</span>
               </div>
@@ -169,7 +169,7 @@ export default function ShopCheckout() {
           <button disabled={busy} data-testid="pay-now" className="btn-accent w-full mt-6 disabled:opacity-40">
             {busy ? "…" : "PAY WITH CARD"}
           </button>
-          <p className="mt-3 font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 leading-relaxed">
+          <p className="mt-3 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 leading-relaxed">
             You'll be taken to Stripe. Stock is held for 20 minutes while you pay.
           </p>
         </div>

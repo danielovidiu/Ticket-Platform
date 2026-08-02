@@ -12,9 +12,9 @@ const CATEGORIES = ["apparel", "accessories", "print", "music"];
 // Only these can be set by hand — `paid` comes from a confirmed payment and nothing else.
 const NEXT_STATUS = { paid: ["shipped", "cancelled"], shipped: ["delivered"] };
 const STATUS_CLASS = {
-  pending: "text-zinc-500", paid: "text-[color:var(--success)]", shipped: "text-white",
-  delivered: "text-[color:var(--success)]", cancelled: "text-[color:var(--accent)]",
-  refunded: "text-[color:var(--accent)]", expired: "text-zinc-600",
+  pending: "text-ink-4", paid: "text-ok", shipped: "text-ink",
+  delivered: "text-ok", cancelled: "text-brand",
+  refunded: "text-brand", expired: "text-ink-5",
 };
 
 const errText = (e, fallback) => {
@@ -25,7 +25,7 @@ const errText = (e, fallback) => {
 function Field({ label, className = "", children }) {
   return (
     <label className={`block min-w-0 ${className}`}>
-      <div className="text-[10px] text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">{label}</div>
+      <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">{label}</div>
       {children}
     </label>
   );
@@ -49,7 +49,7 @@ function ProductForm({ form, setForm, onSave, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4">
-      <div className="border border-white/20 bg-[#0F0F0F] w-full max-w-3xl max-h-[90vh] flex flex-col">
+      <div className="border border-ink/20 bg-surface w-full max-w-3xl max-h-[90vh] flex flex-col">
         <div className="shrink-0 flex flex-wrap gap-3 justify-between items-center hairline-b px-6 py-4">
           <div className="font-display text-2xl uppercase font-bold">{form.product_id ? "Edit" : "New"} product</div>
           <div className="flex gap-2">
@@ -83,7 +83,7 @@ function ProductForm({ form, setForm, onSave, onClose }) {
               <input type="number" value={form.sort_order} onChange={(e) => setF("sort_order", Number(e.target.value))} className="input-x w-full" />
             </Field>
             <div className="col-span-2">
-              <div className="text-[10px] text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">Description</div>
+              <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Description</div>
               <textarea value={form.description} onChange={(e) => setF("description", e.target.value)} rows={3} className="input-x w-full" />
             </div>
             <label className="col-span-2 flex gap-2 items-center">
@@ -92,7 +92,7 @@ function ProductForm({ form, setForm, onSave, onClose }) {
             </label>
           </div>
 
-          <div className="mt-6 hairline-b pb-2 font-mono-x uppercase tracking-[0.2em] text-xs text-zinc-500">Images</div>
+          <div className="mt-6 hairline-b pb-2 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Images</div>
           <div className="mt-3 space-y-3">
             {(form.images || []).map((src, i) => (
               <div key={i} className="flex gap-2 items-end">
@@ -109,13 +109,13 @@ function ProductForm({ form, setForm, onSave, onClose }) {
 
           <div className="mt-8 hairline-b pb-2 flex items-baseline gap-3">
             <div className="font-display text-xl uppercase font-bold">Sizes &amp; stock</div>
-            <div className="font-mono-x uppercase tracking-[0.2em] text-[10px] text-zinc-500">
+            <div className="font-mono-x uppercase tracking-[0.2em] text-[10px] text-ink-4">
               {form.variants.length} variant{form.variants.length === 1 ? "" : "s"}
             </div>
           </div>
           <div className="mt-3 space-y-2" data-testid="variant-rows">
             {form.variants.map((v, i) => (
-              <div key={v.variant_id || i} className="grid grid-cols-12 gap-2 items-end border border-white/10 p-3">
+              <div key={v.variant_id || i} className="grid grid-cols-12 gap-2 items-end border border-ink/10 p-3">
                 <Field label="Size" className="col-span-3">
                   <input list="shop-sizes" value={v.size} onChange={(e) => setVariant(i, "size", e.target.value.toUpperCase())}
                          className="input-x w-full" data-testid={`variant-size-${i}`} />
@@ -137,7 +137,7 @@ function ProductForm({ form, setForm, onSave, onClose }) {
             <button onClick={addVariant} className="btn-primary" data-testid="add-variant">+ Add size</button>
             {/* Stock shown here is what is sellable right now: a checkout in progress has
                 already taken its units out, and puts them back if it is never paid. */}
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 pt-1">
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 pt-1">
               Stock excludes units held by checkouts in progress.
             </div>
           </div>
@@ -197,27 +197,27 @@ export function ShopProducts() {
       <div className="flex flex-wrap gap-2">
         <button onClick={() => setForm(emptyForm())} data-testid="new-product-btn" className="btn-accent">+ NEW PRODUCT</button>
         {items.length === 0 && <button onClick={seed} className="btn-primary" data-testid="seed-shop-btn">Seed demo catalogue</button>}
-        <span className="ml-auto self-center font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+        <span className="ml-auto self-center font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
           {items.length} product{items.length === 1 ? "" : "s"}
         </span>
       </div>
 
       <div className="mt-6 space-y-2">
         {items.map((p) => (
-          <div key={p.product_id} className="border border-white/10 bg-[#0F0F0F] p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
+          <div key={p.product_id} className="border border-ink/10 bg-surface p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
             <div className="lg:col-span-1">
-              <div className="w-12 h-12 overflow-hidden border border-white/10">
+              <div className="w-12 h-12 overflow-hidden border border-ink/10">
                 {p.images?.[0] ? <img src={mediaUrl(p.images[0])} alt="" className="w-full h-full object-cover" />
-                               : <div className="w-full h-full bg-[#151515]" />}
+                               : <div className="w-full h-full bg-surface-2" />}
               </div>
             </div>
             <div className="lg:col-span-4 min-w-0 font-display font-bold uppercase break-words">{p.name}</div>
-            <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-zinc-400">{p.category} · {p.gender}</div>
+            <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-ink-3">{p.category} · {p.gender}</div>
             <div className="lg:col-span-1 min-w-0 font-mono-x text-xs">{ron(p.price_ron)}</div>
-            <div className={`lg:col-span-1 min-w-0 font-mono-x text-xs ${stockOf(p) === 0 ? "text-[color:var(--accent)]" : "text-zinc-300"}`}>
+            <div className={`lg:col-span-1 min-w-0 font-mono-x text-xs ${stockOf(p) === 0 ? "text-brand" : "text-ink-2"}`}>
               {stockOf(p)} in stock
             </div>
-            <div className={`lg:col-span-1 min-w-0 font-mono-x text-[10px] uppercase tracking-[0.2em] ${p.is_published ? "text-[color:var(--success)]" : "text-zinc-500"}`}>
+            <div className={`lg:col-span-1 min-w-0 font-mono-x text-[10px] uppercase tracking-[0.2em] ${p.is_published ? "text-ok" : "text-ink-4"}`}>
               {p.is_published ? "Live" : "Draft"}
             </div>
             <div className="lg:col-span-2 min-w-0 flex flex-wrap gap-2 lg:justify-end">
@@ -227,7 +227,7 @@ export function ShopProducts() {
           </div>
         ))}
         {items.length === 0 && (
-          <div className="border border-dashed border-white/10 p-8 text-center font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+          <div className="border border-dashed border-ink/10 p-8 text-center font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
             No products yet
           </div>
         )}
@@ -269,11 +269,11 @@ export function ShopOrders() {
         {["", "paid", "shipped", "delivered", "cancelled"].map((s) => (
           <button key={s || "all"} onClick={() => setFilter(s)} data-testid={`order-filter-${s || "all"}`}
                   className={`px-3 py-1.5 border font-mono-x text-[10px] uppercase tracking-[0.2em] ${
-                    filter === s ? "bg-white text-black border-white" : "border-white/20 text-zinc-300"}`}>
+                    filter === s ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>
             {s || "all"}
           </button>
         ))}
-        <span className="ml-auto font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+        <span className="ml-auto font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
           {orders.length} order{orders.length === 1 ? "" : "s"}
         </span>
       </div>
@@ -282,7 +282,7 @@ export function ShopOrders() {
         {orders.map((o) => {
           const addr = o.shipping_address || {};
           return (
-            <div key={o.order_id} className="border border-white/10 bg-[#0F0F0F] p-3" data-testid={`admin-order-${o.order_id}`}>
+            <div key={o.order_id} className="border border-ink/10 bg-surface p-3" data-testid={`admin-order-${o.order_id}`}>
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
                 <div className="lg:col-span-3 min-w-0 font-mono-x text-xs break-all">{o.order_id}</div>
                 <div className="lg:col-span-2 min-w-0 text-sm break-words">{addr.full_name || o.email}</div>
@@ -303,23 +303,23 @@ export function ShopOrders() {
               </div>
 
               {open === o.order_id && (
-                <div className="mt-4 pt-3 border-t border-white/10 grid md:grid-cols-2 gap-6 text-sm">
+                <div className="mt-4 pt-3 border-t border-ink/10 grid md:grid-cols-2 gap-6 text-sm">
                   <div>
-                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Items</div>
+                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Items</div>
                     {o.items.map((l) => (
                       <div key={l.variant_id} className="flex justify-between gap-3 py-0.5">
-                        <span className="min-w-0 break-words">{l.name}{l.size ? ` · ${l.size}` : ""} <span className="text-zinc-500">×{l.quantity}</span></span>
+                        <span className="min-w-0 break-words">{l.name}{l.size ? ` · ${l.size}` : ""} <span className="text-ink-4">×{l.quantity}</span></span>
                         <span className="font-mono-x shrink-0">{ron(l.line_total_ron)}</span>
                       </div>
                     ))}
-                    <div className="mt-2 pt-2 border-t border-white/10 font-mono-x text-xs text-zinc-400">
-                      Sub {ron(o.subtotal_ron)} · Ship {ron(o.shipping_ron)} · <span className="text-white">Total {ron(o.total_ron)}</span>
+                    <div className="mt-2 pt-2 border-t border-ink/10 font-mono-x text-xs text-ink-3">
+                      Sub {ron(o.subtotal_ron)} · Ship {ron(o.shipping_ron)} · <span className="text-ink">Total {ron(o.total_ron)}</span>
                       <br />Net {ron(o.net_ron)} + VAT {ron(o.vat_amount_ron)}
                     </div>
                   </div>
                   <div>
-                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Ship to</div>
-                    <div className="text-zinc-300 leading-relaxed">
+                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Ship to</div>
+                    <div className="text-ink-2 leading-relaxed">
                       {addr.full_name}<br />{addr.line1}{addr.line2 ? <>, {addr.line2}</> : null}<br />
                       {addr.postal_code} {addr.city}{addr.county ? `, ${addr.county}` : ""}<br />
                       {addr.country}<br />{addr.phone}
@@ -332,13 +332,13 @@ export function ShopOrders() {
                         <input placeholder="Tracking number" value={tracking.tracking_number}
                                onChange={(e) => setTracking({ ...tracking, tracking_number: e.target.value })}
                                className="input-x font-mono-x" data-testid="tracking-number" />
-                        <div className="col-span-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+                        <div className="col-span-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
                           Filled in before marking shipped — both go in the customer's email.
                         </div>
                       </div>
                     )}
                     {o.tracking_number && (
-                      <div className="mt-3 font-mono-x text-xs text-zinc-400">{o.carrier} · {o.tracking_number}</div>
+                      <div className="mt-3 font-mono-x text-xs text-ink-3">{o.carrier} · {o.tracking_number}</div>
                     )}
                   </div>
                 </div>
@@ -347,7 +347,7 @@ export function ShopOrders() {
           );
         })}
         {orders.length === 0 && (
-          <div className="border border-dashed border-white/10 p-8 text-center font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+          <div className="border border-dashed border-ink/10 p-8 text-center font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
             No orders
           </div>
         )}
@@ -375,7 +375,7 @@ export function ShopSettings() {
   };
 
   return (
-    <div className="border border-white/10 bg-[#0F0F0F] p-4 max-w-2xl" data-testid="shop-settings">
+    <div className="border border-ink/10 bg-surface p-4 max-w-2xl" data-testid="shop-settings">
       <div className="grid grid-cols-2 gap-3">
         <Field label="Shipping — Romania (RON)">
           <input type="number" step="0.01" value={s.shipping_ro_ron} data-testid="ship-ro"
@@ -401,7 +401,7 @@ export function ShopSettings() {
       <button onClick={save} disabled={busy} className="btn-accent mt-4 disabled:opacity-40" data-testid="save-shop-settings">
         {busy ? "…" : "SAVE SETTINGS"}
       </button>
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-3 leading-relaxed">
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-3 leading-relaxed">
         Prices are entered VAT-inclusive — the rate only splits net from VAT on invoices, it is
         never added on top. It applies to tickets as well as the shop, and takes effect on the
         next order: invoices already issued keep the rate they were raised under.

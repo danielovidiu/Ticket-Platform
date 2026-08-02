@@ -3236,7 +3236,10 @@ async def security_headers(request: Request, call_next):
 #    two were kept in step were invisible to the admin tab and the CSV export).
 # 4: the built-in nav links became reorderable `kind: "core"` rows in cms_pages.
 # 5: the homepage is designated by an is_home flag rather than by the slug "home".
-SCHEMA_VERSION = 5
+# 6: custom_fonts gained its unique (family, weight, style) index — without the bump an
+#    already-initialised database never runs init_indexes again and the upload route's
+#    replace-on-conflict guarantee would rest on nothing.
+SCHEMA_VERSION = 6
 
 
 @app.on_event("startup")
@@ -3347,6 +3350,11 @@ async def init_indexes():
         # collection scan on every catalogue read.
         await db.shop_orders.create_index([("status", 1), ("hold_expires_at", 1)])
         await db.invoices.create_index("number", unique=True)
+        # Uploaded webfonts. One file per (family, weight, style) — the upload route
+        # replaces rather than accumulating, and the unique index is what makes that hold
+        # when two uploads of the same face arrive together.
+        await db.custom_fonts.create_index([("family", 1), ("weight", 1), ("style", 1)], unique=True)
+        await db.custom_fonts.create_index("font_id", unique=True)
         logger.info("Indexes ensured")
     except Exception:
         logger.exception("init_indexes failed")

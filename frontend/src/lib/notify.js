@@ -21,10 +21,10 @@ export function notifyError(message, options = {}) {
         onClick={() => toast.dismiss(id)}
         data-testid="toast-error"
         aria-label={`${message}. Tap to dismiss.`}
-        className="w-full text-left bg-[#050505] border border-[color:var(--accent)] text-white px-4 py-3 cursor-pointer select-none"
+        className="w-full text-left bg-page border border-brand text-ink px-4 py-3 cursor-pointer select-none"
       >
         <span className="block text-sm leading-snug">{message}</span>
-        <span className="block font-mono-x text-[9px] uppercase tracking-[0.25em] text-zinc-500 mt-1">
+        <span className="block font-mono-x text-[9px] uppercase tracking-[0.25em] text-ink-4 mt-1">
           Tap to dismiss
         </span>
       </button>

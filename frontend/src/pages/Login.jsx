@@ -112,13 +112,13 @@ export default function Login() {
   if (pendingEmail !== null) {
     return (
       <div className="max-w-md mx-auto px-6 py-20" data-testid="verify-pending">
-        <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Box Office</div>
+        <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Box Office</div>
         <h1 className="font-display text-4xl md:text-5xl uppercase font-black tracking-tighter mt-2">Confirm your email</h1>
-        <p className="mt-6 text-zinc-300 text-sm leading-relaxed">
-          We've sent a confirmation link{pendingEmail ? <> to <span className="text-white">{pendingEmail}</span></> : null}.
+        <p className="mt-6 text-ink-2 text-sm leading-relaxed">
+          We've sent a confirmation link{pendingEmail ? <> to <span className="text-ink">{pendingEmail}</span></> : null}.
           Open it to activate your account — you can't sign in until you do.
         </p>
-        <p className="mt-3 text-zinc-500 text-xs leading-relaxed">
+        <p className="mt-3 text-ink-4 text-xs leading-relaxed">
           Nothing in your inbox after a minute or two? Check spam, then send it again.
         </p>
         <button
@@ -129,7 +129,7 @@ export default function Login() {
         >
           {resent ? "LINK SENT" : busy ? "…" : "SEND IT AGAIN"}
         </button>
-        <button onClick={backToLogin} data-testid="back-to-login" className="mt-6 font-mono-x text-[11px] uppercase tracking-[0.2em] text-zinc-500 hover:text-white">
+        <button onClick={backToLogin} data-testid="back-to-login" className="mt-6 font-mono-x text-[11px] uppercase tracking-[0.2em] text-ink-4 hover:text-ink">
           ← Back to sign in
         </button>
       </div>
@@ -138,7 +138,7 @@ export default function Login() {
 
   return (
     <div className="max-w-md mx-auto px-6 py-20">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Box Office</div>
+      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Box Office</div>
       <h1 className="font-display text-4xl md:text-5xl uppercase font-black tracking-tighter mt-2">
         {mode === "register" ? "Create account" : mode === "forgot" ? "Reset password" : "Sign in"}
       </h1>
@@ -148,18 +148,18 @@ export default function Login() {
           {methods.google && <a href={providerHref("google")} data-testid="login-google" className="btn-primary w-full text-center block">Continue with Google</a>}
           {methods.apple && <a href={providerHref("apple")} data-testid="login-apple" className="btn-primary w-full text-center block">Continue with Apple</a>}
           {mode === "register" && methods.require_phone && (
-            <p className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 leading-relaxed">
+            <p className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 leading-relaxed">
               Your name comes across automatically — we'll ask for a phone number once.
             </p>
           )}
-          <div className="flex items-center gap-3 text-zinc-600 font-mono-x text-[10px] uppercase tracking-[0.3em] py-2">
-            <span className="h-px flex-1 bg-white/10" /> or <span className="h-px flex-1 bg-white/10" />
+          <div className="flex items-center gap-3 text-ink-5 font-mono-x text-[10px] uppercase tracking-[0.3em] py-2">
+            <span className="h-px flex-1 bg-ink/10" /> or <span className="h-px flex-1 bg-ink/10" />
           </div>
         </div>
       )}
 
       {sentReset ? (
-        <p className="mt-8 text-zinc-300 text-sm leading-relaxed">
+        <p className="mt-8 text-ink-2 text-sm leading-relaxed">
           If an account exists for that email, we've sent a reset link. Check your inbox.
         </p>
       ) : (
@@ -182,15 +182,15 @@ export default function Login() {
 
           {mode === "register" && (
             <div className="space-y-2 pt-1">
-              <label className="flex items-start gap-2 text-xs text-zinc-300">
+              <label className="flex items-start gap-2 text-xs text-ink-2">
                 <input type="checkbox" checked={form.tos} onChange={(e) => set("tos", e.target.checked)} data-testid="login-tos" className="mt-0.5" />
                 <span>I accept the <Link to="/terms" className="underline">Terms of Service</Link> and <Link to="/privacy" className="underline">Privacy Policy</Link>.</span>
               </label>
-              <label className="flex items-start gap-2 text-xs text-zinc-400">
+              <label className="flex items-start gap-2 text-xs text-ink-3">
                 <input type="checkbox" checked={form.news_opt_in} onChange={(e) => set("news_opt_in", e.target.checked)} className="mt-0.5" />
                 <span>Email me about upcoming events (optional).</span>
               </label>
-              <label className="flex items-start gap-2 text-xs text-zinc-400">
+              <label className="flex items-start gap-2 text-xs text-ink-3">
                 <input type="checkbox" checked={form.promo_opt_in} onChange={(e) => set("promo_opt_in", e.target.checked)} className="mt-0.5" />
                 <span>Send me occasional promotions (optional).</span>
               </label>
@@ -203,15 +203,15 @@ export default function Login() {
         </form>
       )}
 
-      <div className="mt-6 flex justify-between font-mono-x text-[11px] uppercase tracking-[0.2em] text-zinc-500">
+      <div className="mt-6 flex justify-between font-mono-x text-[11px] uppercase tracking-[0.2em] text-ink-4">
         {mode === "login" && (
           <>
-            <button onClick={() => { setMode("register"); setSentReset(false); }} data-testid="switch-register" className="hover:text-white">Create account</button>
-            <button onClick={() => { setMode("forgot"); setSentReset(false); }} className="hover:text-white">Forgot password</button>
+            <button onClick={() => { setMode("register"); setSentReset(false); }} data-testid="switch-register" className="hover:text-ink">Create account</button>
+            <button onClick={() => { setMode("forgot"); setSentReset(false); }} className="hover:text-ink">Forgot password</button>
           </>
         )}
         {mode !== "login" && (
-          <button onClick={backToLogin} data-testid="switch-login" className="hover:text-white">← Back to sign in</button>
+          <button onClick={backToLogin} data-testid="switch-login" className="hover:text-ink">← Back to sign in</button>
         )}
       </div>
     </div>

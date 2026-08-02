@@ -28,18 +28,18 @@ export default function NewsletterUnsubscribe() {
         {state === "done" ? "Unsubscribed" : "Unsubscribe"}
       </h1>
       {state === "done" ? (
-        <p className="mt-4 text-zinc-400 text-sm">You won't receive newsletter emails from us anymore.</p>
+        <p className="mt-4 text-ink-3 text-sm">You won't receive newsletter emails from us anymore.</p>
       ) : state === "error" ? (
-        <p className="mt-4 text-zinc-400 text-sm">This unsubscribe link is invalid or has expired.</p>
+        <p className="mt-4 text-ink-3 text-sm">This unsubscribe link is invalid or has expired.</p>
       ) : (
         <>
-          <p className="mt-4 text-zinc-400 text-sm">Stop receiving Supersanity event announcements?</p>
+          <p className="mt-4 text-ink-3 text-sm">Stop receiving Supersanity event announcements?</p>
           <button onClick={unsub} disabled={state === "working"} data-testid="unsub-confirm" className="btn-accent mt-8">
             {state === "working" ? "…" : "UNSUBSCRIBE"}
           </button>
         </>
       )}
-      <div className="mt-8"><Link to="/" className="font-mono-x text-[11px] uppercase tracking-[0.2em] text-zinc-500 hover:text-white">← Home</Link></div>
+      <div className="mt-8"><Link to="/" className="font-mono-x text-[11px] uppercase tracking-[0.2em] text-ink-4 hover:text-ink">← Home</Link></div>
     </div>
   );
 }

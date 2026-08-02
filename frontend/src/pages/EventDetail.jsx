@@ -53,7 +53,7 @@ function Collapsible({ lines = 10, testId, children }) {
       {(overflows || expanded) && (
         <button onClick={() => setExpanded((v) => !v)}
                 data-testid={`${testId}-toggle`} aria-expanded={expanded}
-                className="mt-4 font-mono-x text-[11px] uppercase tracking-[0.2em] text-zinc-400 hover:text-white underline underline-offset-4">
+                className="mt-4 font-mono-x text-[11px] uppercase tracking-[0.2em] text-ink-3 hover:text-ink underline underline-offset-4">
           {expanded ? "Show less" : "Show more"}
         </button>
       )}
@@ -141,7 +141,7 @@ export default function EventDetail() {
     }
   };
 
-  if (!event) return <div className="p-16 text-center text-zinc-500 font-mono-x uppercase text-xs tracking-[0.3em]">Loading…</div>;
+  if (!event) return <div className="p-16 text-center text-ink-4 font-mono-x uppercase text-xs tracking-[0.3em]">Loading…</div>;
 
   return (
     /* Three grid blocks rather than two columns, so the DOM order IS the mobile order:
@@ -155,10 +155,10 @@ export default function EventDetail() {
        version did. */
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10 items-start">
       <div className="md:col-span-7">
-        <div className="aspect-[4/3] overflow-hidden border border-white/10">
+        <div className="aspect-[4/3] overflow-hidden border border-ink/10">
           <img src={mediaUrl(event.image_url)} alt={event.title} className="w-full h-full object-cover" />
         </div>
-        <div className="mt-8 font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-400">
+        <div className="mt-8 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-3">
           {fmtDate(event.starts_at)} · Doors {fmtTime(event.doors_open_at || event.starts_at)} · {[event.venue, event.city].filter(Boolean).join(", ")}
         </div>
         <h1 data-testid="event-title" className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-4 leading-none">
@@ -167,18 +167,18 @@ export default function EventDetail() {
       </div>
 
       <div className="md:col-span-5 md:row-span-2">
-        <div className="border border-white/10 bg-[#0F0F0F] p-6 md:p-8 sticky top-24">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Box Office</div>
+        <div className="border border-ink/10 bg-surface p-6 md:p-8 sticky top-24">
+          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Box Office</div>
           <div className="font-display text-2xl uppercase font-bold mt-2">Buy Tickets</div>
 
           {special && (
-            <div className="mt-4 border border-[color:var(--accent)] p-3 font-mono-x text-xs uppercase tracking-[0.2em] text-[color:var(--accent)]">
+            <div className="mt-4 border border-brand p-3 font-mono-x text-xs uppercase tracking-[0.2em] text-brand">
               INVITE · {special.label} · {special.price_ron.toFixed(2)} RON
             </div>
           )}
 
           {soldOut ? (
-            <div data-testid="sold-out-message" className="mt-6 border border-white/15 bg-white/5 p-6 text-center">
+            <div data-testid="sold-out-message" className="mt-6 border border-ink/15 bg-ink/5 p-6 text-center">
               <div className="font-display text-2xl uppercase font-bold tracking-tight">
                 {event.sold_out_message || "Sold Out"}
               </div>
@@ -189,11 +189,11 @@ export default function EventDetail() {
                 {!special && event.waves.map((w) => (
                   <button key={w.wave_id} onClick={() => setWaveId(w.wave_id)} data-testid={`wave-${w.tier}`}
                           disabled={!w.is_active || w.available <= 0}
-                          className={`w-full text-left border p-4 transition-colors ${waveId===w.wave_id ? "border-white bg-white/5" : "border-white/15"} ${(!w.is_active || w.available<=0) ? "opacity-40 cursor-not-allowed" : "hover:border-white"}`}>
+                          className={`w-full text-left border p-4 transition-colors ${waveId===w.wave_id ? "border-ink bg-ink/5" : "border-ink/15"} ${(!w.is_active || w.available<=0) ? "opacity-40 cursor-not-allowed" : "hover:border-ink"}`}>
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-display uppercase font-bold">{w.name}</div>
-                        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1">
+                        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
                           {w.available > 0 ? `${w.available} available` : "SOLD OUT"}
                         </div>
                       </div>
@@ -205,14 +205,14 @@ export default function EventDetail() {
 
               <div className="mt-6 grid grid-cols-2 gap-3">
                 <label className="col-span-1">
-                  <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Quantity</div>
+                  <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Quantity</div>
                   <select value={qty} onChange={(e) => setQty(Number(e.target.value))} data-testid="qty-select" className="input-x">
                     {qtyOptions.map(n => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </label>
                 {!special && (
                   <label className="col-span-1">
-                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Discount code</div>
+                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Discount code</div>
                     <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="CODE" data-testid="discount-input" className="input-x uppercase" />
                   </label>
                 )}
@@ -220,11 +220,11 @@ export default function EventDetail() {
 
               <div className="mt-6 hairline pt-6">
                 <div className="flex justify-between font-mono-x text-sm">
-                  <span className="text-zinc-500 uppercase tracking-[0.2em] text-xs">Subtotal</span>
+                  <span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Subtotal</span>
                   <span>{total.toFixed(2)} RON</span>
                 </div>
                 <div className="flex justify-between mt-3 items-center">
-                  <span className="font-mono-x uppercase text-xs tracking-[0.2em] text-zinc-400">Total</span>
+                  <span className="font-mono-x uppercase text-xs tracking-[0.2em] text-ink-3">Total</span>
                   <span className="font-display text-3xl font-bold">{total.toFixed(2)} RON</span>
                 </div>
               </div>
@@ -232,7 +232,7 @@ export default function EventDetail() {
               <button onClick={reserve} disabled={busy} data-testid="reserve-btn" className="btn-accent w-full mt-6">
                 {busy ? "HOLDING…" : "HOLD & CHECKOUT · 10 MIN"}
               </button>
-              <p className="mt-4 text-xs text-zinc-500 leading-relaxed">
+              <p className="mt-4 text-xs text-ink-4 leading-relaxed">
                 Tickets are held for 10 minutes while you pay via Stripe. All sales final unless the event is cancelled.
                 Max {event.max_tickets_per_user} tickets per person.
               </p>
@@ -243,12 +243,12 @@ export default function EventDetail() {
 
       <div className="md:col-span-7 md:col-start-1">
         <Collapsible lines={10} testId="event-description">
-          {renderRich(event.description, { paraClassName: "text-zinc-300 text-lg leading-relaxed max-w-2xl mt-4 first:mt-0" })}
+          {renderRich(event.description, { paraClassName: "text-ink-2 text-lg leading-relaxed max-w-2xl mt-4 first:mt-0" })}
         </Collapsible>
 
         {event.gallery && event.gallery.length > 0 && (
           <div className="mt-12">
-            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500 mb-4">Album · {event.gallery.length}</div>
+            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4 mb-4">Album · {event.gallery.length}</div>
             <div className="columns-2 sm:columns-3 gap-2">
               {event.gallery.map((g, i) => (
                 <button
@@ -267,8 +267,8 @@ export default function EventDetail() {
                       ) : (
                         <video src={mediaUrl(g.image_url)} className="w-full object-cover" muted preload="metadata" />
                       )}
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/10 transition-colors">
-                        <Play size={28} className="text-white" fill="white" />
+                      <div className="absolute inset-0 flex items-center justify-center bg-scrim/20 group-hover:bg-scrim/10 transition-colors">
+                        <Play size={28} className="text-ink" fill="white" />
                       </div>
                     </>
                   ) : (

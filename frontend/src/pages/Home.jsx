@@ -27,17 +27,17 @@ export default function Home() {
       <section className="relative overflow-hidden">
         <div className="absolute inset-0">
           <img src="https://images.unsplash.com/photo-1545128485-c400e7702796?crop=entropy&cs=srgb&fm=jpg&q=85"
-               alt="" className="w-full h-full object-cover opacity-40" />
-          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-[#050505]" />
+               alt="" className="w-full h-full object-cover opacity-[var(--hero-image-opacity)]" />
+          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-page" />
         </div>
         <div className="relative max-w-[1400px] mx-auto px-6 md:px-10 pt-24 md:pt-32 pb-24">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-400 mb-6">
+          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-3 mb-6">
             BUCHAREST · EST. 2030 · MORE THAN MUSIC · PERFORMANCE
           </div>
           <h1 data-testid="hero-title" className="font-display text-[14vw] md:text-[9vw] leading-[0.85] uppercase tracking-tighter font-black max-w-6xl">
-            A collective for<br/>the ones after<br/><span className="text-[color:var(--accent)]">midnight.</span>
+            A collective for<br/>the ones after<br/><span className="text-brand">midnight.</span>
           </h1>
-          <p className="mt-10 max-w-xl text-zinc-300 leading-relaxed text-lg">
+          <p className="mt-10 max-w-xl text-ink-2 leading-relaxed text-lg">
             Supersanity programmes music and performance with its own artists and its own box office. No promoter. No middlemen. One door.
           </p>
           <div className="mt-10 flex flex-wrap gap-4">
@@ -52,8 +52,8 @@ export default function Home() {
         <div className="marquee">
           <div className="marquee-track font-mono-x uppercase tracking-[0.3em] text-2xl md:text-4xl">
             {[...marqueeItems, ...marqueeItems].map((m, i) => (
-              <span key={`${m}-${i}`} className="flex items-center gap-16 text-zinc-500">
-                {m} <span className="text-[color:var(--accent)]">◆</span>
+              <span key={`${m}-${i}`} className="flex items-center gap-16 text-ink-4">
+                {m} <span className="text-brand">◆</span>
               </span>
             ))}
           </div>
@@ -64,7 +64,7 @@ export default function Home() {
       <section className="max-w-[1400px] mx-auto px-6 md:px-10 py-24">
         <div className="flex items-end justify-between mb-12">
           <div>
-            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">01 — Programme</div>
+            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">01 — Programme</div>
             <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-3">Upcoming</h2>
           </div>
           <Link to="/events" className="hidden md:inline btn-primary" data-testid="all-events-link">All events</Link>
@@ -72,26 +72,26 @@ export default function Home() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {events.slice(0, 4).map((e) => (
             <Link key={e.event_id} to={`/events/${e.slug}`} data-testid={`event-card-${e.slug}`}
-                  className="group block border border-white/10 bg-[#0F0F0F] hover:border-white transition-colors">
+                  className="group block border border-ink/10 bg-surface hover:border-ink transition-colors">
               <div className="aspect-[16/10] overflow-hidden">
                 <img src={mediaUrl(e.image_url)} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
               </div>
               <div className="p-6 md:p-8">
-                <div className="font-mono-x text-xs uppercase tracking-[0.25em] text-zinc-500">
+                <div className="font-mono-x text-xs uppercase tracking-[0.25em] text-ink-4">
                   {fmtDate(e.starts_at)} · {e.venue}
                 </div>
                 <div className="font-display text-3xl md:text-4xl uppercase tracking-tighter font-bold mt-3">{e.title}</div>
                 <div className="mt-4 flex items-center justify-between">
-                  <div className="font-mono-x text-xs text-zinc-400">
+                  <div className="font-mono-x text-xs text-ink-3">
                     {e.total_available > 0 ? `${e.total_available} tickets left` : "SOLD OUT"}
                   </div>
-                  <ArrowUpRight size={20} className="text-zinc-400 group-hover:text-white" />
+                  <ArrowUpRight size={20} className="text-ink-3 group-hover:text-ink" />
                 </div>
               </div>
             </Link>
           ))}
           {events.length === 0 && (
-            <div className="col-span-full border border-dashed border-white/10 p-10 text-center text-zinc-500 font-mono-x uppercase text-xs tracking-[0.3em]">
+            <div className="col-span-full border border-dashed border-ink/10 p-10 text-center text-ink-4 font-mono-x uppercase text-xs tracking-[0.3em]">
               No upcoming events yet.
             </div>
           )}
@@ -102,20 +102,20 @@ export default function Home() {
       <section className="max-w-[1400px] mx-auto px-6 md:px-10 py-24 hairline">
         <div className="flex items-end justify-between mb-12">
           <div>
-            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">02 — Roster</div>
+            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">02 — Roster</div>
             <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-3">Artists</h2>
           </div>
           <Link to="/artists" className="hidden md:inline btn-primary">All artists</Link>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           {artists.slice(0, 6).map((a) => (
-            <Link key={a.artist_id} to={`/artists/${a.slug}`} className="group block border border-white/10 overflow-hidden">
+            <Link key={a.artist_id} to={`/artists/${a.slug}`} className="group block border border-ink/10 overflow-hidden">
               <div className="aspect-square overflow-hidden">
                 <img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" />
               </div>
               <div className="p-4 flex items-center justify-between">
                 <div className="font-display uppercase tracking-tight font-semibold">{a.name}</div>
-                <ArrowUpRight size={16} className="text-zinc-400 group-hover:text-white" />
+                <ArrowUpRight size={16} className="text-ink-3 group-hover:text-ink" />
               </div>
             </Link>
           ))}
@@ -125,7 +125,7 @@ export default function Home() {
       {/* MISSION CTA */}
       <section className="max-w-[1400px] mx-auto px-6 md:px-10 py-24 hairline">
         <div className="grid md:grid-cols-2 gap-10 items-start">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">03 — Mission</div>
+          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">03 — Mission</div>
           <div>
             <p className="font-display text-3xl md:text-5xl uppercase tracking-tighter leading-tight">
               We build the room, the sound, and the door. We keep the money out of promoters' pockets and inside the work.

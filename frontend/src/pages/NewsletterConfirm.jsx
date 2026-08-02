@@ -19,7 +19,7 @@ export default function NewsletterConfirm() {
       <h1 className="font-display text-4xl uppercase font-black tracking-tighter">
         {state === "working" ? "Confirming…" : state === "ok" ? "You're subscribed" : "Link invalid"}
       </h1>
-      <p className="mt-4 text-zinc-400 text-sm">
+      <p className="mt-4 text-ink-3 text-sm">
         {state === "ok"
           ? "Thanks — you'll hear from us about upcoming events."
           : state === "error"

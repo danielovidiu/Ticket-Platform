@@ -30,22 +30,22 @@ export default function CheckoutSuccess() {
 
   return (
     <div className="max-w-2xl mx-auto px-6 py-24 text-center">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Payment</div>
+      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Payment</div>
       {status === "pending" && (
         <>
           <h1 className="font-display text-5xl uppercase font-black mt-3">Processing…</h1>
-          <p className="mt-6 text-zinc-400">Hang on. Attempt {attempts + 1}.</p>
+          <p className="mt-6 text-ink-3">Hang on. Attempt {attempts + 1}.</p>
         </>
       )}
       {status === "paid" && (
         <>
-          <h1 data-testid="pay-success-title" className="font-display text-6xl uppercase font-black mt-3 text-[color:var(--success)]">Paid.</h1>
-          <p className="mt-6 text-zinc-300">Your tickets are ready.</p>
+          <h1 data-testid="pay-success-title" className="font-display text-6xl uppercase font-black mt-3 text-ok">Paid.</h1>
+          <p className="mt-6 text-ink-2">Your tickets are ready.</p>
           <Link to="/my-tickets" className="btn-accent inline-block mt-8">Open My Tickets</Link>
         </>
       )}
-      {status === "expired" && <><h1 className="font-display text-5xl uppercase font-black mt-3 text-[color:var(--accent)]">Session expired</h1><Link to="/events" className="btn-primary mt-8 inline-block">Try again</Link></>}
-      {status === "timeout" && <><h1 className="font-display text-5xl uppercase font-black mt-3">Still processing</h1><p className="mt-6 text-zinc-400">Check My Tickets in a minute.</p><Link to="/my-tickets" className="btn-primary mt-8 inline-block">My Tickets</Link></>}
+      {status === "expired" && <><h1 className="font-display text-5xl uppercase font-black mt-3 text-brand">Session expired</h1><Link to="/events" className="btn-primary mt-8 inline-block">Try again</Link></>}
+      {status === "timeout" && <><h1 className="font-display text-5xl uppercase font-black mt-3">Still processing</h1><p className="mt-6 text-ink-3">Check My Tickets in a minute.</p><Link to="/my-tickets" className="btn-primary mt-8 inline-block">My Tickets</Link></>}
       {status === "error" && <><h1 className="font-display text-5xl uppercase font-black mt-3">Error</h1><Link to="/events" className="btn-primary mt-8 inline-block">Back</Link></>}
     </div>
   );

@@ -21,11 +21,11 @@ export default function Cart() {
     if (search.get("cancelled")) toast("Payment cancelled — your cart is untouched");
   }, [search]);
 
-  if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
+  if (loading) return <div className="p-16 text-center font-mono-x text-ink-4">Loading…</div>;
   if (!user) return (
     <div className="max-w-xl mx-auto px-6 py-24 text-center">
       <h1 className="font-display text-3xl sm:text-4xl uppercase font-black tracking-tighter break-words">Sign in to see your cart</h1>
-      <p className="mt-4 text-zinc-400 text-sm">Your cart is saved to your account, so it follows you between devices.</p>
+      <p className="mt-4 text-ink-3 text-sm">Your cart is saved to your account, so it follows you between devices.</p>
       <button onClick={() => startLogin("/cart")} className="btn-accent mt-8">SIGN IN</button>
     </div>
   );
@@ -53,12 +53,12 @@ export default function Cart() {
 
   return (
     <div className="max-w-[1100px] mx-auto px-6 md:px-10 py-16">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Merchandise</div>
+      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Merchandise</div>
       <h1 className="font-display text-4xl sm:text-5xl md:text-6xl uppercase font-black tracking-tighter mt-2">Cart</h1>
 
       {empty ? (
-        <div className="mt-12 border border-dashed border-white/10 p-12 text-center">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Your cart is empty</div>
+        <div className="mt-12 border border-dashed border-ink/10 p-12 text-center">
+          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Your cart is empty</div>
           <Link to="/shop" className="btn-primary mt-6 inline-block">Browse the shop</Link>
         </div>
       ) : (
@@ -75,12 +75,12 @@ export default function Cart() {
                  full width beside the thumbnail (~227px at 375px) and wraps at spaces. */
               <div key={l.variant_id}
                    className={`border p-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4 ${
-                     l.purchasable ? "border-white/10 bg-[#0F0F0F]" : "border-[color:var(--accent)] bg-[#0F0F0F]"}`}
+                     l.purchasable ? "border-ink/10 bg-surface" : "border-brand bg-surface"}`}
                    data-testid={`cart-line-${l.variant_id}`}>
                 <div className="flex items-start gap-3 min-w-0 sm:flex-1">
-                  <Link to={`/shop/${l.slug}`} className="w-16 h-16 sm:w-20 sm:h-20 shrink-0 overflow-hidden border border-white/10">
+                  <Link to={`/shop/${l.slug}`} className="w-16 h-16 sm:w-20 sm:h-20 shrink-0 overflow-hidden border border-ink/10">
                     {l.image ? <img src={mediaUrl(l.image)} alt="" className="w-full h-full object-cover" />
-                             : <div className="w-full h-full bg-[#151515]" />}
+                             : <div className="w-full h-full bg-surface-2" />}
                   </Link>
                   <div className="min-w-0 flex-1">
                     {/* block, so the link is a full-width line box rather than an inline
@@ -92,11 +92,11 @@ export default function Cart() {
                     </Link>
                     {/* break-words: wide letter-spacing on a SKU pushes this past a 320px
                         card, and "M · TEE-OBS-M" has no plain space to wrap at. */}
-                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1 break-words">
+                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1 break-words">
                       {[l.size, l.sku].filter(Boolean).join(" · ")}
                     </div>
                     {!l.purchasable && (
-                      <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-[color:var(--accent)] mt-1">
+                      <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-brand mt-1">
                         {!l.published ? "No longer sold" : l.available === 0 ? "Sold out" : `Only ${l.available} left`}
                       </div>
                     )}
@@ -108,7 +108,7 @@ export default function Cart() {
                     the stepper, the amount and ✕ need ~262px against 248px of card, so the
                     pair drops to its own line instead of pushing the grid wider than the
                     screen. ml-auto keeps it right-aligned whichever line it lands on. */}
-                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-white/10 pt-3
+                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-ink/10 pt-3
                                 sm:flex-nowrap sm:border-t-0 sm:pt-0 sm:justify-end sm:gap-x-4 sm:shrink-0">
                   <div className="flex items-center gap-2">
                     <button onClick={() => setQty(l, l.quantity - 1)} disabled={busy === l.variant_id || l.quantity <= 1}
@@ -123,24 +123,24 @@ export default function Cart() {
                     <button onClick={() => remove(l)} disabled={busy === l.variant_id}
                             data-testid={`remove-${l.variant_id}`}
                             aria-label={`Remove ${l.name}`}
-                            className="btn-primary !py-1 !px-3 !text-[10px] hover:!text-[color:var(--accent)]">✕</button>
+                            className="btn-primary !py-1 !px-3 !text-[10px] hover:!text-brand">✕</button>
                   </div>
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="lg:col-span-4 border border-white/10 bg-[#0F0F0F] p-6 sticky top-24">
-            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Summary</div>
+          <div className="lg:col-span-4 border border-ink/10 bg-surface p-6 sticky top-24">
+            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Summary</div>
             <div className="flex justify-between mt-4 font-mono-x text-sm">
-              <span className="text-zinc-400">Subtotal</span>
+              <span className="text-ink-3">Subtotal</span>
               <span data-testid="cart-subtotal">{ron(cart.subtotal_ron)}</span>
             </div>
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-3 leading-relaxed">
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-3 leading-relaxed">
               Shipping is calculated at checkout, once you choose a country. Prices include VAT.
             </div>
             {cart.has_problems && (
-              <div className="mt-4 border border-[color:var(--accent)] p-3 font-mono-x text-[10px] uppercase tracking-[0.15em] text-[color:var(--accent)] leading-relaxed">
+              <div className="mt-4 border border-brand p-3 font-mono-x text-[10px] uppercase tracking-[0.15em] text-brand leading-relaxed">
                 Something changed while this sat in your cart. Fix the marked lines to continue.
               </div>
             )}
@@ -148,7 +148,7 @@ export default function Cart() {
                     data-testid="go-to-checkout" className="btn-accent w-full mt-6 disabled:opacity-40">
               CHECKOUT
             </button>
-            <Link to="/shop" className="block text-center mt-4 font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 hover:text-white">
+            <Link to="/shop" className="block text-center mt-4 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 hover:text-ink">
               Keep shopping
             </Link>
           </div>

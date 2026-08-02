@@ -13,7 +13,7 @@ import React from "react";
  */
 export function renderRich(md, opts = {}) {
   if (!md) return null;
-  const paraClassName = opts.paraClassName || "text-zinc-300 text-lg leading-relaxed max-w-2xl mt-4";
+  const paraClassName = opts.paraClassName || "text-ink-2 text-lg leading-relaxed max-w-2xl mt-4";
   const lines = String(md).split(/\n/);
   const nodes = [];
   let paraBuf = [];
@@ -30,7 +30,7 @@ export function renderRich(md, opts = {}) {
     if (line.startsWith("## ")) { flushPara(); nodes.push(<h2 key={`h${nodes.length}`} className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mt-10">{renderInline(line.slice(3))}</h2>); continue; }
     if (line.startsWith("# ")) { flushPara(); nodes.push(<h1 key={`h${nodes.length}`} className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-4 leading-[0.9]">{renderInline(line.slice(2))}</h1>); continue; }
     if (/^[A-Z][A-Z0-9 ·\-—/]{2,}$/.test(line) && paraBuf.length === 0) {
-      nodes.push(<div key={`eb${nodes.length}`} className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500 mt-6">{line}</div>);
+      nodes.push(<div key={`eb${nodes.length}`} className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4 mt-6">{line}</div>);
       continue;
     }
     paraBuf.push(line);
@@ -54,11 +54,11 @@ export function renderInline(t) {
   let m;
   while ((m = re.exec(t))) {
     if (m.index > i) parts.push(t.slice(i, m.index));
-    if (m[1] !== undefined) parts.push(<strong key={i} className="text-white">{m[1]}</strong>);
+    if (m[1] !== undefined) parts.push(<strong key={i} className="text-ink">{m[1]}</strong>);
     else if (m[2] !== undefined) parts.push(<s key={i}>{m[2]}</s>);
     else if (m[3] !== undefined) parts.push(<u key={i}>{m[3]}</u>);
     else if (m[4] !== undefined) parts.push(<em key={i}>{m[4]}</em>);
-    else if (m[5] !== undefined) parts.push(<a key={i} href={m[6]} className="underline underline-offset-4 hover:text-white">{m[5]}</a>);
+    else if (m[5] !== undefined) parts.push(<a key={i} href={m[6]} className="underline underline-offset-4 hover:text-ink">{m[5]}</a>);
     i = m.index + m[0].length;
   }
   if (i < t.length) parts.push(t.slice(i));
@@ -110,7 +110,7 @@ export function FormatToolbar({ textareaRef, value, onChange }) {
       {MARKS.map((m) => (
         <button key={m.marker} type="button" title={m.title}
                 onClick={() => wrapTextareaSelection(textareaRef.current, value, onChange, m.marker)}
-                className={`w-7 h-7 border border-white/20 text-xs hover:border-white hover:bg-white/5 ${m.className}`}>
+                className={`w-7 h-7 border border-ink/20 text-xs hover:border-ink hover:bg-ink/5 ${m.className}`}>
           {m.label}
         </button>
       ))}

@@ -17,17 +17,17 @@ export default function Admin() {
   const { user, loading } = useAuth();
   const [tab, setTab] = useState("stats");
 
-  if (loading) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
+  if (loading) return <div className="p-16 text-center font-mono-x text-ink-4">Loading…</div>;
   if (!user || user.role !== "admin") return <div className="p-16 text-center font-mono-x">Access denied. Admin only.</div>;
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-10">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Backstage</div>
+      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Backstage</div>
       <h1 className="font-display text-4xl md:text-6xl uppercase font-black tracking-tighter mt-2">Admin</h1>
       <div className="mt-6 flex flex-wrap gap-2 hairline-b pb-4">
         {TABS.map((t) => (
           <button key={t} onClick={() => setTab(t)} data-testid={`admin-tab-${t}`}
-                  className={`px-3 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${tab===t ? "bg-white text-black border-white" : "border-white/20 text-zinc-300"}`}>{t}</button>
+                  className={`px-3 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${tab===t ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>{t}</button>
         ))}
       </div>
       <div className="mt-8">
@@ -94,7 +94,7 @@ function Stats() {
 
   return (
     <div>
-      <div className="border border-white/10 bg-[#0F0F0F] p-4 mb-4" data-testid="stats-filters">
+      <div className="border border-ink/10 bg-surface p-4 mb-4" data-testid="stats-filters">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <Field label="Event">
             <select value={eventId} onChange={(e) => setEventId(e.target.value)} className="input-x w-full" data-testid="stats-event-filter">
@@ -114,7 +114,7 @@ function Stats() {
             <button key={label} onClick={() => setLastDays(days())} className="btn-primary text-xs">Last {label}</button>
           ))}
           {filtered && <button onClick={clear} className="btn-primary text-xs" data-testid="stats-clear">Clear</button>}
-          <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 ml-auto">
+          <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 ml-auto">
             {filtered ? "Filtered" : "All time · all events"}
           </span>
         </div>
@@ -122,8 +122,8 @@ function Stats() {
       {!s ? <div>Loading</div> : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           {cards.map(([k, v]) => (
-            <div key={k} className="border border-white/10 bg-[#0F0F0F] p-4 lg:p-6 min-w-0">
-              <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 break-words">{k}</div>
+            <div key={k} className="border border-ink/10 bg-surface p-4 lg:p-6 min-w-0">
+              <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 break-words">{k}</div>
               {/* Revenue can run to six figures plus a currency suffix — it must be
                   free to shrink and wrap rather than push past the card. */}
               <div className="font-display text-2xl lg:text-3xl font-black mt-2 break-words">{v}</div>
@@ -144,25 +144,25 @@ function eventStatus(e) {
   return new Date(endMoment) < new Date() ? "PAST" : "LIVE";
 }
 const STATUS_CLASS = {
-  LIVE: "text-[color:var(--success)]",
-  PAST: "text-zinc-500",
-  DRAFT: "text-[color:var(--accent)]",
+  LIVE: "text-ok",
+  PAST: "text-ink-4",
+  DRAFT: "text-brand",
 };
 
 // Ticket tiers read as full words in the admin form — the abbreviated values
 // ("gen", "early") are storage detail, not something an editor should decode.
 const TIER_LABEL = { early_bird: "Early Bird", general: "General", vip: "VIP" };
 const TIER_BADGE = {
-  early_bird: "border-[color:var(--success)] text-[color:var(--success)]",
-  general: "border-white/50 text-white",
-  vip: "border-[color:var(--accent)] text-[color:var(--accent)]",
+  early_bird: "border-ok text-ok",
+  general: "border-ink/50 text-ink",
+  vip: "border-brand text-brand",
 };
 
 // Small labelled wrapper so every field in the tier card says what it is.
 function Field({ label, className = "", children }) {
   return (
     <label className={`block min-w-0 ${className}`}>
-      <div className="text-[10px] text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">{label}</div>
+      <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">{label}</div>
       {children}
     </label>
   );
@@ -195,9 +195,9 @@ function Events() {
           // in at lg, where there is actually room for five columns of text.
           // `min-w-0` lets each cell shrink below its content width, without which
           // grid children refuse to shrink and spill over their neighbours.
-          <div key={e.event_id} className="border border-white/10 bg-[#0F0F0F] p-4 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
+          <div key={e.event_id} className="border border-ink/10 bg-surface p-4 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
             <div className="lg:col-span-4 min-w-0 font-display font-bold uppercase break-words lg:truncate">{e.title}</div>
-            <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-zinc-400">{new Date(e.starts_at).toLocaleString("en-GB")}</div>
+            <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-ink-3">{new Date(e.starts_at).toLocaleString("en-GB")}</div>
             <div className="lg:col-span-2 min-w-0 font-mono-x text-xs break-words">{[e.venue, e.city].filter(Boolean).join(", ")}</div>
             <div className={`lg:col-span-1 min-w-0 font-mono-x text-xs ${STATUS_CLASS[eventStatus(e)]}`}>{eventStatus(e)}</div>
             <div className="lg:col-span-3 min-w-0 flex flex-wrap gap-2 lg:justify-end">
@@ -221,7 +221,7 @@ function EventForm({ form, setForm, onSave, onClose }) {
     <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4">
       {/* Column layout: the action bar stays pinned while only the body scrolls,
           so Save/Close are reachable from anywhere in a long event form. */}
-      <div className="border border-white/20 bg-[#0F0F0F] w-full max-w-3xl max-h-[90vh] flex flex-col">
+      <div className="border border-ink/20 bg-surface w-full max-w-3xl max-h-[90vh] flex flex-col">
         <div className="shrink-0 flex flex-wrap gap-3 justify-between items-center hairline-b px-6 py-4">
           <div className="font-display text-2xl uppercase font-bold">{form.event_id ? "Edit" : "New"} Event</div>
           <div className="flex gap-2">
@@ -242,23 +242,23 @@ function EventForm({ form, setForm, onSave, onClose }) {
             <FormatToolbar textareaRef={descRef} value={form.description} onChange={(v) => setF("description", v)} />
             <textarea ref={descRef} placeholder="Description" value={form.description} onChange={(e) => setF("description", e.target.value)} className="input-x w-full" rows={3} />
           </div>
-          <label className="col-span-1"><div className="text-xs text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">Starts</div><DateTimePicker value={form.starts_at} onChange={(v) => setF("starts_at", v)} /></label>
-          <label className="col-span-1"><div className="text-xs text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">Ends</div><DateTimePicker value={form.ends_at} onChange={(v) => setF("ends_at", v)} /></label>
-          <label className="col-span-1"><div className="text-xs text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">Doors</div><DateTimePicker value={form.doors_open_at} onChange={(v) => setF("doors_open_at", v)} /></label>
-          <label className="col-span-1"><div className="text-xs text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">Max per user</div><input type="number" value={form.max_tickets_per_user} onChange={(e) => setF("max_tickets_per_user", Number(e.target.value))} className="input-x" /></label>
+          <label className="col-span-1"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Starts</div><DateTimePicker value={form.starts_at} onChange={(v) => setF("starts_at", v)} /></label>
+          <label className="col-span-1"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Ends</div><DateTimePicker value={form.ends_at} onChange={(v) => setF("ends_at", v)} /></label>
+          <label className="col-span-1"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Doors</div><DateTimePicker value={form.doors_open_at} onChange={(v) => setF("doors_open_at", v)} /></label>
+          <label className="col-span-1"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Max per user</div><input type="number" value={form.max_tickets_per_user} onChange={(e) => setF("max_tickets_per_user", Number(e.target.value))} className="input-x" /></label>
           <label className="col-span-1">
-            <div className="text-xs text-zinc-500 mb-1 font-mono-x uppercase tracking-[0.2em]">Sold-out message</div>
+            <div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Sold-out message</div>
             <input placeholder="e.g. Sold Out, At the door" value={form.sold_out_message || ""} onChange={(e) => setF("sold_out_message", e.target.value)} className="input-x" />
           </label>
           <label className="col-span-2 flex gap-2 items-center"><input type="checkbox" checked={form.is_published} onChange={(e) => setF("is_published", e.target.checked)} /> <span className="text-sm">Published</span></label>
         </div>
         <div className="mt-8 hairline-b pb-3 flex items-baseline gap-3">
           <div className="font-display text-xl uppercase font-bold">Ticket tiers</div>
-          <div className="font-mono-x uppercase tracking-[0.2em] text-[10px] text-zinc-500">{form.waves.length} tier{form.waves.length === 1 ? "" : "s"}</div>
+          <div className="font-mono-x uppercase tracking-[0.2em] text-[10px] text-ink-4">{form.waves.length} tier{form.waves.length === 1 ? "" : "s"}</div>
         </div>
         <div className="mt-4 space-y-4">
           {form.waves.map((w, i) => (
-            <div key={w.wave_id || w._key || `new-${i}`} className="border border-white/15 bg-white/[0.02] p-4" data-testid={`wave-row-${i}`}>
+            <div key={w.wave_id || w._key || `new-${i}`} className="border border-ink/15 bg-ink/[0.02] p-4" data-testid={`wave-row-${i}`}>
               <div className="flex flex-wrap items-center gap-3 pb-3 hairline-b">
                 <span className={`shrink-0 px-2 py-1 border font-mono-x uppercase tracking-[0.2em] text-[10px] ${TIER_BADGE[w.tier] || TIER_BADGE.general}`}>
                   {TIER_LABEL[w.tier] || w.tier}
@@ -281,11 +281,11 @@ function EventForm({ form, setForm, onSave, onClose }) {
           ))}
           <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_from: "" }]})} className="btn-primary">+ Add tier</button>
         </div>
-        <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-zinc-500">Album</div>
+        <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Album</div>
         <div className="mt-3">
           {form.event_id
             ? <EventAlbum eventId={form.event_id} />
-            : <div className="text-xs text-zinc-500 font-mono-x uppercase tracking-[0.2em]">Save the event once first to upload its album.</div>}
+            : <div className="text-xs text-ink-4 font-mono-x uppercase tracking-[0.2em]">Save the event once first to upload its album.</div>}
         </div>
         </div>
       </div>
@@ -307,12 +307,12 @@ function Orders() {
   return (
     <div className="space-y-2">
       {orders.map((o) => (
-        <div key={o.reservation_id} className="border border-white/10 bg-[#0F0F0F] p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center text-sm">
+        <div key={o.reservation_id} className="border border-ink/10 bg-surface p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center text-sm">
           <div className="lg:col-span-3 min-w-0 font-mono-x text-xs break-words lg:truncate">{o.reservation_id}</div>
           <div className="lg:col-span-2 min-w-0 font-mono-x">{o.total_ron?.toFixed(2)} RON</div>
           <div className="lg:col-span-1 min-w-0">{o.quantity}×</div>
-          <div className="lg:col-span-2 min-w-0"><span className="inline-block border border-white/20 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em]">{o.status}</span></div>
-          <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-zinc-400">{new Date(o.created_at).toLocaleString("en-GB")}</div>
+          <div className="lg:col-span-2 min-w-0"><span className="inline-block border border-ink/20 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em]">{o.status}</span></div>
+          <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-ink-3">{new Date(o.created_at).toLocaleString("en-GB")}</div>
           <div className="lg:col-span-2 min-w-0 lg:text-right">{o.status === "paid" && <button onClick={() => refund(o.reservation_id)} className="btn-primary text-xs">Refund</button>}</div>
         </div>
       ))}
@@ -345,8 +345,8 @@ function Artists() {
       <button onClick={() => setForm(emptyForm())} className="btn-accent">+ NEW ARTIST</button>
       <div className="mt-6 space-y-2">
         {items.map((a) => (
-          <div key={a.artist_id} className="border border-white/10 p-3 flex justify-between items-center">
-            <div className="font-display uppercase">{a.name} · <span className="text-zinc-500 text-sm">{a.slug}</span></div>
+          <div key={a.artist_id} className="border border-ink/10 p-3 flex justify-between items-center">
+            <div className="font-display uppercase">{a.name} · <span className="text-ink-4 text-sm">{a.slug}</span></div>
             <div className="flex gap-2">
               <button onClick={() => setForm({ ...emptyForm(), ...a })} className="btn-primary text-xs">Edit</button>
               <button onClick={() => del(a.artist_id)} className="btn-primary text-xs">Del</button>
@@ -365,7 +365,7 @@ function ArtistForm({ form, setForm, onSave, onClose }) {
   const setLink = (k, v) => setForm({ ...form, links: { ...(form.links || {}), [k]: v } });
   return (
     <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4 overflow-auto">
-      <div className="border border-white/20 bg-[#0F0F0F] p-6 w-full max-w-2xl max-h-[90vh] overflow-auto">
+      <div className="border border-ink/20 bg-surface p-6 w-full max-w-2xl max-h-[90vh] overflow-auto">
         <div className="flex justify-between items-center hairline-b pb-3">
           <div className="font-display text-2xl uppercase font-bold">{form.artist_id ? "Edit" : "New"} Artist</div>
           <button onClick={onClose} className="btn-primary text-xs">Close</button>
@@ -375,12 +375,12 @@ function ArtistForm({ form, setForm, onSave, onClose }) {
           <input placeholder="Slug" value={form.slug} onChange={(e) => setF("slug", e.target.value)} className="input-x" />
           <input placeholder="Image URL" value={form.image_url} onChange={(e) => setF("image_url", e.target.value)} className="input-x col-span-2" />
           <div className="col-span-2">
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-1">Bio</div>
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-1">Bio</div>
             <FormatToolbar textareaRef={bioRef} value={form.bio} onChange={(v) => setF("bio", v)} />
             <textarea ref={bioRef} placeholder="Bio" value={form.bio} onChange={(e) => setF("bio", e.target.value)} className="input-x w-full" rows={4} />
           </div>
           <div className="col-span-2 mt-2">
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-2">Social links (leave blank to hide on the artist's page)</div>
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Social links (leave blank to hide on the artist's page)</div>
             <div className="grid grid-cols-2 gap-3">
               {SOCIAL_PLATFORMS.map((p) => (
                 <input key={p.key} placeholder={`${p.label} URL`} value={form.links?.[p.key] || ""}
@@ -405,7 +405,7 @@ function Projects() {
   const del = async (id) => { await http.delete(`/admin/projects/${id}`); load(); };
   return (
     <div>
-      <div className="border border-white/10 p-4 grid grid-cols-2 gap-3">
+      <div className="border border-ink/10 p-4 grid grid-cols-2 gap-3">
         <input placeholder="Title" value={f.title} onChange={(e) => setF({...f, title: e.target.value})} className="input-x" />
         <input placeholder="Slug" value={f.slug} onChange={(e) => setF({...f, slug: e.target.value})} className="input-x" />
         <input type="number" placeholder="Year" value={f.year} onChange={(e) => setF({...f, year: Number(e.target.value)})} className="input-x" />
@@ -418,8 +418,8 @@ function Projects() {
       </div>
       <div className="mt-4 space-y-2">
         {items.map((p) => (
-          <div key={p.project_id} className="border border-white/10 p-3 flex justify-between">
-            <div className="font-display uppercase">{p.title} · <span className="text-zinc-500 text-sm">{p.year}</span></div>
+          <div key={p.project_id} className="border border-ink/10 p-3 flex justify-between">
+            <div className="font-display uppercase">{p.title} · <span className="text-ink-4 text-sm">{p.year}</span></div>
             <button onClick={() => del(p.project_id)} className="btn-primary text-xs">Del</button>
           </div>
         ))}
@@ -436,7 +436,7 @@ function Discounts() {
   const save = async () => { await http.post("/admin/discounts", f); setF({ code: "", percent_off: 10, max_uses: 0, expires_at: "" }); load(); };
   return (
     <div>
-      <div className="border border-white/10 p-4 grid grid-cols-4 gap-3">
+      <div className="border border-ink/10 p-4 grid grid-cols-4 gap-3">
         <input placeholder="CODE" value={f.code} onChange={(e) => setF({...f, code: e.target.value.toUpperCase()})} className="input-x uppercase" />
         <input type="number" placeholder="% off" value={f.percent_off} onChange={(e) => setF({...f, percent_off: Number(e.target.value)})} className="input-x" />
         <input type="number" placeholder="Max uses (0=∞)" value={f.max_uses} onChange={(e) => setF({...f, max_uses: Number(e.target.value)})} className="input-x" />
@@ -445,9 +445,9 @@ function Discounts() {
       </div>
       <div className="mt-4 space-y-2">
         {items.map((d) => (
-          <div key={d.discount_id} className="border border-white/10 p-3 flex justify-between font-mono-x text-sm">
+          <div key={d.discount_id} className="border border-ink/10 p-3 flex justify-between font-mono-x text-sm">
             <span>{d.code} · {d.percent_off}%</span>
-            <span className="text-zinc-500">uses {d.uses}/{d.max_uses || "∞"}</span>
+            <span className="text-ink-4">uses {d.uses}/{d.max_uses || "∞"}</span>
             <button onClick={async () => { await http.delete(`/admin/discounts/${d.discount_id}`); load(); }} className="btn-primary text-xs">Del</button>
           </div>
         ))}
@@ -465,7 +465,7 @@ function Invites() {
   const save = async () => { await http.post("/admin/special-links", f); load(); };
   return (
     <div>
-      <div className="border border-white/10 p-4 grid grid-cols-4 gap-3">
+      <div className="border border-ink/10 p-4 grid grid-cols-4 gap-3">
         <select value={f.event_id} onChange={(e) => setF({...f, event_id: e.target.value})} className="input-x"><option value="">Event</option>{events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}</select>
         <input placeholder="Label" value={f.label} onChange={(e) => setF({...f, label: e.target.value})} className="input-x" />
         <input type="number" step="0.01" placeholder="Price RON" value={f.price_ron} onChange={(e) => setF({...f, price_ron: Number(e.target.value)})} className="input-x" />
@@ -477,9 +477,9 @@ function Invites() {
           const ev = events.find((e) => e.event_id === s.event_id);
           const url = ev ? `${window.location.origin}/events/${ev.slug}?invite=${s.token}` : `?invite=${s.token}`;
           return (
-            <div key={s.link_id} className="border border-white/10 p-3 font-mono-x text-xs space-y-1">
-              <div className="uppercase tracking-[0.2em] text-zinc-500">{s.label} · {s.price_ron.toFixed(2)} RON · {s.used}/{s.capacity} used</div>
-              <div className="break-all"><Link to={url.replace(window.location.origin, "")} className="text-white underline">{url}</Link></div>
+            <div key={s.link_id} className="border border-ink/10 p-3 font-mono-x text-xs space-y-1">
+              <div className="uppercase tracking-[0.2em] text-ink-4">{s.label} · {s.price_ron.toFixed(2)} RON · {s.used}/{s.capacity} used</div>
+              <div className="break-all"><Link to={url.replace(window.location.origin, "")} className="text-ink underline">{url}</Link></div>
               <button onClick={async () => { await http.delete(`/admin/special-links/${s.link_id}`); load(); }} className="btn-primary text-xs mt-1">Del</button>
             </div>
           );
@@ -508,14 +508,14 @@ function Users() {
   return (
     <div className="space-y-2">
       {items.map((u) => (
-        <div key={u.user_id} className="border border-white/10 p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
+        <div key={u.user_id} className="border border-ink/10 p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
           <div className="lg:col-span-3 min-w-0 break-words">{u.name}</div>
-          <div className="lg:col-span-4 min-w-0 text-zinc-400 text-sm break-words">{u.email}</div>
+          <div className="lg:col-span-4 min-w-0 text-ink-3 text-sm break-words">{u.email}</div>
           <div className="lg:col-span-1 min-w-0 font-mono-x text-xs uppercase">{u.role}</div>
           {/* Four role buttons need real room — they were sharing two columns. */}
           <div className="lg:col-span-4 min-w-0 flex flex-wrap gap-1 lg:justify-end">
             {["user", "editor", "door", "admin"].map((r) => (
-              <button key={r} onClick={() => setRole(u, r)} className={`px-2 py-1 border text-[10px] uppercase tracking-[0.2em] ${u.role===r ? "bg-white text-black border-white" : "border-white/20"}`}>{r}</button>
+              <button key={r} onClick={() => setRole(u, r)} className={`px-2 py-1 border text-[10px] uppercase tracking-[0.2em] ${u.role===r ? "bg-ink text-page border-ink" : "border-ink/20"}`}>{r}</button>
             ))}
           </div>
         </div>
@@ -565,7 +565,7 @@ function GallerySettings() {
   };
 
   return (
-    <div className="border border-white/10 bg-[#0F0F0F] p-4 mb-4" data-testid="gallery-settings">
+    <div className="border border-ink/10 bg-surface p-4 mb-4" data-testid="gallery-settings">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Field label="Gallery title">
           <input
@@ -596,7 +596,7 @@ function GallerySettings() {
         <button onClick={save} disabled={busy} className="btn-accent disabled:opacity-40" data-testid="gallery-settings-save">
           {busy ? "…" : "SAVE DETAILS"}
         </button>
-        <Link to={`/gallery/${settings.slug}`} className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 hover:text-white break-all">
+        <Link to={`/gallery/${settings.slug}`} className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 hover:text-ink break-all">
           /gallery/{settings.slug} ↗
         </Link>
       </div>
@@ -617,14 +617,14 @@ function GalleryAdmin() {
 
   return (
     <div>
-      <div className="border border-white/10 bg-[#0F0F0F] p-4 mb-4">
+      <div className="border border-ink/10 bg-surface p-4 mb-4">
         <Field label="Album">
           <select value={albumId} onChange={(e) => setAlbumId(e.target.value)} className="input-x w-full" data-testid="gallery-album-select">
             <option value="">Sitewide gallery</option>
             {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
           </select>
         </Field>
-        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-2">
+        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-2">
           {current
             ? "Shown on this event's page and as its tile on the Gallery page."
             : "Shown directly in the main Gallery grid, alongside event album tiles."}
@@ -647,9 +647,9 @@ function GalleryAdmin() {
 // treated as confirmed rather than shown as blank.
 const subStatus = (s) => (s.unsubscribed_at ? "unsubscribed" : s.status || "confirmed");
 const NEWSLETTER_STATUS_CLASS = {
-  confirmed: "text-[color:var(--success)]",
-  pending: "text-[color:var(--accent)]",
-  unsubscribed: "text-zinc-500",
+  confirmed: "text-ok",
+  pending: "text-brand",
+  unsubscribed: "text-ink-4",
 };
 
 function NewsletterAdmin() {
@@ -661,12 +661,12 @@ function NewsletterAdmin() {
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
-        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-400">{items.length} subscriber{items.length === 1 ? "" : "s"}</div>
+        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-3">{items.length} subscriber{items.length === 1 ? "" : "s"}</div>
         <a href={csvUrl} className="btn-primary text-xs" data-testid="newsletter-export">Download CSV</a>
       </div>
       <div className="space-y-2">
         {items.map((s) => (
-          <div key={s.sub_id} className="border border-white/10 p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center text-sm">
+          <div key={s.sub_id} className="border border-ink/10 p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center text-sm">
             {/* Addresses have no spaces to wrap at, so they need break-words. */}
             <div className="lg:col-span-4 min-w-0 font-mono-x break-words">{s.email}</div>
             {/* Double opt-in means a row can sit unconfirmed indefinitely; without this
@@ -674,14 +674,14 @@ function NewsletterAdmin() {
             <div className={`lg:col-span-2 min-w-0 font-mono-x text-[10px] uppercase tracking-[0.2em] ${NEWSLETTER_STATUS_CLASS[subStatus(s)]}`}>
               {subStatus(s)}
             </div>
-            <div className="lg:col-span-2 min-w-0 text-zinc-400 text-xs break-words">{s.source || "—"}</div>
-            <div className="lg:col-span-3 min-w-0 font-mono-x text-xs text-zinc-400">{new Date(s.created_at).toLocaleString("en-GB")}</div>
+            <div className="lg:col-span-2 min-w-0 text-ink-3 text-xs break-words">{s.source || "—"}</div>
+            <div className="lg:col-span-3 min-w-0 font-mono-x text-xs text-ink-3">{new Date(s.created_at).toLocaleString("en-GB")}</div>
             <div className="lg:col-span-1 min-w-0 lg:text-right">
               <button onClick={() => del(s.sub_id)} className="btn-primary text-[10px]" data-testid={`newsletter-del-${s.sub_id}`}>Del</button>
             </div>
           </div>
         ))}
-        {items.length === 0 && <div className="text-zinc-500 border border-dashed border-white/10 p-6 text-center font-mono-x text-xs uppercase tracking-[0.3em]">No subscribers yet</div>}
+        {items.length === 0 && <div className="text-ink-4 border border-dashed border-ink/10 p-6 text-center font-mono-x text-xs uppercase tracking-[0.3em]">No subscribers yet</div>}
       </div>
     </div>
   );

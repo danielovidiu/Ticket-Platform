@@ -112,7 +112,8 @@ export default function App() {
               refetched when that changes. */}
           <CartProvider>
             <ThemeLoader />
-            <Toaster theme="dark" position="top-right" toastOptions={{ style: { background: "#050505", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", borderRadius: 0 } }} />
+            {/* Through the tokens, so a toast doesn't stay a black box on a light site. */}
+            <Toaster position="top-right" toastOptions={{ style: { background: "var(--bg)", border: "1px solid rgb(var(--text-rgb) / 0.2)", color: "var(--text)", borderRadius: "var(--radius)" } }} />
             <AppRouter />
             <CookieConsent />
           </CartProvider>

@@ -9,19 +9,19 @@ export default function ArtistDetail() {
   const { slug } = useParams();
   const [a, setA] = useState(null);
   useEffect(() => { http.get(`/artists/${slug}`).then((r) => setA(r.data)).catch(() => {}); }, [slug]);
-  if (!a) return <div className="p-16 text-center font-mono-x text-zinc-500">Loading…</div>;
+  if (!a) return <div className="p-16 text-center font-mono-x text-ink-4">Loading…</div>;
   const links = Object.entries(a.links || {}).filter(([, v]) => v);
   return (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16 grid md:grid-cols-12 gap-10">
       {a.image_url && (
         <div className="md:col-span-5">
-          <div className="aspect-square overflow-hidden border border-white/10"><img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover" /></div>
+          <div className="aspect-square overflow-hidden border border-ink/10"><img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover" /></div>
         </div>
       )}
       <div className={a.image_url ? "md:col-span-7" : "md:col-span-12"}>
-        <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-500">Artist</div>
+        <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Artist</div>
         <h1 className="font-display text-6xl md:text-8xl uppercase font-black tracking-tighter mt-2 leading-none">{a.name}</h1>
-        {a.bio && <div className="mt-8">{renderRich(a.bio, { paraClassName: "text-zinc-300 text-lg leading-relaxed max-w-xl mt-4 first:mt-0" })}</div>}
+        {a.bio && <div className="mt-8">{renderRich(a.bio, { paraClassName: "text-ink-2 text-lg leading-relaxed max-w-xl mt-4 first:mt-0" })}</div>}
         {links.length > 0 && (
           <div className="mt-8 flex gap-3 flex-wrap">
             {links.map(([k, v]) => {
@@ -30,7 +30,7 @@ export default function ArtistDetail() {
             })}
           </div>
         )}
-        <Link to="/artists" className="mt-10 inline-block font-mono-x text-xs uppercase tracking-[0.3em] text-zinc-400 hover:text-white">← All artists</Link>
+        <Link to="/artists" className="mt-10 inline-block font-mono-x text-xs uppercase tracking-[0.3em] text-ink-3 hover:text-ink">← All artists</Link>
       </div>
     </div>
   );

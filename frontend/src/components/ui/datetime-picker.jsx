@@ -28,15 +28,15 @@ export function DateTimePicker({ value, onChange, placeholder = "Pick date & tim
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button type="button" className="input-x w-full flex items-center justify-between gap-2 text-left min-w-0">
-          <span className={`truncate ${date ? "" : "text-zinc-500"}`}>
+          <span className={`truncate ${date ? "" : "text-ink-4"}`}>
             {date ? format(date, "d MMM yyyy, HH:mm") : placeholder}
           </span>
-          <CalendarIcon size={14} className="text-zinc-500 shrink-0" />
+          <CalendarIcon size={14} className="text-ink-4 shrink-0" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-auto p-0 bg-[#0F0F0F] border-white/20 text-white">
+      <PopoverContent align="start" className="w-auto p-0 bg-surface border-ink/20 text-ink">
         <Calendar mode="single" selected={date} onSelect={setDatePart} initialFocus />
-        <div className="p-3 border-t border-white/10">
+        <div className="p-3 border-t border-ink/10">
           <input type="time" value={date ? format(date, "HH:mm") : ""} onChange={(e) => setTimePart(e.target.value)} className="input-x w-full" />
         </div>
       </PopoverContent>

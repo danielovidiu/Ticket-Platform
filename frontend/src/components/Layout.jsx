@@ -47,7 +47,7 @@ const CartLink = ({ onNavigate }) => {
       <span>Cart</span>
       {count > 0 && (
         <span data-testid="cart-count"
-              className="bg-[color:var(--accent)] text-black px-1.5 min-w-[18px] text-center font-mono-x text-[10px] leading-[16px]">
+              className="bg-brand text-page px-1.5 min-w-[18px] text-center font-mono-x text-[10px] leading-[16px]">
           {count}
         </span>
       )}
@@ -103,18 +103,18 @@ const AccountMenu = ({ user, logout }) => {
       </button>
       {open && (
         <div role="menu" data-testid="account-menu"
-             className="absolute right-0 top-full mt-2 min-w-[180px] border border-white/15 bg-[color:var(--bg,#050505)] py-1 z-50">
-          <div className="px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500 truncate">
+             className="absolute right-0 top-full mt-2 min-w-[180px] border border-ink/15 bg-page py-1 z-50">
+          <div className="px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 truncate">
             {user.email}
           </div>
           {linksFor(user).map((l) => (
             <Link key={l.to} to={l.to} role="menuitem" data-testid={l.testid}
-                  className="block px-3 py-2 text-[11px] uppercase tracking-[0.18em] font-mono-x text-zinc-300 hover:text-white hover:bg-white/10">
+                  className="block px-3 py-2 text-[11px] uppercase tracking-[0.18em] font-mono-x text-ink-2 hover:text-ink hover:bg-ink/10">
               {l.label}
             </Link>
           ))}
           <button onClick={logout} role="menuitem" data-testid="logout-btn"
-                  className="block w-full text-left px-3 py-2 text-[11px] uppercase tracking-[0.18em] font-mono-x text-zinc-300 hover:text-white hover:bg-white/10">
+                  className="block w-full text-left px-3 py-2 text-[11px] uppercase tracking-[0.18em] font-mono-x text-ink-2 hover:text-ink hover:bg-ink/10">
             Logout
           </button>
         </div>
@@ -129,7 +129,7 @@ const Header = ({ cmsNav }) => {
   // Order, labels and hrefs all come from the CMS now — see cms_routes.get_public_nav.
   const nav = cmsNav.length ? cmsNav : FALLBACK_NAV;
   return (
-    <header className="sticky top-0 z-40 bg-[color:var(--bg,#050505)] hairline-b">
+    <header className="sticky top-0 z-40 bg-page hairline-b">
       {/* One row, no wrapping. The account actions live behind a dropdown now, so the
           right-hand group is two controls at every role and in both auth states — the
           header can no longer change height or re-wrap when somebody signs in. The nav
@@ -142,7 +142,7 @@ const Header = ({ cmsNav }) => {
         <nav className="hidden lg:flex items-center gap-x-5 min-w-0 overflow-x-auto no-scrollbar font-mono-x text-[11px] uppercase tracking-[0.18em]">
           {nav.map((n) => (
             <NavLink key={n.route} to={n.route} end={n.route === "/"} data-testid={`nav-${n.label.toLowerCase()}`}
-              className={({ isActive }) => `whitespace-nowrap ${isActive ? "text-white" : "text-zinc-400 hover:text-white transition-colors"}`}>
+              className={({ isActive }) => `whitespace-nowrap ${isActive ? "text-ink" : "text-ink-3 hover:text-ink transition-colors"}`}>
               {n.label}
             </NavLink>
           ))}
@@ -156,9 +156,9 @@ const Header = ({ cmsNav }) => {
         </button>
       </div>
       {open && (
-        <div className="lg:hidden hairline-b bg-[color:var(--bg,#050505)]">
+        <div className="lg:hidden hairline-b bg-page">
           <div className="px-6 py-6 flex flex-col gap-4 font-mono-x uppercase text-sm">
-            {nav.map((n) => <NavLink key={n.route} to={n.route} onClick={() => setOpen(false)} className="text-zinc-300">{n.label}</NavLink>)}
+            {nav.map((n) => <NavLink key={n.route} to={n.route} onClick={() => setOpen(false)} className="text-ink-2">{n.label}</NavLink>)}
             <CartLink onNavigate={() => setOpen(false)} />
             {user ? (
               <>
@@ -186,23 +186,23 @@ const Footer = () => (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-14 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
       <div>
         <div className="font-display text-2xl uppercase tracking-tighter">SUPERSANITY</div>
-        <p className="mt-4 text-zinc-400 text-sm max-w-xs">A Bucharest music &amp; performance collective. Programming, artists, box office — one door.</p>
+        <p className="mt-4 text-ink-3 text-sm max-w-xs">A Bucharest music &amp; performance collective. Programming, artists, box office — one door.</p>
       </div>
       <div>
-        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-500 mb-4">Legal</div>
-        <ul className="space-y-2 text-sm text-zinc-300">
-          <li><Link to="/terms" className="hover:text-white">Terms &amp; Conditions</Link></li>
-          <li><Link to="/privacy" className="hover:text-white">Privacy Policy</Link></li>
-          <li><Link to="/cookie-policy" className="hover:text-white">Cookie Policy</Link></li>
+        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-4">Legal</div>
+        <ul className="space-y-2 text-sm text-ink-2">
+          <li><Link to="/terms" className="hover:text-ink">Terms &amp; Conditions</Link></li>
+          <li><Link to="/privacy" className="hover:text-ink">Privacy Policy</Link></li>
+          <li><Link to="/cookie-policy" className="hover:text-ink">Cookie Policy</Link></li>
         </ul>
       </div>
       <div>
-        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-zinc-500 mb-4">Contact</div>
+        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-4">Contact</div>
         {/* An address has no spaces to break at, so it needs an explicit rule
             to wrap instead of running past its column. */}
-        <p className="text-zinc-300 text-sm break-words">bookings@supersanity.collective</p>
+        <p className="text-ink-2 text-sm break-words">bookings@supersanity.collective</p>
       </div>
-      <div className="font-mono-x text-xs text-zinc-500">© {new Date().getFullYear()} Supersanity</div>
+      <div className="font-mono-x text-xs text-ink-4">© {new Date().getFullYear()} Supersanity</div>
     </div>
   </footer>
 );

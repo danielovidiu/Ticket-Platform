@@ -19,7 +19,7 @@ export default function VerifyEmail() {
       <h1 className="font-display text-4xl uppercase font-black tracking-tighter">
         {state === "working" ? "Verifying…" : state === "ok" ? "Email verified" : "Link invalid"}
       </h1>
-      <p className="mt-4 text-zinc-400 text-sm">
+      <p className="mt-4 text-ink-3 text-sm">
         {state === "ok"
           ? "Your account is active. Sign in to pick up where you left off."
           : state === "error"

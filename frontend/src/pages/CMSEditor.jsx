@@ -4,9 +4,12 @@ import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home } from "lucide-react";
 import { BlockRenderer } from "../components/blocks";
-import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
+import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme, MODE_NEUTRALS } from "../lib/cms";
+import { applyCustomFonts } from "../lib/fonts";
 import { FormatToolbar } from "../lib/richText";
 import ImageField from "../components/ImageField";
+import FontPicker from "../components/FontPicker";
+import FontManager from "../components/FontManager";
 import { navChanged } from "../lib/nav";
 
 // Wait this long after the last edit before saving...
@@ -36,6 +39,7 @@ export default function CMSEditor() {
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
   const [dirty, setDirty] = useState(false);
   const [theme, setTheme] = useState(null);
+  const [customFonts, setCustomFonts] = useState([]);
   const [showNewPage, setShowNewPage] = useState(false);
 
   // `page` drives rendering; pageRef is what mutations read. It is updated synchronously
@@ -52,7 +56,17 @@ export default function CMSEditor() {
   const dirtySinceRef = useRef(0);
   const [revision, setRevision] = useState(0); // bumps per edit; re-arms the save timer
 
-  // Load pages + theme
+  /** Refetch the uploaded faces and install them. Called on mount and after every
+   * upload or delete, so a font is selectable in the picker — and visible in the live
+   * preview — the moment it finishes uploading. */
+  const loadFonts = useCallback(async () => {
+    const { data } = await http.get("/admin/cms/fonts");
+    setCustomFonts(data);
+    applyCustomFonts(data);
+    return data;
+  }, []);
+
+  // Load fonts + pages + theme
   useEffect(() => {
     if (!user || (user.role !== "admin" && user.role !== "editor")) return;
     http.get("/admin/cms/pages").then((r) => {
@@ -62,10 +76,18 @@ export default function CMSEditor() {
       const firstPage = r.data.find((p) => p.kind !== "core");
       if (firstPage && !currentId) setCurrentId(firstPage.page_id);
     });
-    http.get("/admin/cms/theme").then((r) => {
-      setTheme(r.data);
-      applyTheme(r.data.draft || r.data.published);
-    });
+    // Fonts before the theme, for the same reason ThemeLoader does it in that order: the
+    // @font-face rules have to exist before --font-display names one of them, and
+    // ensureFontLoaded needs to know which families are uploads so it doesn't go looking
+    // for them on Google.
+    loadFonts()
+      .catch(() => {})
+      .then(() => http.get("/admin/cms/theme"))
+      .then((r) => {
+        setTheme(r.data);
+        applyTheme(r.data.draft || r.data.published);
+      })
+      .catch(() => {});
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Adopt a page straight from the server: nothing to save, no history behind it. */
@@ -434,17 +456,17 @@ export default function CMSEditor() {
     [blocks, selectedId],
   );
 
-  if (loading) return <div className="p-16 font-mono-x text-zinc-500">Loading…</div>;
+  if (loading) return <div className="p-16 font-mono-x text-ink-4">Loading…</div>;
   if (!user || (user.role !== "admin" && user.role !== "editor")) return <div className="p-16 text-center font-mono-x">Access denied. CMS is for admin / editor roles.</div>;
 
   const previewWidth = device === "mobile" ? "min(420px, 100%)" : "100%";
 
   return (
-    <div className="h-full flex flex-col bg-[color:var(--bg,#050505)] text-white overflow-hidden">
+    <div className="h-full flex flex-col bg-page text-ink overflow-hidden">
       {/* TOP BAR */}
-      <div className="hairline-b bg-black px-4 py-3 flex items-center gap-3 flex-wrap">
-        <div className="font-display uppercase font-black tracking-tighter text-lg">SUPERSANITY<span className="text-[color:var(--accent)]">/</span>CMS</div>
-        <div className="hidden md:block h-6 border-l border-white/10 mx-2" />
+      <div className="hairline-b bg-page px-4 py-3 flex items-center gap-3 flex-wrap">
+        <div className="font-display uppercase font-black tracking-tighter text-lg">SUPERSANITY<span className="text-brand">/</span>CMS</div>
+        <div className="hidden md:block h-6 border-l border-ink/10 mx-2" />
         <select value={currentId || ""} onChange={(e) => selectPage(e.target.value)} data-testid="page-select" className="input-x !py-1.5 !px-2 max-w-[280px]">
           {pages.map((p) => <option key={p.page_id} value={p.page_id}>{p.title} — /p/{p.slug}</option>)}
         </select>
@@ -455,13 +477,13 @@ export default function CMSEditor() {
         <div className="hidden md:flex items-center gap-2">
           {/* historyTick is read here purely so these two re-render when the ref-held
               stacks change; the entries themselves never drive a render. */}
-          <button onClick={undo} disabled={historyTick >= 0 && undoRef.current.length === 0} title="Undo" data-testid="cms-undo" className="p-2 border border-white/20 hover:bg-white hover:text-black disabled:opacity-30 disabled:pointer-events-none"><Undo2 size={14} /></button>
-          <button onClick={redo} disabled={redoRef.current.length === 0} title="Redo" data-testid="cms-redo" className="p-2 border border-white/20 hover:bg-white hover:text-black disabled:opacity-30 disabled:pointer-events-none"><Redo2 size={14} /></button>
+          <button onClick={undo} disabled={historyTick >= 0 && undoRef.current.length === 0} title="Undo" data-testid="cms-undo" className="p-2 border border-ink/20 hover:bg-ink hover:text-page disabled:opacity-30 disabled:pointer-events-none"><Undo2 size={14} /></button>
+          <button onClick={redo} disabled={redoRef.current.length === 0} title="Redo" data-testid="cms-redo" className="p-2 border border-ink/20 hover:bg-ink hover:text-page disabled:opacity-30 disabled:pointer-events-none"><Redo2 size={14} /></button>
         </div>
 
-        <div className="flex items-center border border-white/20">
-          <button onClick={() => setDevice("desktop")} className={`p-2 ${device==="desktop"?"bg-white text-black":""}`}><Monitor size={14} /></button>
-          <button onClick={() => setDevice("mobile")} className={`p-2 ${device==="mobile"?"bg-white text-black":""}`}><Smartphone size={14} /></button>
+        <div className="flex items-center border border-ink/20">
+          <button onClick={() => setDevice("desktop")} className={`p-2 ${device==="desktop"?"bg-ink text-page":""}`}><Monitor size={14} /></button>
+          <button onClick={() => setDevice("mobile")} className={`p-2 ${device==="mobile"?"bg-ink text-page":""}`}><Smartphone size={14} /></button>
         </div>
 
         <SaveStatus state={saveState} savedAt={savedAt} dirty={dirty} />
@@ -476,12 +498,12 @@ export default function CMSEditor() {
       {/* MAIN 3-COLUMN */}
       <div className="flex-1 grid grid-cols-12 min-h-0">
         {/* LEFT: pages + blocks */}
-        <aside className="col-span-12 md:col-span-3 xl:col-span-2 border-r border-white/10 overflow-y-auto p-3 space-y-4">
+        <aside className="col-span-12 md:col-span-3 xl:col-span-2 border-r border-ink/10 overflow-y-auto p-3 space-y-4">
           <div>
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">Navigation</div>
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Navigation</div>
             {/* Dragging has no affordance of its own, so say so. The arrows stay: they
                 are the keyboard-reachable path, and drag-and-drop is not. */}
-            <div className="font-mono-x text-[9px] uppercase tracking-[0.2em] text-zinc-600 mt-1 mb-2">Drag to reorder</div>
+            <div className="font-mono-x text-[9px] uppercase tracking-[0.2em] text-ink-5 mt-1 mb-2">Drag to reorder</div>
             {/* One list, in nav order, holding both authored pages and the built-in
                 sections. The arrows reorder across the whole thing, which is the only
                 way the two kinds can be interleaved — before this, core links were
@@ -497,16 +519,16 @@ export default function CMSEditor() {
                       onDragOver={onNavDragOver}
                       onDrop={onNavDrop(i)}
                       title="Drag to reorder"
-                      className={`flex items-center justify-between border px-2 py-1.5 text-xs cursor-move ${p.page_id === currentId ? "border-white bg-white/10" : "border-white/10"} ${p.in_nav === false ? "opacity-50" : ""}`}>
+                      className={`flex items-center justify-between border px-2 py-1.5 text-xs cursor-move ${p.page_id === currentId ? "border-ink bg-ink/10" : "border-ink/10"} ${p.in_nav === false ? "opacity-50" : ""}`}>
                     {core ? (
-                      <span className="flex-1 truncate text-zinc-400" title={`Built-in section — ${p.route}`}>
+                      <span className="flex-1 truncate text-ink-3" title={`Built-in section — ${p.route}`}>
                         {p.nav_label || p.title}
-                        <span className="ml-1 text-[9px] uppercase tracking-[0.2em] text-zinc-600">link</span>
+                        <span className="ml-1 text-[9px] uppercase tracking-[0.2em] text-ink-5">link</span>
                       </span>
                     ) : (
                       <button onClick={() => selectPage(p.page_id)} className="text-left flex-1 truncate">
                         {p.title}
-                        {p.is_home && <span className="ml-1 text-[9px] uppercase tracking-[0.2em] text-zinc-500">home</span>}
+                        {p.is_home && <span className="ml-1 text-[9px] uppercase tracking-[0.2em] text-ink-4">home</span>}
                       </button>
                     )}
                     <div className="flex items-center gap-1">
@@ -514,12 +536,12 @@ export default function CMSEditor() {
                         <button onClick={() => setAsHome(p)} disabled={!!p.is_home}
                                 title={p.is_home ? "This page answers /" : "Make this the homepage"}
                                 data-testid={`cms-nav-home-${p.slug}`}
-                                className={p.is_home ? "text-white" : "text-zinc-600 hover:text-white"}>
+                                className={p.is_home ? "text-ink" : "text-ink-5 hover:text-ink"}>
                           <Home size={12} />
                         </button>
                       )}
-                      <button onClick={() => movePage(i, -1)} title="Move up" className="text-zinc-500 hover:text-white"><ChevronUp size={12} /></button>
-                      <button onClick={() => movePage(i, 1)} title="Move down" className="text-zinc-500 hover:text-white"><ChevronDown size={12} /></button>
+                      <button onClick={() => movePage(i, -1)} title="Move up" className="text-ink-4 hover:text-ink"><ChevronUp size={12} /></button>
+                      <button onClick={() => movePage(i, 1)} title="Move down" className="text-ink-4 hover:text-ink"><ChevronDown size={12} /></button>
                       {/* Every row can be hidden from the nav. For an authored page this
                           is the same in_nav the props panel exposes, reachable without
                           opening the page; for a core link it is the only removal there
@@ -527,12 +549,12 @@ export default function CMSEditor() {
                       <button onClick={() => toggleNavVisibility(p)}
                               title={p.in_nav === false ? "Show in nav" : "Hide from nav"}
                               data-testid={`cms-nav-toggle-${p.slug}`}
-                              className="text-zinc-500 hover:text-white">
+                              className="text-ink-4 hover:text-ink">
                         {p.in_nav === false ? <EyeOff size={12} /> : <Eye size={12} />}
                       </button>
                       {!core && (
                         <button onClick={() => deletePage(p.page_id)} title="Delete page"
-                                className="text-zinc-500 hover:text-[color:var(--accent)]"><Trash2 size={12} /></button>
+                                className="text-ink-4 hover:text-brand"><Trash2 size={12} /></button>
                       )}
                     </div>
                   </li>
@@ -542,17 +564,17 @@ export default function CMSEditor() {
           </div>
 
           <div>
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 mb-2">Add block</div>
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 mb-2">Add block</div>
             <div className="grid grid-cols-2 gap-1">
               {BLOCK_TYPES.map((t) => (
-                <button key={t} onClick={() => addBlock(t)} data-testid={`add-block-${t}`} className="text-left border border-white/10 hover:border-white p-2 text-[11px] uppercase tracking-wider">{BLOCK_LABELS[t]}</button>
+                <button key={t} onClick={() => addBlock(t)} data-testid={`add-block-${t}`} className="text-left border border-ink/10 hover:border-ink p-2 text-[11px] uppercase tracking-wider">{BLOCK_LABELS[t]}</button>
               ))}
             </div>
           </div>
 
           {page && (
             <div>
-              <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 mb-2">Structure</div>
+              <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 mb-2">Structure</div>
               <ul className="space-y-1">
                 {blocks.map((b, i) => (
                   <li key={b.block_id}
@@ -560,27 +582,27 @@ export default function CMSEditor() {
                       onDragStart={onDragStart(i)}
                       onDragOver={onDragOver}
                       onDrop={onDrop(i)}
-                      className={`flex items-center gap-1 border px-2 py-1.5 text-xs cursor-move ${b.block_id === selectedId ? "border-white bg-white/10" : "border-white/10"} ${b.enabled === false ? "opacity-40" : ""}`}>
+                      className={`flex items-center gap-1 border px-2 py-1.5 text-xs cursor-move ${b.block_id === selectedId ? "border-ink bg-ink/10" : "border-ink/10"} ${b.enabled === false ? "opacity-40" : ""}`}>
                     <button onClick={() => selectBlock(b.block_id)} className="text-left flex-1 truncate">{BLOCK_LABELS[b.type] || b.type}</button>
-                    <button onClick={() => toggleBlock(i)} title="Toggle visibility" className="text-zinc-500 hover:text-white">{b.enabled === false ? <EyeOff size={12} /> : <Eye size={12} />}</button>
-                    <button onClick={() => moveBlock(i, -1)} className="text-zinc-500 hover:text-white"><ChevronUp size={12} /></button>
-                    <button onClick={() => moveBlock(i, 1)} className="text-zinc-500 hover:text-white"><ChevronDown size={12} /></button>
-                    <button onClick={() => removeBlock(i)} className="text-zinc-500 hover:text-[color:var(--accent)]"><Trash2 size={12} /></button>
+                    <button onClick={() => toggleBlock(i)} title="Toggle visibility" className="text-ink-4 hover:text-ink">{b.enabled === false ? <EyeOff size={12} /> : <Eye size={12} />}</button>
+                    <button onClick={() => moveBlock(i, -1)} className="text-ink-4 hover:text-ink"><ChevronUp size={12} /></button>
+                    <button onClick={() => moveBlock(i, 1)} className="text-ink-4 hover:text-ink"><ChevronDown size={12} /></button>
+                    <button onClick={() => removeBlock(i)} className="text-ink-4 hover:text-brand"><Trash2 size={12} /></button>
                   </li>
                 ))}
-                {blocks.length === 0 && <li className="text-zinc-500 text-xs border border-dashed border-white/10 p-3 text-center">Empty page — pick a block above</li>}
+                {blocks.length === 0 && <li className="text-ink-4 text-xs border border-dashed border-ink/10 p-3 text-center">Empty page — pick a block above</li>}
               </ul>
             </div>
           )}
         </aside>
 
         {/* CENTER: live preview */}
-        <main className="col-span-12 md:col-span-6 xl:col-span-7 overflow-y-auto bg-[color:var(--bg,#050505)]" data-testid="cms-preview">
+        <main className="col-span-12 md:col-span-6 xl:col-span-7 overflow-y-auto bg-page" data-testid="cms-preview">
           <div className="mx-auto py-4 transition-all duration-300" style={{ width: previewWidth }}>
-            <div className="border border-white/10">
+            <div className="border border-ink/10">
               {page ? (
                 blocks.length === 0 ? (
-                  <div className="p-24 text-center text-zinc-500 font-mono-x text-xs uppercase tracking-[0.3em]">
+                  <div className="p-24 text-center text-ink-4 font-mono-x text-xs uppercase tracking-[0.3em]">
                     Empty. Add blocks from the left.
                   </div>
                 ) : (
@@ -589,18 +611,18 @@ export default function CMSEditor() {
                   ))
                 )
               ) : (
-                <div className="p-24 text-center text-zinc-500 font-mono-x text-xs uppercase tracking-[0.3em]">Select or create a page</div>
+                <div className="p-24 text-center text-ink-4 font-mono-x text-xs uppercase tracking-[0.3em]">Select or create a page</div>
               )}
             </div>
           </div>
         </main>
 
         {/* RIGHT: properties / theme / versions */}
-        <aside className="col-span-12 md:col-span-3 border-l border-white/10 overflow-y-auto">
-          <div className="flex border-b border-white/10">
-            <button onClick={() => setRightTab("props")} className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="props"?"bg-white text-black":""}`}><FileText size={12} className="inline mr-1" /> Props</button>
-            <button onClick={() => setRightTab("theme")} className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="theme"?"bg-white text-black":""}`}><Palette size={12} className="inline mr-1" /> Theme</button>
-            <button onClick={() => setRightTab("versions")} className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="versions"?"bg-white text-black":""}`}><History size={12} className="inline mr-1" /> Versions</button>
+        <aside className="col-span-12 md:col-span-3 border-l border-ink/10 overflow-y-auto">
+          <div className="flex border-b border-ink/10">
+            <button onClick={() => setRightTab("props")} className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="props"?"bg-ink text-page":""}`}><FileText size={12} className="inline mr-1" /> Props</button>
+            <button onClick={() => setRightTab("theme")} className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="theme"?"bg-ink text-page":""}`}><Palette size={12} className="inline mr-1" /> Theme</button>
+            <button onClick={() => setRightTab("versions")} className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="versions"?"bg-ink text-page":""}`}><History size={12} className="inline mr-1" /> Versions</button>
           </div>
 
           <div className="p-4">
@@ -610,7 +632,8 @@ export default function CMSEditor() {
               <PageMetaEditor page={page} onChange={updatePageMeta} />
             ) : null)}
             {rightTab === "theme" && theme && (
-              <ThemeEditor theme={theme.draft || theme.published} onChange={setThemeDraft} onPublish={publishTheme} />
+              <ThemeEditor theme={theme.draft || theme.published} onChange={setThemeDraft} onPublish={publishTheme}
+                           customFonts={customFonts} onFontsChanged={loadFonts} />
             )}
             {rightTab === "versions" && page && (
               <VersionList page={page} onRevert={revert} />
@@ -633,8 +656,8 @@ export default function CMSEditor() {
 const PreviewBlock = React.memo(function PreviewBlock({ block, selected, onSelect }) {
   return (
     <div onClick={() => onSelect(block.block_id)}
-         className={`relative group cursor-pointer ${selected ? "outline outline-2 outline-[color:var(--accent)]" : "hover:outline hover:outline-1 hover:outline-white/40"}`}>
-      <div className={`absolute top-2 left-2 z-30 font-mono-x text-[9px] uppercase tracking-[0.2em] bg-black text-white px-2 py-1 border border-white/20 ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+         className={`relative group cursor-pointer ${selected ? "outline outline-2 outline-[color:var(--accent)]" : "hover:outline hover:outline-1 hover:outline-ink/40"}`}>
+      <div className={`absolute top-2 left-2 z-30 font-mono-x text-[9px] uppercase tracking-[0.2em] bg-page text-ink px-2 py-1 border border-ink/20 ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
         {BLOCK_LABELS[block.type]}
       </div>
       <BlockRenderer block={block} />
@@ -655,10 +678,10 @@ function SaveStatus({ state, savedAt, dirty }) {
 
   // A freshly opened page has nothing pending — the server's draft is what's on screen.
   let label = "No changes";
-  let tone = "text-zinc-500";
+  let tone = "text-ink-4";
   if (state === "saving") { label = "Saving…"; }
-  else if (state === "error") { label = "Save failed — retrying"; tone = "text-[color:var(--accent)]"; }
-  else if (dirty) { label = "Unsaved changes"; tone = "text-white"; }
+  else if (state === "error") { label = "Save failed — retrying"; tone = "text-brand"; }
+  else if (dirty) { label = "Unsaved changes"; tone = "text-ink"; }
   else if (savedAt) {
     const s = Math.floor((Date.now() - savedAt) / 1000);
     label = s < 5 ? "Saved just now" : s < 60 ? `Saved ${s}s ago` : `Saved ${Math.floor(s / 60)}m ago`;
@@ -863,7 +886,7 @@ function PropsEditor({ block, onChange }) {
 
   return (
     <div className="space-y-4">
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">{BLOCK_LABELS[block.type]}</div>
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">{BLOCK_LABELS[block.type]}</div>
       {fields.map((f) => {
         // Keyed by block AND field: selecting another block must give the text fields
         // fresh local state rather than leaving the previous block's text on screen.
@@ -878,7 +901,7 @@ function PropsEditor({ block, onChange }) {
         }
         return (
           <label key={key} className="block">
-            <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">{f.label}</div>
+            <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">{f.label}</div>
             {f.type === "textarea" && f.format ? (
               <FormattedTextareaField f={f} value={v[f.k] || ""} onCommit={commitField(f.k)} testId={testId} />
             ) : f.type === "textarea" ? (
@@ -888,7 +911,7 @@ function PropsEditor({ block, onChange }) {
                 {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
             ) : f.type === "checkbox" ? (
-              <div className="flex items-center gap-2 pt-1"><input type="checkbox" checked={!!v[f.k]} onChange={(e) => commitField(f.k)(e.target.checked)} /> <span className="text-xs text-zinc-400">{f.label}</span></div>
+              <div className="flex items-center gap-2 pt-1"><input type="checkbox" checked={!!v[f.k]} onChange={(e) => commitField(f.k)(e.target.checked)} /> <span className="text-xs text-ink-3">{f.label}</span></div>
             ) : f.type === "number" ? (
               <input type="number" value={v[f.k] ?? ""} onChange={(e) => commitField(f.k)(Number(e.target.value))} className="input-x !py-2 !text-sm" />
             ) : f.type === "list" ? (
@@ -906,17 +929,17 @@ function PropsEditor({ block, onChange }) {
 function PageMetaEditor({ page, onChange }) {
   return (
     <div className="space-y-3">
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">Page</div>
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Page</div>
       <label className="block">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">Title</div>
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Title</div>
         <input value={page.title} onChange={(e) => onChange({ title: e.target.value })} className="input-x !py-2 !text-sm" />
       </label>
       <label className="block">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">Nav label</div>
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Nav label</div>
         <input value={page.nav_label || page.title} onChange={(e) => onChange({ nav_label: e.target.value })} className="input-x !py-2 !text-sm" />
       </label>
-      <label className="block flex items-center gap-2 mt-2"><input type="checkbox" checked={!!page.in_nav} onChange={(e) => onChange({ in_nav: e.target.checked })} /> <span className="text-xs text-zinc-300">Show in main navigation</span></label>
-      <div className="pt-3 text-xs text-zinc-500">
+      <label className="block flex items-center gap-2 mt-2"><input type="checkbox" checked={!!page.in_nav} onChange={(e) => onChange({ in_nav: e.target.checked })} /> <span className="text-xs text-ink-2">Show in main navigation</span></label>
+      <div className="pt-3 text-xs text-ink-4">
         Slug: <span className="font-mono-x">/p/{page.slug}</span> (immutable)<br />
         Tip: click any block in the preview to edit its properties here.
       </div>
@@ -924,66 +947,68 @@ function PageMetaEditor({ page, onChange }) {
   );
 }
 
-function ThemeEditor({ theme, onChange, onPublish }) {
+function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsChanged }) {
   const setColor = (k, v) => onChange({ colors: { ...(theme.colors || {}), [k]: v } });
-  const setFont = (k, v) => onChange({ fonts: { ...(theme.fonts || {}), [k]: v } });
-  const fontSuggestions = [
-    "Clash Display", "Space Grotesk", "Inter", "Manrope", "Playfair Display",
-    "IBM Plex Mono", "JetBrains Mono", "Archivo", "Bebas Neue", "Anton",
-    "Syne", "Fraunces", "Rubik", "DM Sans", "Instrument Serif",
-    "Big Shoulders Display", "Unbounded", "Cormorant Garamond", "Public Sans", "Geist"
-  ];
+  /** Mode is not a third state the colours are read through — it rewrites them.
+   *
+   * The alternative, a `light` flag that components branch on, means every colour needs
+   * two values and every new component has to remember to handle both. Swapping the five
+   * neutrals instead keeps one palette, and spreading the existing colours first is what
+   * carries the artist's accent, accent text and success colour across the flip. */
+  const setMode = (mode) => {
+    const n = MODE_NEUTRALS[mode] || MODE_NEUTRALS.dark;
+    onChange({ mode, colors: { ...(theme.colors || {}), ...n } });
+  };
+  const setFont = async (k, v) => {
+    await onChange({ fonts: { ...(theme.fonts || {}), [k]: v } });
+    // `in_use` is derived from the theme server-side, so picking a font is exactly the
+    // moment it goes stale — and it is the flag that warns before a delete. Refetch.
+    onFontsChanged().catch(() => {});
+  };
   return (
     <div className="space-y-4">
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">Colors</div>
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Colors</div>
       {[["bg", "Background"], ["surface", "Surface"], ["text", "Text"], ["textMuted", "Text muted"], ["accent", "Accent"], ["accentFg", "Accent text"], ["success", "Success"]].map(([k, label]) => (
         <label key={k} className="block">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">{label}</div>
+          <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">{label}</div>
           <div className="flex items-center gap-2">
-            <input type="color" value={theme.colors?.[k] || "#000000"} onChange={(e) => setColor(k, e.target.value)} className="w-10 h-10 bg-transparent border border-white/20" />
+            <input type="color" value={theme.colors?.[k] || "#000000"} onChange={(e) => setColor(k, e.target.value)} className="w-10 h-10 bg-transparent border border-ink/20" />
             <input value={theme.colors?.[k] || ""} onChange={(e) => setColor(k, e.target.value)} className="input-x !py-1.5 !text-xs font-mono-x flex-1" />
           </div>
         </label>
       ))}
 
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 pt-4">Fonts</div>
-      <div className="text-[10px] font-mono-x text-zinc-500">Type any Google Font name — it will load automatically.</div>
-      <datalist id="cms-font-suggestions">
-        {fontSuggestions.map((f) => <option key={f} value={f} />)}
-      </datalist>
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Fonts</div>
       {[["display", "Display / headings"], ["body", "Body"], ["mono", "Mono / labels"]].map(([k, label]) => (
-        <label key={k} className="block">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">{label}</div>
-          <input
-            value={theme.fonts?.[k] || ""}
-            onChange={(e) => setFont(k, e.target.value)}
-            list="cms-font-suggestions"
-            placeholder="e.g. Syne"
-            data-testid={`font-${k}-input`}
-            className="input-x !py-2 !text-sm"
-            style={{ fontFamily: theme.fonts?.[k] ? `"${theme.fonts[k]}"` : undefined }}
-          />
-        </label>
+        <FontPicker key={k} label={label} value={theme.fonts?.[k] || ""} custom={customFonts}
+                    testId={`font-${k}`} onChange={(v) => setFont(k, v)} />
       ))}
 
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500 pt-4">Layout</div>
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Your fonts</div>
+      <FontManager fonts={customFonts} onChanged={onFontsChanged} />
+
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Layout</div>
       <label className="block">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">Border radius: {theme.radius || 0}px</div>
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Border radius: {theme.radius || 0}px</div>
         <input type="range" min="0" max="24" value={theme.radius || 0} onChange={(e) => onChange({ radius: Number(e.target.value) })} className="w-full" />
       </label>
       <label className="block">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">Button style</div>
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Button style</div>
         <select value={theme.button_style || "sharp"} onChange={(e) => onChange({ button_style: e.target.value })} className="input-x !py-2 !text-sm">
           <option value="sharp">Sharp (0px)</option>
           <option value="pill">Pill (fully rounded)</option>
         </select>
       </label>
       <label className="block">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-400 font-mono-x mb-1">Mode</div>
-        <select value={theme.mode || "dark"} onChange={(e) => onChange({ mode: e.target.value })} className="input-x !py-2 !text-sm">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Mode</div>
+        <select value={theme.mode || "dark"} data-testid="theme-mode-select"
+                onChange={(e) => setMode(e.target.value)} className="input-x !py-2 !text-sm">
           <option value="dark">Dark</option>
           <option value="light">Light</option>
         </select>
+        <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
+          Swaps the neutral colours above · keeps your accent
+        </div>
       </label>
 
       <button onClick={onPublish} data-testid="publish-theme-btn" className="btn-accent w-full mt-6">PUBLISH THEME</button>
@@ -995,12 +1020,12 @@ function VersionList({ page, onRevert }) {
   const versions = page.versions || [];
   return (
     <div className="space-y-2">
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-zinc-500">History (last {versions.length})</div>
-      {versions.length === 0 && <div className="text-xs text-zinc-500 border border-dashed border-white/10 p-3">Publish once to create the first version.</div>}
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">History (last {versions.length})</div>
+      {versions.length === 0 && <div className="text-xs text-ink-4 border border-dashed border-ink/10 p-3">Publish once to create the first version.</div>}
       {versions.map((v) => (
-        <div key={v.version_id} className="border border-white/10 p-2 flex items-center justify-between">
+        <div key={v.version_id} className="border border-ink/10 p-2 flex items-center justify-between">
           <div>
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-zinc-500">{new Date(v.published_at).toLocaleString("en-GB")}</div>
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{new Date(v.published_at).toLocaleString("en-GB")}</div>
             <div className="text-xs">{v.blocks?.length || 0} blocks</div>
           </div>
           <button onClick={() => onRevert(v.version_id)} className="btn-primary !py-1.5 !px-2 !text-[10px]">Revert</button>
@@ -1014,12 +1039,12 @@ function NewPageModal({ onClose, onCreate }) {
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-      <div className="border border-white/20 bg-[color:var(--surface,#0F0F0F)] p-6 w-full max-w-md space-y-3">
+    <div className="fixed inset-0 bg-scrim/80 z-50 flex items-center justify-center p-4">
+      <div className="border border-ink/20 bg-[color:var(--surface,#0F0F0F)] p-6 w-full max-w-md space-y-3">
         <div className="font-display uppercase text-xl font-black tracking-tighter">New Page</div>
         <input placeholder="Title (e.g. About)" value={title} onChange={(e) => { setTitle(e.target.value); setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")); }} className="input-x" />
         <input placeholder="slug" value={slug} onChange={(e) => setSlug(e.target.value)} className="input-x font-mono-x" />
-        <div className="text-xs text-zinc-500">URL will be <span className="font-mono-x">/p/{slug || "…"}</span></div>
+        <div className="text-xs text-ink-4">URL will be <span className="font-mono-x">/p/{slug || "…"}</span></div>
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="btn-primary">Cancel</button>
           <button onClick={() => title && slug && onCreate(slug, title)} data-testid="create-page-btn" className="btn-accent">Create</button>

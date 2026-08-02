@@ -33,9 +33,9 @@ export default function CookieConsent() {
 
   if (!show) return null;
   return (
-    <div className="fixed bottom-0 inset-x-0 z-[70] bg-[#0F0F0F] border-t border-white/15 px-6 py-4">
+    <div className="fixed bottom-0 inset-x-0 z-[70] bg-surface border-t border-ink/15 px-6 py-4">
       <div className="max-w-[1400px] mx-auto flex flex-col md:flex-row md:items-center gap-3 md:gap-6">
-        <p className="text-xs text-zinc-300 leading-relaxed flex-1">
+        <p className="text-xs text-ink-2 leading-relaxed flex-1">
           We use only essential cookies to keep you signed in and process ticket orders. We don't
           run third-party tracking. See our <Link to="/cookie-policy" className="underline">Cookie Policy</Link>.
         </p>
