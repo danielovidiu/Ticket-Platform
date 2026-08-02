@@ -76,15 +76,48 @@ def sniff_font_format(data: bytes):
     return None
 
 
+# Top-level paths the React router already owns.
+#
+# A CMS page whose slug collides with one of these would be created happily and then
+# never render: React Router ranks a static segment above the ":slug" catch-all, so the
+# built-in route wins every time and the page disappears with no error anywhere. Create
+# time is the only moment anyone can be told, which is why this is a hard rejection
+# rather than a warning.
+#
+# Derived from the <Route> table in frontend/src/App.js. The two have to move together —
+# test_page_slugs.py reads that file and fails if a route is added without landing here.
+RESERVED_SLUGS = frozenset({
+    # Built-in sections
+    "events", "shop", "artists", "archive", "gallery", "cart", "checkout",
+    "my-tickets", "my-orders", "settings", "newsletter",
+    # Account and auth
+    "login", "complete-profile", "verify", "reset-password",
+    # Staff tools
+    "admin", "cms", "scan",
+    # Not routes, but they still occupy the namespace: /api/* is rewritten to the backend
+    # before the SPA ever sees it, /p/* is the permanent redirect from the old page URLs,
+    # and /static/* is the built asset directory.
+    "api", "p", "static",
+})
+
+# A slug is one URL segment now that pages live at /<slug>. One containing a slash, a
+# space or a capital could be stored and would then be unroutable — the same silent
+# disappearance the reserved list exists to prevent, by a different route.
+SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
 def page_route(slug: str) -> str:
     """Where a CMS page lives in the router.
 
-    Three slugs predate the generic /p/<slug> route and keep their own paths. This used
-    to be a conditional expression inside the header component, which meant the frontend
-    had to know the routing table in order to draw a link; now the nav payload carries a
-    ready-made href and the header just renders it.
+    Pages sit at the root: /mission, not /p/mission. Three slugs used to be special-cased
+    here because they had hardcoded <Route> entries of their own — which existed only
+    because the generic page route was namespaced under /p/. With that namespace gone
+    they resolve through the same path as every other page and the exception went too.
+
+    The homepage is not handled here; get_public_nav resolves it to "/" from the is_home
+    flag, so which page answers the root never depends on what its slug spells.
     """
-    return {"home": "/", "mission": "/mission", "contact": "/contact"}.get(slug, f"/p/{slug}")
+    return f"/{slug}"
 
 
 async def home_page_doc(db, projection=None):
@@ -294,8 +327,18 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
 
     @api.post("/admin/cms/pages")
     async def admin_create_page(body: PageIn, user=Depends(require_admin_or_editor)):
-        if await db.cms_pages.find_one({"slug": body.slug}):
+        slug = (body.slug or "").strip().lower()
+        if not SLUG_RE.match(slug):
+            raise HTTPException(
+                400, "Slug: lowercase letters, numbers and single hyphens only (e.g. about-us)"
+            )
+        if slug in RESERVED_SLUGS:
+            raise HTTPException(
+                400, f"'{slug}' is reserved by a built-in page — a page there would never open"
+            )
+        if await db.cms_pages.find_one({"slug": slug}):
             raise HTTPException(400, "Slug already exists")
+        body.slug = slug
         doc = {
             "page_id": new_id("pg"),
             "slug": body.slug,

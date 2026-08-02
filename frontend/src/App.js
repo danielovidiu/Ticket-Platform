@@ -60,12 +60,20 @@ function AppRouter() {
       <Routes>
         {/* Which page this is, is a CMS setting — not the slug "home". */}
         <Route path="/" element={<DynamicPage home />} />
-        <Route path="/mission" element={<DynamicPage slugOverride="mission" />} />
-        <Route path="/contact" element={<DynamicPage slugOverride="contact" />} />
-        <Route path="/terms" element={<DynamicPage slugOverride="terms" />} />
-        <Route path="/privacy" element={<DynamicPage slugOverride="privacy" />} />
-        <Route path="/cookie-policy" element={<DynamicPage slugOverride="cookie-policy" />} />
-        <Route path="/p/:slug" element={<DynamicPage />} />
+        {/* CMS pages live at the root: /mission, not /p/mission.
+            /mission, /contact, /terms, /privacy and /cookie-policy used to be declared
+            here one by one, purely because the generic page route was namespaced under
+            /p/. They are ordinary CMS pages and now resolve through this one route.
+
+            Declaring a bare ":slug" alongside two dozen static routes is safe: React
+            Router ranks matches by specificity, not by source order, so a static segment
+            like "/events" always beats it. The corollary is that a page whose slug spells
+            a built-in path can never be reached — see RESERVED_SLUGS in cms_routes.py,
+            which refuses to create one.
+
+            /p/:slug is not handled here at all. vercel.json redirects it permanently, so
+            old links resolve with a real 301 instead of a client-side bounce. */}
+        <Route path=":slug" element={<DynamicPage />} />
         <Route path="/events" element={<Events />} />
         <Route path="/events/:slug" element={<EventDetail />} />
         <Route path="/checkout/:reservationId" element={<Checkout />} />

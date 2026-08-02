@@ -331,11 +331,20 @@ export default function CMSEditor() {
 
   // ----- Pages CRUD -----
   const createPage = async (slug, title) => {
-    const r = await http.post("/admin/cms/pages", { slug, title, nav_label: title });
-    setPages([...pages, r.data]);
-    setCurrentId(r.data.page_id);
-    setShowNewPage(false);
-    toast.success("Page created");
+    // The server rejects slugs that are reserved by a built-in route or that could never
+    // be routed to. Those refusals have to reach the person typing: without this catch
+    // the promise rejected, the dialog stayed open with no message, and the one failure
+    // the reserved list exists to make visible was invisible again.
+    try {
+      const r = await http.post("/admin/cms/pages", { slug, title, nav_label: title });
+      setPages([...pages, r.data]);
+      setCurrentId(r.data.page_id);
+      setShowNewPage(false);
+      toast.success("Page created");
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Could not create that page");
+    }
   };
   const deletePage = async (pid) => {
     if (!window.confirm("Delete this page?")) return;
@@ -1043,8 +1052,14 @@ function NewPageModal({ onClose, onCreate }) {
       <div className="border border-ink/20 bg-[color:var(--surface,#0F0F0F)] p-6 w-full max-w-md space-y-3">
         <div className="font-display uppercase text-xl font-black tracking-tighter">New Page</div>
         <input placeholder="Title (e.g. About)" value={title} onChange={(e) => { setTitle(e.target.value); setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")); }} className="input-x" />
-        <input placeholder="slug" value={slug} onChange={(e) => setSlug(e.target.value)} className="input-x font-mono-x" />
-        <div className="text-xs text-ink-4">URL will be <span className="font-mono-x">/p/{slug || "…"}</span></div>
+        <input placeholder="slug" value={slug} onChange={(e) => setSlug(e.target.value)} data-testid="new-page-slug" className="input-x font-mono-x" />
+        <div className="text-xs text-ink-4">URL will be <span className="font-mono-x">/{slug || "…"}</span></div>
+        {/* Pages share the root with the built-in sections now, so some words are taken.
+            The server has the authoritative list and refuses them; this is only a hint,
+            so the two can't disagree about which ones. */}
+        <div className="font-mono-x text-[10px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
+          Some names are taken by built-in pages (events, shop, cart, login…)
+        </div>
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="btn-primary">Cancel</button>
           <button onClick={() => title && slug && onCreate(slug, title)} data-testid="create-page-btn" className="btn-accent">Create</button>

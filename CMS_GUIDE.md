@@ -2,11 +2,24 @@
 
 ## What you get
 - **/cms** — full visual editor (admin or editor role required)
-- **/p/:slug** — public dynamic pages rendered from CMS data
-- **/** — now renders the CMS "home" page
-- **/mission** — now renders the CMS "mission" page
-- **/contact** — now renders the CMS "contact" page
+- **/:slug** — public dynamic pages rendered from CMS data, served straight off the root
+  (`/mission`, not `/p/mission`). `/p/:slug` still works: it is a permanent redirect to
+  the new address, declared in `vercel.json`.
+- **/** — renders whichever page is flagged as the homepage (the ⌂ button in Navigation),
+  not the page whose slug happens to spell "home"
 - Events, Artists, Archive, Gallery, ticketing flows are unchanged (per user choice 1a — auto-generated from the ticketing data)
+
+### Slugs that are not available
+Pages share the root with the built-in sections, so some names are taken: `events`,
+`shop`, `artists`, `archive`, `gallery`, `cart`, `checkout`, `my-tickets`, `my-orders`,
+`settings`, `newsletter`, `login`, `complete-profile`, `verify`, `reset-password`,
+`admin`, `cms`, `scan`, plus `api`, `p` and `static`.
+
+Creating a page on one of those is refused rather than allowed and then silently
+shadowed — React Router ranks a static route above the `:slug` catch-all, so the page
+would exist in the CMS and never open. The list lives in `RESERVED_SLUGS`
+(`backend/cms_routes.py`); a test reads `frontend/src/App.js` and fails if a route is
+ever added without being listed there.
 
 ## Roles
 - `admin` — everything, including admin ticketing dashboard + CMS

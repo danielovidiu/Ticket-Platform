@@ -23,6 +23,13 @@
       "entrypoint": "server:app"
     }
   },
+  "redirects": [
+    {
+      "source": "/p/:slug",
+      "destination": "/:slug",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/(.*)",
