@@ -59,6 +59,49 @@ Set these on the project (**Settings → Environment Variables**), not in a comm
 | `LOCAL_FAKE_PAYMENTS` | `1` | See the warning below |
 | `BLOB_READ_WRITE_TOKEN` | *(injected)* | Added automatically when the Blob store is connected |
 | `RESEND_API_KEY`, `MAIL_FROM` | optional | Without them, mail lands in the `outbox` collection instead of being sent |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | optional, **Production scope only** | Google sign-in. All three or none — see below |
+
+### Google sign-in
+
+Live on this deployment. The three variables above are read at import, so they do nothing
+until a **redeploy** — changing them alone leaves the running deployment reporting
+`"google": false`.
+
+Set-up, once, in the Google Cloud Console:
+
+1. **Credentials → OAuth client (Web application) → Authorized redirect URIs**, add
+   `https://<your-domain>/api/auth/google/callback`. This is the step that is easy to
+   miss: a downloaded client JSON often carries only `javascript_origins`, which belongs
+   to the browser-side flow. This app does the server-side code exchange, and without a
+   registered redirect URI Google fails with `redirect_uri_mismatch` before the consent
+   screen ever appears.
+2. **OAuth consent screen → External.** The app asks for `openid email profile` — all
+   non-sensitive, so Google's app verification does **not** apply and there is nothing to
+   submit or wait for.
+3. Leave the screen in *Testing* and add yourself under Test users, or publish it.
+   Publishing needs an Authorized domain you can verify ownership of, and `vercel.app` is
+   a public-suffix domain nobody owns — so a custom domain is a prerequisite for
+   publishing, not for the flow working.
+
+Scope the variables to **Production only**. A preview deployment has a different
+hostname, so its `g_state` cookie is set on one origin while Google returns the user to
+the production callback on another; the cookie is absent there and the callback fails the
+state check with `400 Invalid OAuth state`. Left unset on Preview, `GOOGLE_ENABLED` is
+false and the button simply does not render — the better failure.
+
+`GOOGLE_CLIENT_SECRET` belongs in the dashboard, not in `vercel env add`: piping a secret
+through a shell writes it to history. Never in a committed file — the client JSON that
+Google hands you is exactly the shape that ends up in a repo by accident.
+
+Verify without a browser:
+
+```bash
+curl -s https://<your-domain>/api/auth/methods            # -> "google": true
+curl -sI "https://<your-domain>/api/auth/google/start"    # -> 302 to accounts.google.com
+```
+
+Check the `redirect_uri` inside that 302 matches the registered one character for
+character; that is what catches a typo before a user meets `redirect_uri_mismatch`.
 
 `SESSION_SECRET` is non-negotiable here even though `APP_ENV` is not `production`. The
 development fallback generates a secret per process, and a serverless deployment has one

@@ -61,7 +61,15 @@ curl -X POST localhost:8000/api/auth/reset-password -H 'content-type: applicatio
 # -> all prior sessions invalid (global logout); the reset token is single-use
 ```
 
-## Google / Apple (fake creds — verify machinery, not a live login)
+## Google / Apple
+
+**Google is live in production** against a real OAuth client — see the Google sign-in
+section of `DEPLOY_VERCEL.md` for the Console set-up and the environment variables. Apple
+is not configured.
+
+Locally, and for anyone without credentials, the machinery below is verifiable with fake
+ones: what it exercises is the state/redirect plumbing and the token verification, not a
+live login.
 
 Set `GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI` and hit `/api/auth/google/start` → it 302s to
 Google with a `state` cookie; the callback rejects a mismatched state with 400. The real
