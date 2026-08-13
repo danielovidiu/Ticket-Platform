@@ -33,8 +33,9 @@ yarn install && yarn start    # http://localhost:3000
 
 Everything works with **no external credentials**: password auth is native, emails land
 in the `outbox` collection (and the logs), and payments run a local simulator. Google,
-Apple, Stripe, and Resend all switch on only when their env vars are set — see
-`backend/.env.example`.
+Apple, Stripe, Resend and SMTP all switch on only when their env vars are set — see
+`backend/.env.example`. To read mail in a real client instead of out of Mongo, point
+`SMTP_HOST` at a relay or a local catcher; see [auth_testing.md](./auth_testing.md).
 
 That convenience is exactly what makes the deployment checklist below non-optional: the
 same defaults that make a fresh checkout work are unsafe on a public host.
@@ -163,7 +164,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**352 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
+**364 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
 everything else (Mongo URL, database name) comes from `backend/.env`, the same file the
 server reads. If the server isn't running the whole session skips with one clear message
 instead of a wall of connection errors.
@@ -192,7 +193,7 @@ teardown, and swept on start if a previous run was interrupted.
 | `backend/cms_routes.py` | CMS pages, theme, nav |
 | `backend/shop_routes.py` | Webshop: catalogue, cart, checkout, orders, fulfilment |
 | `backend/storage.py` | Media uploads — Vercel Blob when `BLOB_READ_WRITE_TOKEN` is set, local `./uploads` otherwise |
-| `backend/mailer.py` | Resend / `db.outbox` mail abstraction |
+| `backend/mailer.py` | Mail: templates + three backends (Resend → SMTP → `db.outbox`) |
 | `backend/tests/` | Integration suite (see **Tests**); `support.py` holds the fixtures and cleanup |
 | `backend/requirements.in` | Intended direct dependencies. `requirements.txt` is an unfiltered freeze — ~60 of its 126 packages are unused |
 | `frontend/src/` | React app |

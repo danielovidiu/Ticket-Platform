@@ -1,19 +1,34 @@
 """
-Mailer abstraction — one send_mail(kind, to, payload) entry point with two backends:
+Mailer abstraction — one send_mail(kind, to, payload) entry point with three backends,
+tried in this order:
 
-  * Resend (https://resend.com) when RESEND_API_KEY is set — real delivery.
+  * Resend (https://resend.com) when RESEND_API_KEY is set — real delivery over HTTP.
+  * SMTP when SMTP_HOST is set — any relay: Amazon SES, Postmark, Gmail, or a local
+    catcher like Mailpit. Preferred for a laptop, where seeing a message render in a
+    real client beats reading HTML out of Mongo.
   * db.outbox fallback otherwise — the message is persisted and logged instead of
     sent, so the whole verification/reset/ticket flow is exercisable in dev and in
     this environment without an email provider. Tests read tokens back out of
     db.outbox.
 
+Resend wins when both are configured: an HTTP API survives serverless far better than
+SMTP, which pays a fresh TCP+TLS+auth handshake per invocation and whose port is
+commonly blocked or throttled on such hosts.
+
 Send failures never raise to the caller: an email that fails to go out must not fail
 a registration, a newsletter signup, or (critically) paid-ticket finalization.
 """
 import os
+import re
+import ssl
 import base64
 import html
 import logging
+import smtplib
+import asyncio
+import mimetypes
+from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 from datetime import datetime, timezone
 
 import httpx
@@ -23,6 +38,19 @@ logger = logging.getLogger("supersanity.mailer")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
 MAIL_FROM = os.environ.get("MAIL_FROM", "Supersanity <tickets@supersanity.local>").strip()
 PUBLIC_APP_URL = os.environ.get("PUBLIC_APP_URL", "http://localhost:3000").rstrip("/")
+
+# --- SMTP backend ------------------------------------------------------------------
+# Host is the switch: unset means the backend is off, whatever else is configured.
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or 587)
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_TIMEOUT = float(os.environ.get("SMTP_TIMEOUT", "15") or 15)
+
+# starttls (587, the usual) | ssl (465, implicit TLS) | none (local catcher only).
+# Derived from the port so the common cases need no extra variable.
+SMTP_SECURITY = (os.environ.get("SMTP_SECURITY", "").strip().lower()
+                 or ("ssl" if SMTP_PORT == 465 else "starttls"))
 
 _db = None
 _log = logger
@@ -262,60 +290,103 @@ TEMPLATES = {
 }
 
 
-async def send_mail(kind: str, to: str, payload: dict) -> dict:
-    """Render + deliver (or persist to outbox). Returns a small status dict.
-    Never raises — logs and returns {'ok': False, ...} on failure."""
-    tpl = TEMPLATES.get(kind)
-    if tpl is None:
-        _log.error("send_mail: unknown kind %r", kind)
-        return {"ok": False, "reason": "unknown_kind"}
+def _html_to_text(html_body: str) -> str:
+    """A plain-text alternative for the multipart body.
 
-    try:
-        subject, html = tpl(payload)
-    except Exception:
-        _log.exception("send_mail: template %r failed to render", kind)
-        return {"ok": False, "reason": "render_failed"}
+    Not a faithful conversion — just enough that the message isn't HTML-only, which is
+    one of the cheaper things a spam filter counts against a sender. Matters for the
+    relays this backend is aimed at (SES, Postmark), where reputation is the whole game.
+    """
+    text = re.sub(r"(?is)<(script|style).*?</\1>", "", html_body)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    # Cells before rows: the notice's facts and the shop's order lines are tables, and
+    # without a separator here they read as "WhenFri 12 Sep".
+    text = re.sub(r"(?i)</(td|th)>", "\t", text)
+    text = re.sub(r"(?i)</(p|div|h1|h2|h3|li|tr|table)>", "\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\n{3,}", "\n\n", html.unescape(text)).strip()
 
-    headers = payload.get("headers") or {}
-    attachments = payload.get("attachments") or []  # [{filename, content(bytes)}]
 
-    if RESEND_API_KEY:
-        try:
-            body = {
-                "from": MAIL_FROM,
-                "to": [to],
-                "subject": subject,
-                "html": html,
-            }
-            if headers:
-                body["headers"] = headers
-            if attachments:
-                body["attachments"] = [
-                    {"filename": a["filename"],
-                     "content": base64.b64encode(a["content"]).decode()}
-                    for a in attachments
-                ]
-            async with httpx.AsyncClient(timeout=15.0) as hc:
-                r = await hc.post(
-                    "https://api.resend.com/emails",
-                    headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-                    json=body,
-                )
-            if r.status_code >= 300:
-                _log.error("send_mail: resend %s -> %s %s", kind, r.status_code, r.text[:200])
-                return {"ok": False, "reason": "provider_error", "status": r.status_code}
-            return {"ok": True, "provider": "resend", "id": r.json().get("id")}
-        except Exception:
-            _log.exception("send_mail: resend call failed for %r", kind)
-            return {"ok": False, "reason": "provider_exception"}
+def _build_mime(to: str, subject: str, html_body: str, headers: dict, attachments: list):
+    msg = EmailMessage()
+    msg["From"] = MAIL_FROM
+    msg["To"] = to
+    msg["Subject"] = subject
+    # smtplib adds neither, and a message missing Date or Message-ID scores badly with
+    # spam filters. The relay would usually supply them, but "usually" is not a plan.
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid()
+    for k, v in (headers or {}).items():
+        msg[k] = v
+    # text first, then the HTML alternative — order is significant in multipart/
+    # alternative: clients render the LAST part they understand.
+    msg.set_content(_html_to_text(html_body))
+    msg.add_alternative(html_body, subtype="html")
+    for a in attachments or []:
+        ctype, _enc = mimetypes.guess_type(a["filename"])
+        maintype, _, subtype = (ctype or "application/octet-stream").partition("/")
+        msg.add_attachment(a["content"], maintype=maintype, subtype=subtype,
+                           filename=a["filename"])
+    return msg
 
-    # Dev fallback — persist so flows are testable without a provider.
+
+def _smtp_send_blocking(msg) -> None:
+    """One connection per message. Blocking — always call via asyncio.to_thread.
+
+    No pooling: a relay expects short-lived connections, and the fan-out that would
+    benefit most (event notices) is already bounded by its own semaphore.
+    """
+    if SMTP_SECURITY == "ssl":
+        smtp = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT,
+                                context=ssl.create_default_context())
+    else:
+        smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
+    with smtp:
+        smtp.ehlo()
+        if SMTP_SECURITY == "starttls":
+            smtp.starttls(context=ssl.create_default_context())
+            smtp.ehlo()
+        # Unauthenticated is legitimate for a local catcher (Mailpit, MailHog) and for
+        # an IP-allowlisted internal relay; every hosted provider will need a login.
+        if SMTP_USER:
+            smtp.login(SMTP_USER, SMTP_PASSWORD)
+        smtp.send_message(msg)
+
+
+async def _send_via_resend(kind, to, subject, html_body, headers, attachments) -> dict:
+    body = {"from": MAIL_FROM, "to": [to], "subject": subject, "html": html_body}
+    if headers:
+        body["headers"] = headers
+    if attachments:
+        body["attachments"] = [
+            {"filename": a["filename"], "content": base64.b64encode(a["content"]).decode()}
+            for a in attachments
+        ]
+    async with httpx.AsyncClient(timeout=15.0) as hc:
+        r = await hc.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            json=body,
+        )
+    if r.status_code >= 300:
+        _log.error("send_mail: resend %s -> %s %s", kind, r.status_code, r.text[:200])
+        return {"ok": False, "reason": "provider_error", "status": r.status_code}
+    return {"ok": True, "provider": "resend", "id": r.json().get("id")}
+
+
+async def _send_via_smtp(kind, to, subject, html_body, headers, attachments) -> dict:
+    msg = _build_mime(to, subject, html_body, headers, attachments)
+    await asyncio.to_thread(_smtp_send_blocking, msg)
+    return {"ok": True, "provider": "smtp", "id": msg.get("Message-ID")}
+
+
+async def _persist_to_outbox(kind, to, subject, html_body, headers, payload) -> dict:
     doc = {
         "outbox_id": f"out_{os.urandom(8).hex()}",
         "kind": kind,
         "to": to,
         "subject": subject,
-        "html": html,
+        "html": html_body,
         "headers": headers,
         "payload": {k: v for k, v in payload.items() if k != "attachments"},
         "status": "queued",
@@ -326,5 +397,41 @@ async def send_mail(kind: str, to: str, payload: dict) -> dict:
             await _db.outbox.insert_one(dict(doc))
         except Exception:
             _log.exception("send_mail: outbox insert failed")
+    return doc
+
+
+async def send_mail(kind: str, to: str, payload: dict) -> dict:
+    """Render + deliver (or persist to outbox). Returns a small status dict.
+    Never raises — logs and returns {'ok': False, ...} on failure."""
+    tpl = TEMPLATES.get(kind)
+    if tpl is None:
+        _log.error("send_mail: unknown kind %r", kind)
+        return {"ok": False, "reason": "unknown_kind"}
+
+    try:
+        # `html_body`, not `html` — the module of that name is used by the templates,
+        # and shadowing it here is a trap for the next person to add one.
+        subject, html_body = tpl(payload)
+    except Exception:
+        _log.exception("send_mail: template %r failed to render", kind)
+        return {"ok": False, "reason": "render_failed"}
+
+    headers = payload.get("headers") or {}
+    attachments = payload.get("attachments") or []  # [{filename, content(bytes)}]
+
+    # First configured backend wins; a failure is reported, not retried down the list —
+    # falling through to the outbox would look like a successful send.
+    for name, configured, send in (("resend", RESEND_API_KEY, _send_via_resend),
+                                   ("smtp", SMTP_HOST, _send_via_smtp)):
+        if not configured:
+            continue
+        try:
+            return await send(kind, to, subject, html_body, headers, attachments)
+        except Exception:
+            _log.exception("send_mail: %s call failed for %r", name, kind)
+            return {"ok": False, "reason": "provider_exception", "provider": name}
+
+    # Dev fallback — persist so flows are testable without a provider.
+    doc = await _persist_to_outbox(kind, to, subject, html_body, headers, payload)
     _log.info("MAIL[%s] -> %s : %s", kind, to, subject)
     return {"ok": True, "provider": "outbox", "id": doc["outbox_id"]}

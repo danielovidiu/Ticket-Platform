@@ -58,7 +58,7 @@ Set these on the project (**Settings → Environment Variables**), not in a comm
 | `APP_ENV` | `development` | See the warning below |
 | `LOCAL_FAKE_PAYMENTS` | `1` | See the warning below |
 | `BLOB_READ_WRITE_TOKEN` | *(injected)* | Added automatically when the Blob store is connected |
-| `RESEND_API_KEY`, `MAIL_FROM` | optional | Without them, mail lands in the `outbox` collection instead of being sent |
+| `RESEND_API_KEY`, `MAIL_FROM` | **effectively required in production** | Without them, mail lands in the `outbox` collection instead of being sent — see below. An SMTP backend exists but is the wrong fit for serverless |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | optional, **Production scope only** | Google sign-in. All three or none — see below |
 
 ### Google sign-in
@@ -111,6 +111,51 @@ intermittently, looks like a token-expiry bug, and never reproduces locally. The
 raises at import rather than let you find that out in production.
 
 `CORS_ORIGINS` can stay unset: same-origin requests never reach the CORS middleware.
+
+### Transactional mail
+
+`RESEND_API_KEY` is listed as optional because the app starts without it, not because a
+deployment should go without. With no key, `send_mail` writes to the `outbox` collection
+and returns success — nothing warns you. Verification links, password resets, ticket
+delivery and **event change notices** all go quiet at once, and the failure looks like
+nothing at all: a cancellation reports "sent to 47 holders" and reaches nobody.
+
+Two variables:
+
+```
+RESEND_API_KEY=re_...
+MAIL_FROM=Supersanity <tickets@your-domain>
+```
+
+There is also an SMTP backend (`SMTP_HOST` and friends — see `backend/.env.example`),
+which takes over when `RESEND_API_KEY` is unset. **Prefer Resend on this host.** A Vercel
+Function pays a fresh TCP + TLS + AUTH handshake on every invocation, outbound SMTP ports
+are commonly blocked or throttled on serverless platforms, and a slow relay burns function
+duration you are billed for. SMTP is there for a laptop, a container, or a VM — and for
+SES/Postmark if you would rather own that relationship. Gmail is a testing convenience
+only: it rewrites the From header to the authenticated account and caps at ~500
+recipients/day, which one large event's change notice can exhaust.
+
+`MAIL_FROM` must be on a domain verified in Resend (**Domains → Add**, then the DNS
+records it gives you). Resend supplies `onboarding@resend.dev` for testing without a
+verified domain, but it will only deliver to the address that owns the Resend account —
+fine for a smoke test, useless for real buyers.
+
+Both are read at import, like the Google variables, so changing them needs a **redeploy**
+to take effect.
+
+Verify after deploying by triggering the cheapest real send — a password reset for an
+address you control:
+
+```bash
+curl -s -X POST https://<your-domain>/api/auth/forgot-password \
+  -H 'content-type: application/json' -d '{"email":"you@example.com"}'
+```
+
+It always returns `{"ok":true}` (it will not confirm whether an address exists), so the
+result is in your inbox, or in Resend's own **Logs** tab, which shows delivery, bounce and
+rejection per message. If the mail never appears and Resend's log is empty, the key was
+not picked up and the message is sitting in `outbox`.
 
 ### ⚠️ This deployment runs the fake payment simulator
 
