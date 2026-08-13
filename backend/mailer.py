@@ -12,6 +12,7 @@ a registration, a newsletter signup, or (critically) paid-ticket finalization.
 """
 import os
 import base64
+import html
 import logging
 from datetime import datetime, timezone
 
@@ -104,6 +105,100 @@ def _tpl_ticket_delivery(p):
     )
 
 
+# What each notice kind is called, in the subject line and in the banner above the
+# admin's message. Adding a kind (a price change, say) is one entry here plus one in
+# server.NOTICE_KINDS.
+_NOTICE_HEADLINES = {
+    "venue": ("Venue changed", "The location has changed"),
+    "time": ("Time changed", "The time has changed"),
+    "lineup": ("Lineup updated", "The lineup has changed"),
+    "cancelled": ("Cancelled", "This event is cancelled"),
+}
+
+
+def _esc(v) -> str:
+    """Escape anything bound for the notice's HTML.
+
+    The other templates in this file interpolate DB values raw. This one carries an
+    admin-typed free-text message, so it escapes — an apostrophe or a stray `<` in a
+    hand-written note must not be able to restructure the email.
+    """
+    return html.escape(str(v or ""), quote=True)
+
+
+def _paragraphs(text: str) -> str:
+    """Admin message -> paragraphs. Blank lines split, single newlines become <br>."""
+    blocks = [b.strip() for b in _esc(text).split("\n\n") if b.strip()]
+    return "".join(
+        f'<p style="margin:0 0 12px;font-size:15px;line-height:1.5">'
+        f'{b.replace(chr(10), "<br>")}</p>'
+        for b in blocks
+    )
+
+
+def _fact_row(label: str, value: str) -> str:
+    if not value:
+        return ""
+    return (
+        f'<tr><td style="padding:4px 12px 4px 0;font-size:12px;color:#888;'
+        f'text-transform:uppercase;letter-spacing:1px;white-space:nowrap;'
+        f'vertical-align:top">{_esc(label)}</td>'
+        f'<td style="padding:4px 0;font-size:14px">{_esc(value)}</td></tr>'
+    )
+
+
+def _tpl_event_notice(p):
+    """A change announcement for people already holding a ticket.
+
+    The body is written by an admin; everything around it is derived from the event, so
+    the recipient can tell which show this is about before reading a word. Transactional
+    — it carries no unsubscribe link, unlike the newsletter templates, because it is
+    about a ticket the recipient already holds.
+    """
+    ev = p.get("event", {})
+    kind = p.get("kind", "")
+    subject_word, banner = _NOTICE_HEADLINES.get(kind, ("Update", "Something has changed"))
+    title = ev.get("title", "")
+    cancelled = kind == "cancelled"
+    accent = "#b00020" if cancelled else "#111"
+
+    image = (
+        f'<img src="{_esc(ev["image_url"])}" alt="" width="512" '
+        f'style="width:100%;max-width:512px;height:auto;display:block;margin:0 0 20px">'
+        if ev.get("image_url") else ""
+    )
+
+    lineup = ", ".join(ev.get("lineup") or [])
+    facts = (
+        _fact_row("When", ev.get("when", ""))
+        + _fact_row("Doors", ev.get("doors", ""))
+        + _fact_row("Where", ev.get("where", ""))
+        + _fact_row("Lineup", lineup)
+    )
+    facts_block = (
+        f'<table style="width:100%;border-collapse:collapse;margin:20px 0">{facts}</table>'
+        if facts else ""
+    )
+
+    cta = (
+        f'<p><a href="{_esc(p.get("tickets_url", ""))}" style="display:inline-block;'
+        f'background:#111;color:#fff;padding:12px 20px;text-decoration:none">'
+        f'{"View your tickets" if not cancelled else "View your account"}</a></p>'
+    )
+
+    return f"{subject_word} — {title}", _wrap(
+        title or "Event update",
+        f'{image}'
+        f'<p style="margin:0 0 16px;font-size:13px;font-weight:bold;text-transform:uppercase;'
+        f'letter-spacing:1px;color:{accent}">{_esc(banner)}</p>'
+        f'{_paragraphs(p.get("message", ""))}'
+        f'{facts_block}'
+        f'{cta}'
+        f'<p style="font-size:12px;color:#888">You are receiving this because you hold a '
+        f'ticket for this event.</p>',
+    )
+
+
 def _order_rows(order):
     return "".join(
         f'<tr><td style="padding:4px 0">{i.get("name","")}'
@@ -161,6 +256,7 @@ TEMPLATES = {
     "password_reset": _tpl_password_reset,
     "newsletter_confirm": _tpl_newsletter_confirm,
     "ticket_delivery": _tpl_ticket_delivery,
+    "event_notice": _tpl_event_notice,
     "shop_order_paid": _tpl_shop_order_paid,
     "shop_order_shipped": _tpl_shop_order_shipped,
 }

@@ -122,10 +122,31 @@ statutory change needs no redeploy. Invoices store the rate they were issued und
 changing it never rewrites history. Fiscal numbering is one unbroken series, allocated
 by an atomic counter.
 
+## Event change notices
+
+When an event moves, shifts its hour, changes lineup or is called off, **Admin → Events →
+Notify** emails the people holding tickets for it. The audience is computed server-side
+from *issued* tickets: refunded buyers are excluded, and one buyer is one email however
+many tickets they hold. The composer shows the recipient count before anything is sent.
+
+Nothing sends itself. Saving an event is silent, so a typo fix never mails anyone — an
+admin picks the change kind, writes the message, and confirms. Cancelling an event still
+refunds every ticket, but now hands straight over to the composer instead of doing it in
+silence. Past notices are listed per event so the same change isn't announced twice.
+
+The message is admin-written; the surrounding email is derived from the event record —
+cover image, title, current date, doors, venue and lineup — and the free text is escaped
+on the way in. These are transactional messages about a ticket the recipient already
+holds, so unlike the newsletter they carry no `List-Unsubscribe` header and ignore
+marketing opt-ins. Sends are capped per admin per hour, keyed on the account rather than
+the IP so anonymous traffic cannot spend a real admin's budget before a cancellation.
+
 ## Compliance
 
 Consent logging, newsletter double opt-in + one-click unsubscribe, data export, and
-anonymizing account deletion (invoices retained for fiscal law). No third-party
+anonymizing account deletion (invoices retained for fiscal law). Event change notices are
+transactional and bypass the marketing opt-ins on purpose — which is only defensible
+because their audience is derived from issued tickets, never from a list. No third-party
 analytics. Details and the operational follow-ups (Privacy Policy, ToS, DPAs) are in
 [SECURITY.md](./SECURITY.md).
 
@@ -142,7 +163,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**240 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
+**352 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
 everything else (Mongo URL, database name) comes from `backend/.env`, the same file the
 server reads. If the server isn't running the whole session skips with one clear message
 instead of a wall of connection errors.

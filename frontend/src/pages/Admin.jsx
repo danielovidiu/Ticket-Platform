@@ -171,6 +171,7 @@ function Field({ label, className = "", children }) {
 function Events() {
   const [events, setEvents] = useState([]);
   const [form, setForm] = useState(null);
+  const [notice, setNotice] = useState(null);   // { event, kind } while composing
   const load = () => http.get("/admin/events").then((r) => setEvents(r.data));
   useEffect(() => { load(); }, []);
   const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_from: "" }] });
@@ -184,7 +185,15 @@ function Events() {
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
   };
   const del = async (id) => { if (!confirm("Delete?")) return; await http.delete(`/admin/events/${id}`); load(); };
-  const cancel = async (id) => { if (!confirm("Cancel event? All tickets refunded.")) return; await http.post(`/admin/events/${id}/cancel`); load(); };
+  // Cancelling refunds every issued ticket. It used to do that in silence; now it hands
+  // straight over to the composer so the holders actually hear about it — still a
+  // deliberate send, with the admin writing the words.
+  const cancel = async (e) => {
+    if (!confirm("Cancel event? All tickets refunded.")) return;
+    await http.post(`/admin/events/${e.event_id}/cancel`);
+    load();
+    setNotice({ event: e, kind: "cancelled" });
+  };
 
   return (
     <div>
@@ -202,13 +211,112 @@ function Events() {
             <div className={`lg:col-span-1 min-w-0 font-mono-x text-xs ${STATUS_CLASS[eventStatus(e)]}`}>{eventStatus(e)}</div>
             <div className="lg:col-span-3 min-w-0 flex flex-wrap gap-2 lg:justify-end">
               <button onClick={() => setForm(e)} className="btn-primary text-xs">Edit</button>
-              <button onClick={() => cancel(e.event_id)} className="btn-primary text-xs">Cancel</button>
+              <button onClick={() => setNotice({ event: e, kind: "venue" })} data-testid={`notify-btn-${e.event_id}`} className="btn-primary text-xs">Notify</button>
+              <button onClick={() => cancel(e)} className="btn-primary text-xs">Cancel</button>
               <button onClick={() => del(e.event_id)} className="btn-primary text-xs">Del</button>
             </div>
           </div>
         ))}
       </div>
       {form && <EventForm form={form} setForm={setForm} onSave={save} onClose={() => setForm(null)} />}
+      {notice && <NoticeComposer event={notice.event} initialKind={notice.kind} onClose={() => setNotice(null)} />}
+    </div>
+  );
+}
+
+const NOTICE_KIND_LABELS = {
+  venue: "Venue change",
+  time: "Time change",
+  lineup: "Lineup change",
+  cancelled: "Cancelled",
+};
+
+// Emails the people holding valid tickets for one event — nobody else. The audience is
+// computed server-side from issued tickets; this only shows how many that is, so the
+// admin knows the size of what they are about to send before they send it.
+function NoticeComposer({ event, initialKind, onClose }) {
+  const [kind, setKind] = useState(initialKind || "venue");
+  const [message, setMessage] = useState("");
+  const [preview, setPreview] = useState(null);
+  const [past, setPast] = useState([]);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    http.get(`/admin/events/${event.event_id}/notice-preview`).then((r) => setPreview(r.data)).catch(() => setPreview(null));
+    http.get(`/admin/events/${event.event_id}/notices`).then((r) => setPast(r.data)).catch(() => setPast([]));
+  }, [event.event_id]);
+
+  const count = preview?.recipient_count ?? null;
+
+  const send = async () => {
+    if (!message.trim()) return toast.error("Write a message first");
+    if (!confirm(`Email ${count ?? "?"} ticket holder${count === 1 ? "" : "s"} about this ${NOTICE_KIND_LABELS[kind].toLowerCase()}?`)) return;
+    setSending(true);
+    try {
+      const r = await http.post(`/admin/events/${event.event_id}/notify`, { kind, message });
+      toast.success(`Sent to ${r.data.sent} of ${r.data.recipient_count}${r.data.failed ? ` — ${r.data.failed} failed` : ""}`);
+      onClose();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to send");
+    } finally { setSending(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4">
+      <div className="border border-ink/20 bg-surface w-full max-w-2xl max-h-[90vh] flex flex-col">
+        <div className="shrink-0 flex flex-wrap gap-3 justify-between items-center hairline-b px-6 py-4">
+          <div className="min-w-0">
+            <div className="font-display text-2xl uppercase font-bold truncate">Notify holders</div>
+            <div className="font-mono-x text-xs text-ink-4 truncate">{event.title}</div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={send} disabled={sending || !count} data-testid="send-notice-btn" className="btn-accent disabled:opacity-40">{sending ? "SENDING…" : "SEND"}</button>
+            <button onClick={onClose} className="btn-primary">CLOSE</button>
+          </div>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
+          <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4">
+            {count === null ? "Counting recipients…"
+              : count === 0 ? "No ticket holders — nothing to send"
+              : `Goes to ${count} ticket holder${count === 1 ? "" : "s"}`}
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {Object.entries(NOTICE_KIND_LABELS).map(([k, label]) => (
+              <button key={k} onClick={() => setKind(k)} data-testid={`notice-kind-${k}`}
+                      className={`px-3 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${kind === k ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>{label}</button>
+            ))}
+          </div>
+
+          <div className="mt-4">
+            <Field label="Message to ticket holders">
+              <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={6}
+                        data-testid="notice-message"
+                        placeholder="What changed, and what it means for someone holding a ticket."
+                        className="input-x w-full" />
+            </Field>
+            <div className="mt-1 font-mono-x text-[10px] text-ink-4 uppercase tracking-[0.2em]">
+              The event's cover, date, venue and lineup are added automatically.
+            </div>
+          </div>
+
+          {past.length > 0 && (
+            <>
+              <div className="mt-8 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Already sent</div>
+              <div className="mt-3 space-y-2">
+                {past.map((n) => (
+                  <div key={n.notice_id} className="border border-ink/10 p-3">
+                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
+                      {NOTICE_KIND_LABELS[n.kind] || n.kind} · {new Date(n.at).toLocaleString("en-GB")} · {n.sent}/{n.recipient_count} delivered
+                    </div>
+                    <div className="text-sm mt-1 whitespace-pre-wrap break-words">{n.message}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

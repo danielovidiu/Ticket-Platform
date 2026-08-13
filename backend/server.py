@@ -14,7 +14,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import jwt
 import httpx
@@ -896,6 +896,16 @@ class EventIn(BaseModel):
     is_published: bool = False
     sold_out_message: str = ""
     waves: List[WaveIn] = []
+
+
+class EventNoticeIn(BaseModel):
+    """A change announcement an admin sends to an event's ticket holders.
+
+    Typed on purpose: `admin_update_event` below takes an untyped dict (see its M6 note),
+    and this endpoint fans a body out to real inboxes, so its input is pinned down.
+    """
+    kind: Literal["venue", "time", "lineup", "cancelled"]
+    message: str = Field(min_length=1, max_length=4000)
 
 
 class DiscountIn(BaseModel):
@@ -2637,6 +2647,175 @@ async def admin_cancel_event(event_id: str, user=Depends(require_admin)):
     await db.tickets.update_many({"event_id": event_id, "status": "issued"}, {"$set": {"status": "refunded"}})
     await _audit(user["user_id"], "event_cancel", "event", event_id, None)
     return {"ok": True}
+
+
+# ---------- Event change notices ----------
+#
+# When an event moves, shifts its hour, changes lineup or is called off, the people
+# holding tickets have to be told. These are transactional messages about a purchase the
+# recipient already made — they carry no List-Unsubscribe header and do not consult the
+# newsletter opt-in, unlike /newsletter above.
+#
+# Nothing here fires on its own: PATCH /admin/events/{id} still saves silently, so a typo
+# fix never mails anyone. An admin writes the message and sends it deliberately.
+
+# Labels for the admin UI. The wording used in the email itself lives in
+# mailer._NOTICE_HEADLINES, keyed by the same strings as EventNoticeIn.kind.
+NOTICE_KINDS = {
+    "venue": "Venue / location change",
+    "time": "Time or admission change",
+    "lineup": "Lineup change",
+    "cancelled": "Event cancelled",
+}
+
+# Resend takes one HTTP call per recipient, so a sold-out show would otherwise open a
+# few hundred connections at once. Small enough to be polite, large enough that a big
+# list still drains quickly.
+NOTICE_SEND_CONCURRENCY = 5
+
+
+def _fmt_when(iso: Optional[str]) -> str:
+    """ISO timestamp -> something readable in an email; unparseable input passes through."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return str(iso)
+    return dt.strftime("%a %d %b %Y, %H:%M")
+
+
+async def _event_notice_recipients(event_id: str) -> List[dict]:
+    """The buyers a notice may reach: holders of *issued* tickets for this event.
+
+    Refunded and cancelled tickets are excluded — someone who no longer holds a valid
+    ticket has no stake in a venue change. Deduped on the address, so a buyer holding
+    four tickets is one recipient rather than four copies of the same email.
+    """
+    user_ids = await db.tickets.distinct("user_id", {"event_id": event_id, "status": "issued"})
+    if not user_ids:
+        return []
+    recipients, seen = [], set()
+    async for u in db.users.find(
+        {"user_id": {"$in": user_ids}}, {"_id": 0, "user_id": 1, "email": 1}
+    ):
+        email = (u.get("email") or "").strip()
+        if not email or email.lower() in seen:
+            continue
+        seen.add(email.lower())
+        recipients.append({"user_id": u["user_id"], "email": email})
+    return recipients
+
+
+async def _event_notice_facts(event: dict) -> dict:
+    """The event's current state, as the notice template renders it."""
+    names = []
+    if event.get("artist_ids"):
+        artists = await db.artists.find(
+            {"artist_id": {"$in": event["artist_ids"]}}, {"_id": 0, "artist_id": 1, "name": 1}
+        ).to_list(200)
+        by_id = {a["artist_id"]: a.get("name", "") for a in artists}
+        names = [by_id[a] for a in event["artist_ids"] if by_id.get(a)]
+
+    # Only absolute URLs go in the banner. Uploads are root-relative under the local
+    # storage backend ("/uploads/x.jpg"), and that path resolves to the frontend service
+    # on the public origin — a broken image in someone's mail client. Production uses the
+    # Blob backend, which returns absolute CDN URLs, so the banner is there where it counts.
+    image = event.get("image_url") or ""
+    if not re.match(r"^https?://", image):
+        image = ""
+
+    return {
+        "title": event.get("title", ""),
+        "image_url": image,
+        "when": _fmt_when(event.get("starts_at")),
+        "doors": _fmt_when(event.get("doors_open_at")),
+        "where": ", ".join(filter(None, [event.get("venue"), event.get("city")])),
+        "lineup": names,
+    }
+
+
+@api.get("/admin/events/{event_id}/notice-preview")
+async def admin_event_notice_preview(event_id: str, user=Depends(require_admin)):
+    """How far a notice would reach, before one is written. Lets the composer say
+    'this goes to 47 people' rather than making the admin guess."""
+    event = await db.events.find_one({"event_id": event_id}, {"_id": 0})
+    if not event:
+        raise HTTPException(404, "Event not found")
+    recipients = await _event_notice_recipients(event_id)
+    return {
+        "event_id": event_id,
+        "title": event.get("title", ""),
+        "recipient_count": len(recipients),
+        "kinds": NOTICE_KINDS,
+        "facts": await _event_notice_facts(event),
+    }
+
+
+@api.get("/admin/events/{event_id}/notices")
+async def admin_event_notices(event_id: str, user=Depends(require_admin)):
+    """What has already gone out for this event, newest first — so the same change
+    doesn't get announced twice by two different people."""
+    return await db.event_notices.find(
+        {"event_id": event_id}, {"_id": 0}
+    ).sort("at", -1).to_list(50)
+
+
+@api.post("/admin/events/{event_id}/notify")
+async def admin_event_notify(event_id: str, body: EventNoticeIn, user=Depends(require_admin)):
+    # Keyed on the admin, not the IP, and checked *after* require_admin. An IP-keyed
+    # `dependencies=[...]` limiter runs before authentication, which would let anonymous
+    # traffic spend a real admin's budget and lock them out of announcing a cancellation
+    # — the one moment this endpoint matters most. The cap is per-admin-per-hour and
+    # generous enough for a festival day's worth of genuine notices.
+    _email_rate_check("event_notify", user["user_id"], 30, 3600)
+
+    event = await db.events.find_one({"event_id": event_id}, {"_id": 0})
+    if not event:
+        raise HTTPException(404, "Event not found")
+
+    recipients = await _event_notice_recipients(event_id)
+    facts = await _event_notice_facts(event)
+    payload = {
+        "kind": body.kind,
+        "message": body.message,
+        "event": facts,
+        "tickets_url": f"{PUBLIC_APP_URL}/my-tickets",
+    }
+
+    sem = asyncio.Semaphore(NOTICE_SEND_CONCURRENCY)
+
+    async def _one(r):
+        async with sem:
+            try:
+                res = await send_mail("event_notice", r["email"], dict(payload))
+                return bool(res.get("ok"))
+            except Exception:
+                # send_mail swallows its own failures; this is belt-and-braces so one
+                # bad address can never abort the rest of the fan-out.
+                logger.exception("event notice send failed for %s", r["user_id"])
+                return False
+
+    results = await asyncio.gather(*(_one(r) for r in recipients))
+    sent = sum(1 for ok in results if ok)
+    failed = len(results) - sent
+
+    notice = {
+        "notice_id": new_id("ntc"),
+        "event_id": event_id,
+        "kind": body.kind,
+        "message": body.message,
+        "sent_by": user["user_id"],
+        "recipient_count": len(recipients),
+        "sent": sent,
+        "failed": failed,
+        "at": now_utc().isoformat(),
+    }
+    await db.event_notices.insert_one(dict(notice))
+    await _audit(user["user_id"], "event_notice", "event", event_id,
+                 {"kind": body.kind, "recipients": len(recipients), "sent": sent, "failed": failed})
+
+    return {"ok": True, **{k: v for k, v in notice.items() if k != "_id"}}
 
 
 @api.get("/admin/orders")

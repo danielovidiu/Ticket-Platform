@@ -174,6 +174,18 @@ token from one flow can't be replayed against another:
   with timestamp, IP, policy version, and source.
 - Newsletter uses **double opt-in** (nothing is "subscribed" until the emailed confirm
   link is clicked) and provides a one-click unsubscribe plus a `List-Unsubscribe` header.
+- **Event change notices are transactional, and deliberately bypass the opt-ins.** A
+  venue move, a time change or a cancellation goes to the holders of *issued* tickets for
+  that event regardless of `news_opt_in`, and carries no `List-Unsubscribe` header. That
+  is the correct treatment: the message concerns a purchase the recipient has already
+  made, which is what makes it transactional under both GDPR (performance of a contract,
+  not consent) and CAN-SPAM. The exemption is only as good as the targeting, so the
+  audience is derived from tickets rather than from any mailing list — refunded holders
+  are excluded, and there is no path from this endpoint to a non-buyer's inbox. Anything
+  promotional must go through the newsletter instead.
+- The notice body is admin-authored free text rendered into HTML mail, so it is escaped
+  at the template (`mailer._tpl_event_notice`) rather than interpolated raw like the
+  older templates around it.
 - No third-party analytics. The former PostHog/session-recording snippet (which used an
   Emergent-owned key) has been removed. Any future analytics must be gated behind the
   `CookieConsent` opt-in, not fired on load.
@@ -190,7 +202,8 @@ token from one flow can't be replayed against another:
   unsubscribed. **Invoices and tickets are retained** (with the now-anonymized user
   reference) for fiscal/audit obligations. The last remaining admin cannot delete
   themselves.
-- **Audit log** (`audit_log`): role changes, refunds, event cancel/delete, newsletter
+- **Audit log** (`audit_log`): role changes, refunds, event cancel/delete, event change
+  notices (who mailed which event's holders, with the recipient count), newsletter
   deletes, and account deletions.
 
 ## Retention
@@ -202,9 +215,13 @@ token from one flow can't be replayed against another:
 | Consent log / audit log | Indefinite (compliance evidence) |
 
 **Only the session row is actually enforced** (by the MongoDB TTL index). The rest of
-this table is a stated policy with no job behind it: `outbox`, `contact_messages`, and
-`payment_transactions` grow without bound and have no documented retention at all. A
-retention job is audit item P3.18.
+this table is a stated policy with no job behind it: `outbox`, `contact_messages`,
+`payment_transactions` and `event_notices` grow without bound and have no documented
+retention at all. A retention job is audit item P3.18.
+
+`event_notices` holds the sent text of every event change notice with the sending admin's
+id — a deliberate record, so two admins do not announce the same cancellation twice and so
+"was anyone told?" has an answer. It stores no recipient addresses, only a count.
 
 ## Out of scope for code (operational follow-ups)
 
