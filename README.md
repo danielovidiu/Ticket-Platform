@@ -198,6 +198,7 @@ teardown, and swept on start if a previous run was interrupted.
 | `backend/requirements.in` | Intended direct dependencies. `requirements.txt` is an unfiltered freeze — ~60 of its 126 packages are unused |
 | `frontend/src/` | React app |
 | `DEPLOY_VERCEL.md` | Deploying to Vercel + Atlas, and verifying a deploy via `/api/health` |
+| `DEPLOY_VPS.md` | The alternative: one root VPS — nginx, systemd, Mongo as a single-node replica set, Cloudflare, backups |
 | `SECURITY.md` | How the security model works, and its known gaps |
 | `SECURITY_AUDIT.md` | Full audit: findings, attack paths, remediation plan |
 | `auth_testing.md` | Manual auth test flows |
