@@ -106,7 +106,12 @@ Three sign-in methods, all issuing the same first-party opaque session cookie:
   8-char minimum. Login returns an identical generic `401` for a missing user, an
   OAuth-only account, or a wrong password, and runs a dummy bcrypt verify on the
   missing-user path to flatten timing (a mitigation, not a guarantee of full
-  enumeration resistance).
+  enumeration resistance). Hashing runs on the threadpool
+  (`hash_password_async`/`verify_password_async`), never on the event loop: at ~300ms a
+  hash, a blocking call makes every login a 300ms denial of service against *every other
+  request the worker is serving*, which per-IP rate limiting alone does not bound once the
+  attempts come from many addresses. `tests/test_async_bcrypt.py` asserts on the latency,
+  since no functional test can see this.
 - **Google** — our own OAuth client (server-side code exchange). `state` CSRF cookie;
   `id_token` verified against Google's JWKS.
 - **Apple** — `form_post` callback; `id_token` verified against Apple's JWKS. Name/email

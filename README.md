@@ -164,7 +164,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**364 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
+**365 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
 everything else (Mongo URL, database name) comes from `backend/.env`, the same file the
 server reads. If the server isn't running the whole session skips with one clear message
 instead of a wall of connection errors.

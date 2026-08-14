@@ -554,7 +554,26 @@ def verify_password(pw: str, hashed: Optional[str]) -> bool:
 
 # Precomputed hash used to equalize timing on the "no such user" login path so an
 # attacker can't distinguish a missing account from a wrong password by response time.
+# Computed once at import, on the main thread, before any request exists.
 _DUMMY_HASH = hash_password("timing-equalizer-not-a-real-password")
+
+
+# bcrypt at cost 12 is ~250-300ms of CPU, and the two functions above are blocking. Called
+# straight from an async handler they stall the whole event loop for that long — not just
+# the caller's request, but every other request the worker is serving, ticket purchases
+# included. Under Vercel this never showed: one request per function instance, and the
+# platform added instances. On a long-lived uvicorn worker it is the difference between a
+# login costing one person 300ms and costing everyone 300ms.
+#
+# The threadpool is the right home for it: bcrypt releases the GIL while hashing, so
+# several run genuinely in parallel across cores while the loop keeps accepting requests.
+# Route handlers must use these; the sync versions above remain for import-time use.
+async def hash_password_async(pw: str) -> str:
+    return await asyncio.to_thread(hash_password, pw)
+
+
+async def verify_password_async(pw: str, hashed: Optional[str]) -> bool:
+    return await asyncio.to_thread(verify_password, pw, hashed)
 
 
 def _initial_role(email: str) -> str:
@@ -1033,7 +1052,7 @@ async def register(body: RegisterIn, request: Request, response: Response):
         "picture": "",
         "phone": phone,
         "role": _initial_role(email),  # SECURITY [H3]: config, never arrival order
-        "password_hash": hash_password(body.password),
+        "password_hash": await hash_password_async(body.password),
         "email_verified_at": None,
         "email_opt_in": bool(body.email_opt_in),
         "news_opt_in": bool(body.news_opt_in),
@@ -1071,9 +1090,9 @@ async def login(body: LoginIn, request: Request, response: Response, session_tok
     u = await db.users.find_one({"email": email}, {"_id": 0})
     # Same generic failure + verify-against-dummy timing for every failure mode:
     # missing user, OAuth-only account (no password_hash), or wrong password.
-    if not u or not verify_password(body.password, u.get("password_hash")):
+    if not u or not await verify_password_async(body.password, u.get("password_hash")):
         if not u:
-            verify_password(body.password, _DUMMY_HASH)
+            await verify_password_async(body.password, _DUMMY_HASH)
         raise HTTPException(401, "Invalid email or password")
     # Unverified accounts get no session at all. The credentials were correct, so saying
     # so leaks nothing an attacker who just guessed the password doesn't already know,
@@ -1290,7 +1309,7 @@ async def reset_password(body: ResetPasswordIn, response: Response):
         raise HTTPException(400, "This reset link is invalid or has expired")
     await db.users.update_one(
         {"user_id": u["user_id"]},
-        {"$set": {"password_hash": hash_password(body.new_password)}},
+        {"$set": {"password_hash": await hash_password_async(body.new_password)}},
     )
     # Global logout — invalidate every existing session for this user.
     await db.user_sessions.delete_many({"user_id": u["user_id"]})
