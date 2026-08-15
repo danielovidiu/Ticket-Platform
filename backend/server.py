@@ -659,15 +659,24 @@ def _validate_phone(raw: str) -> str:
     return phone
 
 
-def _email_rate_check(bucket: str, email: str, max_calls: int, window: int):
-    """Per-email sibling of rate_limit() (which keys on IP). Guards password login
-    against distributed brute force of one account from many IPs.
+def _email_rate_check(bucket: str, identity: str, max_calls: int, window: int):
+    """Identity-keyed sibling of rate_limit() (which keys on IP). Named for its first
+    caller; `identity` is any stable string — an email on the auth routes, a user_id on
+    the admin ones. Guards password login against distributed brute force of one account
+    from many IPs.
+
+    Called from inside the handler rather than as a route dependency, and that placement
+    is the point on authenticated routes: FastAPI resolves `dependencies=[...]` *before*
+    the handler's own parameter dependencies, so an IP-keyed limiter there runs before
+    require_admin and lets anonymous traffic spend a real admin's budget. See
+    SECURITY.md → "Rate limiting — which of the two to reach for".
 
     Shares _rate_check so this table is bounded too — it is keyed on attacker-supplied
     email addresses, so it was the easier half of the H2 memory-exhaustion problem.
     """
     with _rate_lock:
-        retry_after = _rate_check(bucket, (email or "").strip().lower(), max_calls, window)
+        # Case-folded so an email is canonical; user_ids are already lowercase.
+        retry_after = _rate_check(bucket, (identity or "").strip().lower(), max_calls, window)
     if retry_after is not None:
         raise HTTPException(429, "Too many attempts. Try again later.",
                             headers={"Retry-After": str(retry_after)})

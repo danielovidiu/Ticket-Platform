@@ -58,7 +58,6 @@ and the perimeter.
 |---|---|---|
 | H1 | `X-Forwarded-For` trusted with no proxy allowlist | Every rate limit bypassable; mail bombing; brute force |
 | M3 | `SameSite=None` with no CSRF token | Cross-site writes to `/admin/uploads` |
-| M4/M5 | Special-link capacity and per-user cap are TOCTOU | Oversell under concurrency |
 | M6–M12, L1–L4 | See the audit | |
 
 H1 is pinned by an `xfail(strict=True)` test in `backend/tests/test_security_hardening.py`,
@@ -154,6 +153,56 @@ token from one flow can't be replayed against another:
 | `pwd-reset`    | 1h      | Single-use: bound to the current password-hash tail |
 | `news-confirm` | 7d      | Double opt-in |
 | `news-unsub`   | 365d    | One-click unsubscribe; idempotent |
+
+## Rate limiting — which of the two to reach for
+
+There are **two** limiters, and picking the wrong one is how you lock a legitimate user
+out of their own endpoint. Both share `_rate_check`, so both are bounded by the H2 sweep
+and the per-bucket LRU cap; they differ only in what they key on and *when they run*.
+
+| | `rate_limit(bucket, n, window)` | `_email_rate_check(bucket, identity, n, window)` |
+|---|---|---|
+| Where | `dependencies=[...]` on the route | Called inside the handler |
+| Keys on | Client IP (`_client_ip`) | Whatever you pass — an email, a `user_id` |
+| Runs | **Before** authentication | After, once you have an identity |
+
+**The rule.** If the endpoint is unauthenticated, key on IP — there is no identity yet.
+If it is authenticated and the cost belongs to the account rather than the connection,
+key on the account, inside the handler. If it is unauthenticated but *about* a specific
+account, use both: `/auth/login` does exactly that, 10 per IP and 10 per email in the same
+5-minute window, so neither one attacker's connection nor one targeted account can be
+worked over.
+
+**The trap, and it is not obvious.** FastAPI resolves `dependencies=[...]` *before* the
+handler's own parameter dependencies — so an IP-keyed limiter on an admin route runs
+**before `require_admin`**. Anonymous traffic can then spend the budget, and the real
+admin meets a `429` on a route only they can use. On something like
+`POST /admin/events/{id}/notify` that means an attacker who cannot authenticate at all
+can still stop a cancellation notice going out, which is the moment it matters most. That
+endpoint therefore checks *inside* the handler, keyed on `user["user_id"]`, after auth has
+resolved:
+
+```python
+@api.post("/admin/events/{event_id}/notify")          # no dependencies=[...] limiter
+async def admin_event_notify(event_id: str, body: EventNoticeIn, user=Depends(require_admin)):
+    _email_rate_check("event_notify", user["user_id"], 30, 3600)
+```
+
+The three identity-keyed buckets in the codebase — the exceptions worth knowing:
+
+| Bucket | Keyed on | Budget |
+|---|---|---|
+| `auth_login_email` | email | 10 / 5 min |
+| `auth_verify_resend_email` | email | 3 / 15 min |
+| `event_notify` | admin `user_id` | 30 / hour |
+
+Everything else is IP-keyed on the route; `grep -n 'rate_limit("' backend/*.py` lists them.
+
+**Two caveats that apply to both.** The table lives in process memory, so N workers means
+N times the configured allowance — which is why `DEPLOY_VPS.md` runs a single uvicorn
+worker, and why moving the limiter to Redis is a prerequisite for ever running more than
+one. And IP keying is only as honest as `TRUSTED_IP_HEADER` plus a proxy that overwrites
+rather than appends: that is H1, still open.
 
 ## Payments & fulfillment
 
