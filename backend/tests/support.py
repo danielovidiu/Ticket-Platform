@@ -201,10 +201,42 @@ def cleanup_test_users():
     if not ids:
         return
     db.user_sessions.delete_many({"user_id": {"$in": ids}})
+    release_reservation_holds({"user_id": {"$in": ids}})
     db.reservations.delete_many({"user_id": {"$in": ids}})
     db.tickets.delete_many({"user_id": {"$in": ids}})
     db.users.delete_many({"user_id": {"$in": ids}})
     _created_user_ids.clear()
+
+
+def release_reservation_holds(match: dict):
+    """Give back the stock held by pending reservations before deleting them.
+
+    A pending reservation has already drawn down its wave's `available` (or its special
+    link's `used`). Deleting the row without returning that is a leak the server can
+    never repair: the expiry sweep only sees reservations that still exist, so the stock
+    is gone for good.
+
+    This was silently draining the seeded demo events one suite run at a time — the
+    GENERAL wave on the seeded event reached 0 of 250 with no pending reservations
+    against it, and every test needing a real reservation started failing with "Not
+    enough tickets available". Mirrors server._release_reservation_holds.
+
+    Everything except `expired` is returned, not just `pending`. A paid reservation has
+    also consumed its stock — it became tickets — and teardown deletes those tickets in
+    the same breath, so the stock has to come back with them. Only `expired` is skipped,
+    because the server's own sweep has already returned it.
+    """
+    for r in db.reservations.find({**match, "status": {"$ne": "expired"}},
+                                  {"_id": 0, "event_id": 1, "wave_id": 1,
+                                   "quantity": 1, "special_link_token": 1}):
+        if r.get("special_link_token"):
+            db.special_links.update_one({"token": r["special_link_token"]},
+                                        {"$inc": {"used": -r["quantity"]}})
+        else:
+            db.events.update_one(
+                {"event_id": r["event_id"], "waves.wave_id": r["wave_id"]},
+                {"$inc": {"waves.$.available": r["quantity"]}},
+            )
 
 
 def sweep_stale_test_users(older_than_hours: int = 1):
@@ -221,6 +253,7 @@ def sweep_stale_test_users(older_than_hours: int = 1):
         {"user_id": 1})]
     if stale:
         db.user_sessions.delete_many({"user_id": {"$in": stale}})
+        release_reservation_holds({"user_id": {"$in": stale}})
         db.reservations.delete_many({"user_id": {"$in": stale}})
         db.tickets.delete_many({"user_id": {"$in": stale}})
         db.users.delete_many({"user_id": {"$in": stale}})
