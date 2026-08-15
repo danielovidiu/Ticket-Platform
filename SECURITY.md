@@ -169,6 +169,13 @@ token from one flow can't be replayed against another:
 - **Idempotency**: each processed event id is inserted into `processed_stripe_events`
   (unique index); replays are no-ops, so a webhook + status-poll race can't double-issue
   tickets. `_finalize_paid_reservation` is itself idempotent (guarded pending→paid).
+- **Inventory is held, not counted.** Wave stock, special-link capacity and the per-user
+  cap are all enforced against concurrent requests, not just sequential ones. Stock and
+  link capacity draw down through conditional single-document writes at *reservation*
+  time; the per-user cap is confirmed after the insert and resolved by a total order the
+  contending requests each compute identically, so losers roll back rather than oversell.
+  Holds return on expiry and on rollback. *(Audit M4 and M5 — fixed; `test_oversell_races.py`
+  fires simultaneous requests through a barrier and fails against the old code.)*
 - Ticket-delivery email (with QR attachments) is transactional and best-effort — a mail
   failure is logged and never rolls back a paid order.
 

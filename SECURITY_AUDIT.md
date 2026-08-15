@@ -30,7 +30,7 @@ both are the kind of thing that gets exploited within days of a public launch.
 |---|---|---|
 | Critical | 1 | Payment bypass via default config — **fixed** |
 | High | 3 | Rate-limit bypass, memory DoS, admin bootstrap race — **1 of 3 fixed (H3)** |
-| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust |
+| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1, M2 and both oversells (M4, M5) fixed** |
 | Low | 4 | Info leaks, incomplete refund path |
 
 ### Remediation status
@@ -351,22 +351,43 @@ Apple's protocol), and is protected by the `state` cookie instead.
 **Fix.** Use `SameSite=Lax` unless the frontend genuinely sits on a different site; add
 an `Origin`/`Referer` check on state-changing routes.
 
-### M4 — Special-link capacity check is TOCTOU (oversell)
+### M4 — Special-link capacity check is TOCTOU (oversell) — **FIXED**
 
-`_resolve_pricing_source` validates `special["used"] + quantity <= capacity` at
-*reservation* time, but `used` is only incremented in `_finalize_paid_reservation`.
-Unlike wave stock — which uses a correct conditional atomic decrement — nothing holds
+`_resolve_pricing_source` validated `special["used"] + quantity <= capacity` at
+*reservation* time, but `used` was only incremented in `_finalize_paid_reservation`.
+Unlike wave stock — which uses a correct conditional atomic decrement — nothing held
 special-link capacity during the window between reserve and pay.
 
 **Attack.** Fire N concurrent reservations against one special link; all pass the check;
 all can be paid. **Compromised:** capacity control on invite/comp links, which are
-exactly the ones with discounted or zero pricing.
+exactly the ones with discounted or zero pricing. Reproduced at six-for-two before the
+fix (`test_oversell_races.py`).
 
-### M5 — Per-user ticket cap is TOCTOU
+**Fix.** `_atomic_hold_special_link` draws the capacity down *at reservation*, with the
+same conditional single-document write wave stock already used. The comparison is an
+`$expr` against the document's own `capacity`, so a mid-flight admin edit cannot widen
+the window either. `_finalize_paid_reservation` no longer increments — the hold is
+already taken — and `_release_reservation_holds` gives it back when a reservation
+expires or is rolled back.
 
-`_enforce_user_ticket_cap` counts existing tickets plus pending reservations, then the
-insert happens separately. Concurrent requests all read the same pre-state and all pass.
-**Compromised:** the per-event scalping limit.
+### M5 — Per-user ticket cap is TOCTOU — **FIXED**
+
+`_enforce_user_ticket_cap` counted existing tickets plus pending reservations, then the
+insert happened separately. Concurrent requests all read the same pre-state and all
+passed. **Compromised:** the per-event scalping limit — six simultaneous requests took
+six tickets against a cap of two.
+
+**Fix.** The cap is now confirmed *after* the insert rather than before it, which is what
+makes it enforceable without a transaction: only once a request has a row can the others
+see it. `_confirm_user_ticket_cap` orders the contending reservations by
+`(created_at, reservation_id)` — a total order every racer computes identically — and
+each keeps only what those ahead of it leave room for. Losers delete their reservation
+and release their holds. `_precheck_user_ticket_cap` survives as a fast rejection, and is
+explicitly *not* the guarantee.
+
+The rollback deletes before releasing: a crash between the two strands stock that an
+admin can recover, where the reverse order would leave a live reservation holding stock
+already given back.
 
 ### M6 — Admin update endpoints accept an unvalidated `dict`
 

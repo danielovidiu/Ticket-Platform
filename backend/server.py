@@ -1868,8 +1868,23 @@ async def admin_delete_subscription(sub_id: str, user=Depends(get_current_user))
 HOLD_MINUTES = 10
 
 
+async def _release_reservation_holds(r: dict):
+    """Give back whatever a reservation was holding — the mirror of the holds taken in
+    create_reservation. Special-link reservations hold link capacity; every other one
+    holds wave stock. Keeping both in one place is what stops the two from drifting."""
+    if r.get("special_link_token"):
+        await db.special_links.update_one(
+            {"token": r["special_link_token"]}, {"$inc": {"used": -r["quantity"]}}
+        )
+    else:
+        await db.events.update_one(
+            {"event_id": r["event_id"], "waves.wave_id": r["wave_id"]},
+            {"$inc": {"waves.$.available": r["quantity"]}},
+        )
+
+
 async def _cleanup_expired_reservations(event_id: str):
-    """Return held stock from expired unpaid reservations to their waves."""
+    """Return held stock from expired unpaid reservations."""
     now_iso = now_utc().isoformat()
     expired = await db.reservations.find({
         "event_id": event_id,
@@ -1877,11 +1892,15 @@ async def _cleanup_expired_reservations(event_id: str):
         "expires_at": {"$lt": now_iso},
     }).to_list(500)
     for r in expired:
-        await db.events.update_one(
-            {"event_id": event_id, "waves.wave_id": r["wave_id"]},
-            {"$inc": {"waves.$.available": r["quantity"]}},
+        # Flip the status first: the release is idempotent only as long as exactly one
+        # sweep claims each reservation. A concurrent sweep that loses this race sees
+        # nothing pending and returns the stock zero times rather than twice.
+        claimed = await db.reservations.update_one(
+            {"reservation_id": r["reservation_id"], "status": "pending"},
+            {"$set": {"status": "expired"}},
         )
-        await db.reservations.update_one({"reservation_id": r["reservation_id"]}, {"$set": {"status": "expired"}})
+        if claimed.modified_count == 1:
+            await _release_reservation_holds(r)
 
 
 @api.post("/reservations", dependencies=[Depends(rate_limit("reservations", 20, 60))])
@@ -1904,7 +1923,10 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     await _cleanup_expired_reservations(body.event_id)
     event = await db.events.find_one({"event_id": body.event_id}, {"_id": 0})
 
-    await _enforce_user_ticket_cap(event, user["user_id"], body.quantity)
+    # Cheap rejection for the obvious case. Not the guarantee — _confirm_user_ticket_cap
+    # after the insert is, because only then does this request have a position other
+    # concurrent requests can see.
+    await _precheck_user_ticket_cap(event, user["user_id"], body.quantity)
     wave = _find_wave(event, body.wave_id)
     unit_price, special = await _resolve_pricing_source(body, event, wave)
     discount_percent, discount_code_used = await _apply_discount(body, using_special=bool(special))
@@ -1913,8 +1935,12 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     discount_amount = subtotal * (discount_percent / 100.0)
     total = round(subtotal - discount_amount, 2)
 
-    # Deduct from wave availability (only if not a special link).
-    if not special:
+    # Take the hold. A special link draws down its own capacity; everything else draws
+    # down wave stock. Both are conditional single-document writes, so the check and the
+    # decrement cannot be separated by a concurrent request.
+    if special:
+        await _atomic_hold_special_link(body.special_link_token, body.event_id, body.quantity)
+    else:
         await _atomic_hold_wave_stock(body.event_id, body.wave_id, body.quantity)
 
     doc = {
@@ -1935,24 +1961,69 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
         "created_at": now_utc().isoformat(),
     }
     await db.reservations.insert_one(doc)
+
+    if not await _confirm_user_ticket_cap(event, user["user_id"], doc):
+        # Delete before releasing. A crash between the two leaves stock held by nothing,
+        # which the expiry sweep and an admin can both recover. The other order would
+        # leave a live reservation holding stock already given back — an oversell, and
+        # the failure this whole function exists to prevent.
+        await db.reservations.delete_one({"reservation_id": doc["reservation_id"]})
+        await _release_reservation_holds(doc)
+        cap = event.get("max_tickets_per_user", 4)
+        raise HTTPException(400, f"Ticket limit reached ({cap} per user)")
+
     return {**{k: v for k, v in doc.items() if k != "_id"}, "hold_minutes": HOLD_MINUTES}
 
 
-async def _enforce_user_ticket_cap(event, user_id: str, quantity: int):
-    """Raise 400 if adding `quantity` tickets would exceed the event's per-user cap.
+async def _user_ticket_count(event_id: str, user_id: str) -> int:
+    return await db.tickets.count_documents({"event_id": event_id, "user_id": user_id})
 
-    SECURITY [M5 — TOCTOU]: the count below and the reservation insert that follows are
-    not atomic, so concurrent requests all observe the same pre-state and all pass. The
-    anti-scalping cap is therefore advisory under concurrency.
+
+async def _precheck_user_ticket_cap(event, user_id: str, quantity: int):
+    """Fast path only — rejects a request already over the cap before doing any work.
+
+    Racy by nature, and deliberately so: it reads a pre-state that a concurrent request
+    can invalidate. _confirm_user_ticket_cap is what actually enforces the cap.
     """
     max_per_user = event.get("max_tickets_per_user", 4)
-    existing = await db.tickets.count_documents({"event_id": event["event_id"], "user_id": user_id})
+    existing = await _user_ticket_count(event["event_id"], user_id)
     pending_docs = await db.reservations.find(
         {"event_id": event["event_id"], "user_id": user_id, "status": "pending"}, {"_id": 0, "quantity": 1}
     ).to_list(50)
     pending_qty = sum(r["quantity"] for r in pending_docs)
     if existing + pending_qty + quantity > max_per_user:
         raise HTTPException(400, f"Ticket limit reached ({max_per_user} per user)")
+
+
+async def _confirm_user_ticket_cap(event, user_id: str, doc: dict) -> bool:
+    """SECURITY [M5 — fixed]: enforce the per-user cap *after* the reservation exists.
+
+    Counting before inserting is unfixable without a transaction: every concurrent
+    request reads the same pre-state and every one of them passes. Counting afterwards
+    is, because by then each request has a row the others can see.
+
+    The rule is a total order — (created_at, reservation_id) — evaluated identically by
+    every racer, so they agree on which of them fit without needing to coordinate. Each
+    keeps only what the reservations ahead of it leave room for; the rest roll back. No
+    lock, no transaction, and no arrangement of concurrent callers oversells.
+
+    A racer that queries before a rolled-back sibling is deleted counts a reservation
+    that no longer exists and gives up its own place. That direction is safe — it
+    under-sells by one, and the caller can retry.
+    """
+    cap = event.get("max_tickets_per_user", 4)
+    issued = await _user_ticket_count(event["event_id"], user_id)
+    peers = await db.reservations.find(
+        {"event_id": event["event_id"], "user_id": user_id, "status": "pending"},
+        {"_id": 0, "reservation_id": 1, "quantity": 1, "created_at": 1},
+    ).to_list(200)
+
+    mine = (doc["created_at"], doc["reservation_id"])
+    ahead = sum(
+        p["quantity"] for p in peers
+        if (p.get("created_at", ""), p["reservation_id"]) < mine
+    )
+    return issued + ahead + doc["quantity"] <= cap
 
 
 def _find_wave(event, wave_id: str):
@@ -1971,11 +2042,8 @@ async def _resolve_pricing_source(body: "ReserveIn", event, wave):
         )
         if not special:
             raise HTTPException(400, "Invalid special link")
-        # SECURITY [M4 — TOCTOU]: this reads `used`, but `used` is only incremented in
-        # _finalize_paid_reservation. Nothing holds capacity across the reserve→pay window,
-        # so N concurrent reservations all pass this check and can all be paid — the link
-        # oversells. Contrast _atomic_hold_wave_stock() below, which does this correctly
-        # with a conditional $inc. This path needs the same treatment.
+        # Capacity hint only, exactly like the wave branch below — the binding check is
+        # the conditional $inc in _atomic_hold_special_link.
         if special.get("used", 0) + body.quantity > special["capacity"]:
             raise HTTPException(400, "Special link capacity exceeded")
         return float(special["price_ron"]), special
@@ -2002,6 +2070,32 @@ async def _apply_discount(body: "ReserveIn", using_special: bool):
     if code.get("max_uses", 0) > 0 and code.get("uses", 0) >= code["max_uses"]:
         raise HTTPException(400, "Discount code exhausted")
     return int(code["percent_off"]), code["code"]
+
+
+async def _atomic_hold_special_link(token: str, event_id: str, quantity: int):
+    """SECURITY [M4 — fixed]: hold special-link capacity at reserve time, atomically.
+
+    `used` used to be incremented only once a reservation was paid, so nothing held
+    capacity across the reserve→pay window and N concurrent reservations against one
+    invite link all passed the check and could all be paid. It now draws down on the
+    same conditional-write pattern as wave stock, and the expiry sweep gives it back.
+
+    `$expr` compares against the document's own `capacity` rather than a value read
+    earlier, so an admin editing capacity mid-flight cannot widen the window either.
+    """
+    upd = await db.special_links.update_one(
+        {
+            "token": token,
+            "event_id": event_id,
+            "$expr": {"$lte": [
+                {"$add": [{"$ifNull": ["$used", 0]}, quantity]},
+                "$capacity",
+            ]},
+        },
+        {"$inc": {"used": quantity}},
+    )
+    if upd.modified_count != 1:
+        raise HTTPException(400, "Special link capacity exceeded")
 
 
 async def _atomic_hold_wave_stock(event_id: str, wave_id: str, quantity: int):
@@ -2257,11 +2351,10 @@ async def _finalize_paid_reservation(reservation_id: str):
     # Increment discount uses
     if r.get("discount_code"):
         await db.discounts.update_one({"code": r["discount_code"]}, {"$inc": {"uses": 1}})
-    # Increment special link usage
-    if r.get("special_link_token"):
-        await db.special_links.update_one(
-            {"token": r["special_link_token"]}, {"$inc": {"used": r["quantity"]}}
-        )
+    # Special-link usage is NOT incremented here. It was drawn down when the reservation
+    # was created (_atomic_hold_special_link), which is what makes the capacity a real
+    # hold rather than a count of completed payments. Incrementing again would charge the
+    # link twice for one reservation.
 
     # Create invoice
     vat_rate = await get_vat_rate()  # the one sitewide rate, shared with the shop

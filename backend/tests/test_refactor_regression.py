@@ -343,9 +343,12 @@ def test_special_link_bypasses_wave_window(admin_headers):
     ev2 = requests.get(f"{API}/events/{ev['slug']}", timeout=15).json()
     assert ev2["waves"][0]["available"] == avail_before
 
-    # special.used stays 0 until finalize
+    # `used` is drawn down at reservation, not at payment. It used to stay 0 until
+    # finalize, which is precisely audit finding M4: nothing held the link's capacity
+    # across the reserve->pay window, so N concurrent reservations against one invite
+    # link all passed and could all be paid. See test_oversell_races.py.
     sl_get = requests.get(f"{API}/special-links/{sl['token']}", timeout=15).json()
-    assert sl_get["link"]["used"] == 0, sl_get
+    assert sl_get["link"]["used"] == 1, sl_get
 
     # cleanup
     requests.delete(f"{API}/admin/special-links/{sl['link_id']}", headers=admin_headers, timeout=15)
