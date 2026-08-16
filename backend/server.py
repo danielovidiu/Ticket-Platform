@@ -926,11 +926,61 @@ class EventIn(BaseModel):
     waves: List[WaveIn] = []
 
 
+class WavePatchIn(WaveIn):
+    """A wave as it arrives on an event PATCH: the create shape, plus its id.
+
+    `wave_id` is optional because the same list carries both edits to existing waves and
+    brand-new ones; `admin_update_event` tells them apart by whether the id matches a wave
+    already on the event.
+
+    `available` is deliberately *not* a field here. Remaining stock is the server's
+    number, derived from capacity minus what has sold, and a client that could name it
+    could un-sell-out an event by hand.
+    """
+    wave_id: Optional[str] = None
+
+
+class EventPatchIn(BaseModel):
+    """Partial update for an event. Every field optional; unknown keys are dropped.
+
+    This mirrors `EventIn` rather than reusing it because a PATCH means something
+    different: absent is "leave it alone", not "reset it to the default".
+    """
+    title: Optional[str] = None
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    venue: Optional[str] = None
+    city: Optional[str] = None
+    starts_at: Optional[str] = None
+    ends_at: Optional[str] = None
+    doors_open_at: Optional[str] = None
+    image_url: Optional[str] = None
+    artist_ids: Optional[List[str]] = None
+    max_tickets_per_user: Optional[int] = None
+    is_published: Optional[bool] = None
+    sold_out_message: Optional[str] = None
+    waves: Optional[List[WavePatchIn]] = None
+
+
+class ArtistPatchIn(BaseModel):
+    """Partial update for an artist. Same bargain as `EventPatchIn`.
+
+    `links` stays a free-form dict on purpose — it is a bag of social URLs keyed by
+    platform — but it is now a *value* being replaced wholesale rather than a set of
+    top-level field names, so nothing in it can reach out into the document.
+    """
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    bio: Optional[str] = None
+    image_url: Optional[str] = None
+    links: Optional[dict] = None
+
+
 class EventNoticeIn(BaseModel):
     """A change announcement an admin sends to an event's ticket holders.
 
-    Typed on purpose: `admin_update_event` below takes an untyped dict (see its M6 note),
-    and this endpoint fans a body out to real inboxes, so its input is pinned down.
+    Typed on purpose, like the patch models above: this endpoint fans a body out to real
+    inboxes, so its input is pinned down.
     """
     kind: Literal["venue", "time", "lineup", "cancelled"]
     message: str = Field(min_length=1, max_length=4000)
@@ -2779,19 +2829,33 @@ async def admin_create_event(body: EventIn, user=Depends(require_admin)):
 
 
 @api.patch("/admin/events/{event_id}")
-async def admin_update_event(event_id: str, body: dict, user=Depends(require_admin)):
-    # SECURITY [M6 — mass assignment]: `body` is an untyped dict $set wholesale, so every
-    # EventIn validator is bypassed and ANY field name can be written — including dotted
-    # paths that reach into nested docs (e.g. "waves.0.available"). Admin-only, so this is
-    # privilege use rather than escalation, but it turns a hijacked admin session into
-    # arbitrary document mutation. Replace with a typed patch model.
-    body.pop("event_id", None)
-    body.pop("_id", None)
-    if "waves" in body:
-        new_waves = []
+async def admin_update_event(event_id: str, body: EventPatchIn, user=Depends(require_admin)):
+    """Write only the fields the caller actually sent.
+
+    This used to take a bare `dict` and `$set` it wholesale (audit M6). Two things came
+    with that. Every `EventIn` validator was skipped — but worse, the *key names* were the
+    caller's to choose, so a dotted path like `waves.0.available` went straight into
+    `$set` and rewrote wave stock Mongo-side without ever passing through the
+    reconciliation below. `EventPatchIn` closes both ends: unknown keys are dropped rather
+    than written, and `available` is not a name a client can reach.
+
+    `exclude_unset` is what keeps this a PATCH rather than a replace. Without it every
+    omitted field would be written back as its model default, so a request as small as
+    `{"is_published": true}` would blank the title along the way.
+    """
+    patch = body.model_dump(exclude_unset=True)
+
+    # An explicit `"waves": null` means "leave the lineup alone", not "delete every wave" —
+    # the destructive reading of a field a client may well send as empty.
+    if patch.get("waves") is None:
+        patch.pop("waves", None)
+    else:
+        # Dumped from the models rather than taken from `patch`, so wave defaults (`tier`,
+        # `access_from`) materialise instead of vanishing under `exclude_unset`.
         existing = await db.events.find_one({"event_id": event_id}, {"_id": 0})
         by_id = {w["wave_id"]: w for w in (existing.get("waves", []) if existing else [])}
-        for w in body["waves"]:
+        new_waves = []
+        for w in (wave.model_dump() for wave in body.waves):
             if w.get("wave_id") and w["wave_id"] in by_id:
                 prev = by_id[w["wave_id"]]
                 sold = prev["capacity"] - prev.get("available", prev["capacity"])
@@ -2800,8 +2864,12 @@ async def admin_update_event(event_id: str, body: dict, user=Depends(require_adm
                 w["wave_id"] = new_id("wave")
                 w["available"] = w["capacity"]
             new_waves.append(w)
-        body["waves"] = new_waves
-    await db.events.update_one({"event_id": event_id}, {"$set": body})
+        patch["waves"] = new_waves
+
+    # Reachable now in a way it was not before: a body of nothing but unknown keys used to
+    # write those keys, and now dumps to {}. Mongo rejects an empty `$set`.
+    if patch:
+        await db.events.update_one({"event_id": event_id}, {"$set": patch})
     return await db.events.find_one({"event_id": event_id}, {"_id": 0})
 
 
@@ -3154,9 +3222,12 @@ async def admin_create_artist(body: ArtistIn, user=Depends(require_admin)):
 
 
 @api.patch("/admin/artists/{artist_id}")
-async def admin_update_artist(artist_id: str, body: dict, user=Depends(require_admin)):
-    body.pop("_id", None)
-    await db.artists.update_one({"artist_id": artist_id}, {"$set": body})
+async def admin_update_artist(artist_id: str, body: ArtistPatchIn, user=Depends(require_admin)):
+    """The other half of M6 — same untyped `$set`, and this one did not even drop
+    `artist_id`, so a rename of the primary key was one request away."""
+    patch = body.model_dump(exclude_unset=True)
+    if patch:
+        await db.artists.update_one({"artist_id": artist_id}, {"$set": patch})
     return await db.artists.find_one({"artist_id": artist_id}, {"_id": 0})
 
 

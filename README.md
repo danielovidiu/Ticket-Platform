@@ -13,7 +13,8 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 > A security audit found one critical and three high-severity issues. **Three are fixed** —
 > C1 (payment bypass), H2 (limiter memory DoS) and H3 (admin takeover) — along with M1
 > (security headers), M2 (plaintext session tokens), M3 (CSRF on state-changing routes),
-> and both oversell races, M4 (special-link capacity) and M5 (per-user cap).
+> both oversell races — M4 (special-link capacity) and M5 (per-user cap) — and M6
+> (mass assignment on the admin patch routes).
 > **H1 (spoofable rate-limit key) is only half fixed and is still exploitable under
 > uvicorn** — see the checklist below.
 > **P1–P3 remain open.** Full detail in **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**.
@@ -205,7 +206,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**407 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
+**426 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
 everything else (Mongo URL, database name) comes from `backend/.env`, the same file the
 server reads. If the server isn't running the whole session skips with one clear message
 instead of a wall of connection errors.

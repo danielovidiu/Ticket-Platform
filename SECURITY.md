@@ -51,6 +51,7 @@ and the perimeter.
 | M1 | No security response headers at all | `nosniff`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, CSP on every response; HSTS on HTTPS; a sandboxed CSP on `/uploads` |
 | M2 | Session tokens stored in plaintext — a database read yielded live sessions for every user | Only `sha256(token)` is persisted; migrated in place without logging anyone out |
 | M3 | `SameSite=None` plus no CSRF defence left `multipart/form-data` writes reachable cross-site — JSON was safe only by accident, via the preflight the allowlist rejects | Cookie defaults to `SameSite=Lax`, and an `Origin` guard refuses cross-origin writes ahead of authentication. See **CSRF** below |
+| M6 | `PATCH /admin/events/{id}` and `/admin/artists/{id}` took an untyped `dict` and `$set` it wholesale, so the caller chose the *key names* — and a dotted one like `waves.0.available` wrote straight into a wave, past the code that derives stock from what has sold | `EventPatchIn` / `ArtistPatchIn`; unknown keys are dropped, so `$set` only ever sees names the model declares. See **Admin patch bodies** below |
 | — | `POST /auth/logout` read only the cookie, so a `Bearer` client got `200 {"ok":true}` while its session stayed valid (found while fixing M2) | Both call sites share `_presented_token`; logout revokes either form |
 
 **Still open:**
@@ -58,7 +59,7 @@ and the perimeter.
 | Id | Gap | Effect |
 |---|---|---|
 | H1 | `X-Forwarded-For` trusted with no proxy allowlist | Every rate limit bypassable; mail bombing; brute force |
-| M6–M12, L1–L4 | See the audit | |
+| M7–M12, L1–L4 | See the audit | |
 
 H1 is pinned by an `xfail(strict=True)` test in `backend/tests/test_security_hardening.py`,
 so the suite goes red the moment it is fixed without removing the marker.
@@ -244,6 +245,51 @@ N times the configured allowance — which is why `DEPLOY_VPS.md` runs a single 
 worker, and why moving the limiter to Redis is a prerequisite for ever running more than
 one. And IP keying is only as honest as `TRUSTED_IP_HEADER` plus a proxy that overwrites
 rather than appends: that is H1, still open.
+
+## Admin patch bodies — never take a bare `dict`
+
+A route that accepts `body: dict` and hands it to `$set` gives the caller two things, and
+the second is the dangerous one:
+
+1. **Skipped validation.** Every `EventIn` constraint is bypassed, so types and ranges the
+   create path enforces mean nothing on update.
+2. **The key names.** MongoDB reads a dot as a *path*. `{"waves.0.available": 999999}` is
+   not a field called `waves.0.available` — it is a write into the first wave's stock,
+   which never touches the reconciliation that derives remaining stock from capacity minus
+   what has sold. Same shape gets you `waves.0.price_ron`.
+
+That was audit M6, on `PATCH /admin/events/{id}` and `PATCH /admin/artists/{id}`. The
+routes are admin-only, so it was privilege *use* rather than escalation — but combined
+with M3 (before it was fixed) the write was reachable cross-site.
+
+**The pattern to follow** for any new admin update route:
+
+- A patch model with **every field optional**, separate from the create model. Absent has
+  to mean "leave it alone", not "reset to the default".
+- `model_dump(exclude_unset=True)` — this is what makes it a PATCH. Without it,
+  `{"is_published": true}` writes back every other field as its default and blanks the
+  title on the way past.
+- **Do not declare server-owned fields.** `WavePatchIn` has no `available`: remaining stock
+  is the server's number, and a client that can name it can hand itself inventory. Same
+  reasoning for ids, timestamps, and lifecycle fields like `status` / `cancelled_at`.
+- Guard the empty `$set`. Once unknown keys are dropped, a body of pure junk dumps to `{}`,
+  and Mongo rejects that — a path that was unreachable *because* the junk used to be
+  written.
+
+Extra keys are **ignored rather than rejected** (Pydantic's default). This is a deliberate
+call: the admin UI edits by sending back the whole document it was handed, ids and
+timestamps included, so `extra="forbid"` would turn every save into a 422. The cost is
+that a mistyped field name silently no-ops instead of being written, which is the better
+of the two failures. If a future route has a hand-written client, `extra="forbid"` there
+is strictly better.
+
+`admin_update_product` (`shop_routes.py`) reaches the same place by a different road — an
+explicit allowlist of writable keys — and `admin_set_role` only ever writes a role checked
+against a four-value enum. Both still have `body: dict` in the signature and so match a
+grep for the bug; neither is one.
+
+`backend/tests/test_mass_assignment.py` pins the contract from the outside — dotted paths,
+unknown keys, wave stock, and that a full round-trip from the UI still saves.
 
 ## Payments & fulfillment
 

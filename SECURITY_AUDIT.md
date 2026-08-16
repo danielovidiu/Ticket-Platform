@@ -30,7 +30,7 @@ both are the kind of thing that gets exploited within days of a public launch.
 |---|---|---|
 | Critical | 1 | Payment bypass via default config — **fixed** |
 | High | 3 | Rate-limit bypass, memory DoS, admin bootstrap race — **1 of 3 fixed (H3)** |
-| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1, M2 and both oversells (M4, M5) fixed** |
+| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1–M6 fixed; M7–M12 open** |
 | Low | 4 | Info leaks, incomplete refund path |
 
 ### Remediation status
@@ -42,9 +42,12 @@ both are the kind of thing that gets exploited within days of a public launch.
 | H2 | **Fixed** | Periodic sweep + per-bucket LRU cap |
 | M1 | **Fixed** | Security-headers middleware; path-specific CSP |
 | M2 | **Fixed** | `sha256` at rest, migrated in place with no forced logout |
+| M3 | **Fixed** | `SameSite=Lax` unconditionally + an `Origin` guard ahead of authentication |
+| M4, M5 | **Fixed** | Both oversells closed without transactions; races reproduced first |
+| M6 | **Fixed** | Typed patch models on event/artist updates; the dotted-path write is gone |
 | L5 | **Fixed** | Bearer clients could not actually log out (found while fixing M2) |
 | H1 | **Open — half fixed** | App-side `TRUSTED_IP_HEADER` shipped; uvicorn's `proxy_headers` default still rewrites `request.client.host`, so the bypass survives. Pinned by an `xfail(strict=True)` regression test. Top priority |
-| M3–M12, L1–L4 | Open | See the remediation plan |
+| M7–M12, L1–L4 | Open | See the remediation plan |
 | Stale deps | **Fixed** | 126 → 38 runtime packages; `starlette` past CVE-2024-47874 |
 | Test suite | **Fixed** | 240 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
 
@@ -410,15 +413,48 @@ The rollback deletes before releasing: a crash between the two strands stock tha
 admin can recover, where the reverse order would leave a live reservation holding stock
 already given back.
 
-### M6 — Admin update endpoints accept an unvalidated `dict`
+### M6 — Admin update endpoints accept an unvalidated `dict` — **FIXED**
 
-`admin_update_event` and `admin_update_artist` take `body: dict` and `$set` it wholesale
-after popping only `_id`/`event_id`. Any field name can be written, including dotted
+`admin_update_event` and `admin_update_artist` took `body: dict` and `$set` it wholesale
+after popping only `_id`/`event_id`. Any field name could be written, including dotted
 paths that reach into nested documents (`waves.0.available`).
 
-Admin-only, so this is privilege *use* rather than escalation — but it converts a
-compromised or careless admin session into arbitrary document mutation, and it bypasses
+Admin-only, so this is privilege *use* rather than escalation — but it converted a
+compromised or careless admin session into arbitrary document mutation, and it bypassed
 every `EventIn` validator. Editors do not have this route; that is the saving grace.
+
+**The half that actually bit.** Skipped validation was the visible problem; the dotted
+path was the real one. MongoDB reads a dotted key as a *path*, so `waves.0.available`
+was a write straight into a wave subdocument — bypassing the reconciliation that derives
+remaining stock from capacity minus what has sold, and leaving no trace anywhere. A
+single PATCH could un-sell-out an event, or set a wave's price to zero for the next
+buyer. `admin_update_artist` was worse still: it never popped `artist_id`, so one
+request could rename the primary key and orphan the record outright.
+
+**Fix (applied).** `EventPatchIn` / `ArtistPatchIn` — every field optional, dumped with
+`exclude_unset=True` so absent still means "leave it alone" and a request as small as
+`{"is_published": true}` does not blank the title. Unknown keys are dropped rather than
+written, which is what closes the dotted path: `$set` now only ever receives names the
+model declares.
+
+`WavePatchIn` deliberately has no `available` field. Remaining stock is the server's
+number, and a client that can name it can hand itself inventory.
+
+Extra keys are **ignored, not rejected**. The admin UI edits by sending back the whole
+document it was given — ids, timestamps, `status` and all — so `extra="forbid"` would
+have turned every save into a 422. The tradeoff is that a mistyped field name now
+no-ops silently instead of being written; that is the better failure of the two.
+
+One consequence worth noting: a body of nothing but unknown keys now dumps to `{}`, and
+Mongo rejects an empty `$set`. The handler skips the write instead. That path was
+unreachable before precisely *because* the junk was being written.
+
+`test_mass_assignment.py` (19 tests) pins it; 12 of them fail against the old handler.
+
+**Not part of this finding, checked while fixing it.** `admin_update_product`
+(`shop_routes.py`) already filters through an explicit allowlist, and `admin_set_role`
+only ever writes a role validated against a four-value enum. Both take `body: dict`, so
+they match on a grep, but neither is a mass-assignment hole.
 
 ### M7 — `origin_url` from the client drives Stripe redirect URLs
 
@@ -561,7 +597,8 @@ Ordered by risk reduced per unit of work. P0 is the "do not launch without this"
 10. **Atomic special-link capacity** — conditional `$inc` on reserve, mirroring
     `_atomic_hold_wave_stock`, with release on expiry. *(M4)*
 11. **Atomic per-user cap** — a unique-ish counter or conditional update. *(M5)*
-12. **Replace `body: dict` with typed patch models** on event and artist updates. *(M6)*
+12. ~~**Replace `body: dict` with typed patch models** on event and artist updates.~~ *(M6 —
+    done: `EventPatchIn` / `ArtistPatchIn`)*
 13. **Derive checkout URLs from `PUBLIC_APP_URL`.** *(M7)*
 14. **Sanitize CMS HTML on write**; drop the SVG profile; allowlist iframe origins and
     add `sandbox`. *(M10, M11)*
