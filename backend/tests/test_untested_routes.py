@@ -399,9 +399,11 @@ class TestNewsletterExport:
         assert any(row and row[0] == subscription for row in rows[1:])
 
     def test_an_editor_also_gets_the_list(self, editor_headers):
-        """Pinning what the route does today, not endorsing it: `require_admin_or_editor`
-        means the CMS-editor role can export every subscriber address. If that is not
-        intended, this is the test that should change first."""
+        """Deliberate, and confirmed: editors run the mailings, so `require_admin_or_editor`
+        is the intended gate rather than an oversight. Worth a test of its own precisely
+        because it looks like one — anyone tightening this to `require_admin` should have
+        to delete an assertion that says it was a decision. See SECURITY.md → Consent &
+        marketing."""
         assert _csv(editor_headers).status_code == 200
 
     def test_a_formula_in_the_source_field_is_neutralised(self, admin_headers, subscription):

@@ -339,6 +339,13 @@ unknown keys, wave stock, and that a full round-trip from the UI still saves.
   Emergent-owned key) has been removed. Any future analytics must be gated behind the
   `CookieConsent` opt-in, not fired on load.
 - CSV export uses the stdlib writer and neutralizes spreadsheet formula injection.
+- **`GET /admin/newsletter.csv` is open to the `editor` role as well as `admin`, and that
+  is deliberate** — editors run the mailings, so requiring an admin to hand them the list
+  each time would move the same file around by less careful means. It is the largest
+  single pile of personal data the API will return in one response, so the trade is worth
+  stating rather than leaving to be inferred from `require_admin_or_editor`: an editor
+  account is a subscriber-list export, and should be provisioned and revoked on that
+  basis. Pinned by `test_untested_routes.py::TestNewsletterExport`.
 
 ## Data-subject rights
 
