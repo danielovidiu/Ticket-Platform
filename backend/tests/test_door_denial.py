@@ -260,6 +260,120 @@ def _list(headers, **params):
                         headers=headers, timeout=TIMEOUT)
 
 
+class TestEventCancellation:
+    """Cancelling an event used to mark its tickets `refunded` outright, which said
+    something untrue — no money had moved — and made "we called the show off"
+    indistinguishable from "this buyer was refunded"."""
+
+    def _cancel(self, admin_headers, event_id):
+        return requests.post(f"{API}/admin/events/{event_id}/cancel",
+                             headers=admin_headers, timeout=TIMEOUT)
+
+    def test_issued_tickets_become_cancelled_not_refunded(self, admin_headers, event):
+        _h, uid, _e = mint_user()
+        t = _give_ticket(event["event_id"], uid)
+
+        r = self._cancel(admin_headers, event["event_id"])
+        assert r.status_code == 200, r.text
+        assert r.json()["tickets_cancelled"] == 1
+
+        stored = _stored(t["qr_code"])
+        assert stored["status"] == "cancelled", "a cancellation is not a completed refund"
+        assert stored["cancelled_at"]
+
+    def test_a_cancelled_ticket_does_not_scan(self, admin_headers, door_headers, event):
+        _h, uid, _e = mint_user()
+        t = _give_ticket(event["event_id"], uid)
+        self._cancel(admin_headers, event["event_id"])
+
+        res = _scan(door_headers, t["qr_code"]).json()
+        assert res["valid"] is False
+        assert "CANCELLED" in res["reason"]
+
+    def test_settled_tickets_are_left_alone(self, admin_headers, door_headers, event):
+        """A guest already inside, one refused at the door, and one already refunded are
+        each finished business — calling off what remains does not reopen them."""
+        _h, uid, _e = mint_user()
+        used = _give_ticket(event["event_id"], uid)
+        denied = _give_ticket(event["event_id"], uid)
+        already = _give_ticket(event["event_id"], uid, status="refunded")
+        _scan(door_headers, used["qr_code"])
+        _scan(door_headers, denied["qr_code"])
+        _deny(door_headers, denied["qr_code"], "No ID")
+
+        self._cancel(admin_headers, event["event_id"])
+
+        assert _stored(used["qr_code"])["status"] == "used"
+        assert _stored(denied["qr_code"])["status"] == "denied"
+        assert _stored(already["qr_code"])["status"] == "refunded"
+
+    def test_cancelled_ticket_can_then_be_refunded(self, admin_headers, event):
+        """`cancelled` is the state between calling the show off and paying people back."""
+        _h, uid, _e = mint_user()
+        t = _give_ticket(event["event_id"], uid)
+        self._cancel(admin_headers, event["event_id"])
+
+        r = requests.post(f"{API}/admin/tickets/{t['ticket_id']}/refund",
+                          headers=admin_headers, timeout=TIMEOUT)
+        assert r.status_code == 200, r.text
+        assert _stored(t["qr_code"])["status"] == "refunded"
+
+    def test_refunded_cancellation_stays_under_both_filters(self, admin_headers, event):
+        """Otherwise "who is still owed money?" has no answer once you start paying."""
+        _h, uid, _e = mint_user()
+        t = _give_ticket(event["event_id"], uid)
+        self._cancel(admin_headers, event["event_id"])
+        requests.post(f"{API}/admin/tickets/{t['ticket_id']}/refund",
+                      headers=admin_headers, timeout=TIMEOUT)
+
+        for status in ("cancelled", "refunded"):
+            rows = _list(admin_headers, status=status,
+                         event_id=event["event_id"]).json()["tickets"]
+            assert t["ticket_id"] in [r["ticket_id"] for r in rows], \
+                f"missing from the {status} filter"
+
+    def test_a_denial_is_not_a_cancellation(self, admin_headers, door_headers, event):
+        """The distinction the status exists for: both end at `refunded`, and the two
+        filters must not bleed into each other."""
+        _h, uid, _e = mint_user()
+        denied = _give_ticket(event["event_id"], uid)
+        cancelled = _give_ticket(event["event_id"], uid)
+        _scan(door_headers, denied["qr_code"])
+        _deny(door_headers, denied["qr_code"], "No ID")
+        self._cancel(admin_headers, event["event_id"])
+
+        def ids(status):
+            return {r["ticket_id"] for r in
+                    _list(admin_headers, status=status, event_id=event["event_id"]).json()["tickets"]}
+
+        assert ids("denied") == {denied["ticket_id"]}
+        assert ids("cancelled") == {cancelled["ticket_id"]}
+
+    def test_cancellation_notice_still_reaches_the_holders(self, admin_headers, event):
+        """The interaction that makes `cancelled` dangerous to add carelessly: cancelling
+        moves every ticket off `issued` *before* the admin writes the notice, so a
+        recipient query filtering on `issued` alone would announce the cancellation to
+        nobody — the one message that most has to arrive."""
+        _h, uid, _e = mint_user()
+        _give_ticket(event["event_id"], uid)
+        self._cancel(admin_headers, event["event_id"])
+
+        r = requests.get(f"{API}/admin/events/{event['event_id']}/notice-preview",
+                         headers=admin_headers, timeout=TIMEOUT)
+        assert r.status_code == 200, r.text
+        assert r.json()["recipient_count"] == 1, "the cancellation notice would reach nobody"
+
+    def test_counts_include_cancelled(self, admin_headers, event):
+        _h, uid, _e = mint_user()
+        _give_ticket(event["event_id"], uid)
+        _give_ticket(event["event_id"], uid)
+        self._cancel(admin_headers, event["event_id"])
+
+        counts = _list(admin_headers, event_id=event["event_id"]).json()["counts"]
+        assert counts["cancelled"] == 2
+        assert counts["issued"] == 0
+
+
 class TestTicketListing:
     def test_lists_denials_with_buyer_and_event(self, admin_headers, door_headers, event):
         _h, uid, email = mint_user()

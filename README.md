@@ -128,12 +128,12 @@ by an atomic counter.
 
 When an event moves, shifts its hour, changes lineup or is called off, **Admin → Events →
 Notify** emails the people holding tickets for it. The audience is computed server-side
-from *issued* tickets: refunded buyers are excluded, and one buyer is one email however
+from live tickets — issued, or cancelled once the show is called off: refunded and denied buyers are excluded, and one buyer is one email however
 many tickets they hold. The composer shows the recipient count before anything is sent.
 
 Nothing sends itself. Saving an event is silent, so a typo fix never mails anyone — an
-admin picks the change kind, writes the message, and confirms. Cancelling an event still
-refunds every ticket, but now hands straight over to the composer instead of doing it in
+admin picks the change kind, writes the message, and confirms. Cancelling an event moves its
+tickets to `cancelled` and hands straight over to the composer instead of doing it in
 silence. Past notices are listed per event so the same change isn't announced twice.
 
 The message is admin-written; the surrounding email is derived from the event record —
@@ -154,19 +154,28 @@ Denials are deliberately **not** queued offline. Scans are, because a queued sca
 admits the right person once it syncs; a queued denial would tell staff someone was
 refused while the ticket still read `used` in the morning.
 
-A ticket holds exactly one of four statuses, each with a single writer:
+A ticket holds exactly one of five statuses:
 
-| Status | Set by |
-|---|---|
-| `issued` | payment landing (`_finalize_paid_reservation`) |
-| `used` | a successful scan, first one wins |
-| `denied` | **DENY ENTRY** at the door — terminal |
-| `refunded` | event cancellation, whole-order refund, or single-ticket refund |
+| Status | Set by | |
+|---|---|---|
+| `issued` | payment landing (`_finalize_paid_reservation`) | |
+| `used` | a successful scan, first one wins | terminal |
+| `denied` | **DENY ENTRY** at the door | terminal |
+| `cancelled` | the event being called off — the holder is owed a refund | awaiting refund |
+| `refunded` | whole-order refund, or single-ticket refund | terminal |
+
+`cancelled` is the one that is *not* an end state. Calling a show off moves no money —
+every refund here is settled by hand in the Stripe dashboard — so marking those tickets
+`refunded` outright would have claimed something untrue, and would have made "we cancelled
+the show" indistinguishable from "this buyer was paid back". The question worth asking
+after a cancellation is **who is still owed money**, and only a distinct status can answer
+it.
 
 **Admin → Orders → Tickets** lists them all with a filter per status and per event.
-`Denied` filters on the denial *having happened* rather than on the current status, so a
-denial that has since been refunded appears under both — filtering it on status alone
-would hide exactly the rows you go looking for after settling up.
+`Denied` and `Cancelled` filter on the thing *having happened* rather than on the current
+status, because both end at `refunded` once the money goes back — so a settled case still
+appears under both. Filtering them on status alone would hide precisely the rows worth
+auditing.
 
 Refunding is handled there too, and refunds **one ticket** — the per-order refund would
 take the tickets of the friends who were admitted on the same purchase. Like every refund
@@ -196,7 +205,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**399 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
+**407 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
 everything else (Mongo URL, database name) comes from `backend/.env`, the same file the
 server reads. If the server isn't running the whole session skips with one clear message
 instead of a wall of connection errors.

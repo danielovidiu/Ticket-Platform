@@ -552,7 +552,7 @@ def test_special_link_flow(admin_headers):
 # ---------------- 11. Event cancel + Order refund ----------------
 
 def test_event_cancel_refunds_tickets(admin_headers):
-    """Create event, buy ticket, finalize, cancel event -> ticket refunded."""
+    """Create event, buy ticket, finalize, cancel event -> ticket cancelled (not yet refunded)."""
     user_headers = _fresh_user_headers()
     from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
@@ -606,7 +606,13 @@ def test_event_cancel_refunds_tickets(admin_headers):
         return tickets, ev_doc
 
     tickets, ev_doc = asyncio.run(check())
-    assert all(t["status"] == "refunded" for t in tickets), tickets
+    # `cancelled`, not `refunded`: calling the show off does not move any money — every
+    # refund here is settled by hand in the Stripe dashboard — and marking these refunded
+    # made "we cancelled" indistinguishable from "this buyer was paid back", so the one
+    # question worth asking afterwards, who is still owed, had no answer.
+    # See test_door_denial.py::TestEventCancellation.
+    assert all(t["status"] == "cancelled" for t in tickets), tickets
+    assert all(t.get("cancelled_at") for t in tickets), tickets
     assert ev_doc.get("cancelled") is True
     assert ev_doc.get("is_published") is False
 

@@ -2814,11 +2814,34 @@ async def admin_delete_event(event_id: str, user=Depends(require_admin)):
 
 @api.post("/admin/events/{event_id}/cancel")
 async def admin_cancel_event(event_id: str, user=Depends(require_admin)):
-    await db.events.update_one({"event_id": event_id}, {"$set": {"is_published": False, "cancelled": True}})
-    # Refund policy: mark tickets as refunded (real refund via Stripe would happen out-of-band)
-    await db.tickets.update_many({"event_id": event_id, "status": "issued"}, {"$set": {"status": "refunded"}})
-    await _audit(user["user_id"], "event_cancel", "event", event_id, None)
-    return {"ok": True}
+    """Call the event off. Holders keep a `cancelled` ticket until they are refunded.
+
+    These used to be marked `refunded` outright, which said something untrue — the money
+    has not moved, and every refund here is settled by hand in the Stripe dashboard. It
+    also made "we cancelled the show" indistinguishable from "this buyer was refunded",
+    so the one question worth asking afterwards — who is still owed money? — had no
+    answer in the data.
+
+    `cancelled` is not terminal: it is the state between calling the show off and paying
+    people back, and `admin_refund_ticket` moves it on. `cancelled_at` is what survives
+    that move, the way `denied_at` does for a denial, so a refunded cancellation can still
+    be told apart from an ordinary one.
+    """
+    now_iso = now_utc().isoformat()
+    await db.events.update_one(
+        {"event_id": event_id},
+        {"$set": {"is_published": False, "cancelled": True, "cancelled_at": now_iso}},
+    )
+    # Only `issued`. A `used` ticket belongs to someone already inside, a `denied` one to
+    # a decision staff made at the door, and a `refunded` one is already settled — none of
+    # those are undone by calling off what remains.
+    result = await db.tickets.update_many(
+        {"event_id": event_id, "status": "issued"},
+        {"$set": {"status": "cancelled", "cancelled_at": now_iso}},
+    )
+    await _audit(user["user_id"], "event_cancel", "event", event_id,
+                 {"tickets_cancelled": result.modified_count})
+    return {"ok": True, "tickets_cancelled": result.modified_count}
 
 
 # ---------- Event change notices ----------
@@ -2857,14 +2880,22 @@ def _fmt_when(iso: Optional[str]) -> str:
     return dt.strftime("%a %d %b %Y, %H:%M")
 
 
-async def _event_notice_recipients(event_id: str) -> List[dict]:
-    """The buyers a notice may reach: holders of *issued* tickets for this event.
+# Who still has a stake in what happens to an event. `cancelled` is in here for the case
+# that matters most: calling a show off moves every ticket to `cancelled` *before* the
+# admin writes the notice, so filtering on `issued` alone would send the cancellation
+# announcement to nobody at all. `used` holders are already inside, and `denied` and
+# `refunded` have no stake left.
+_NOTIFIABLE_TICKET_STATUSES = ("issued", "cancelled")
 
-    Refunded and cancelled tickets are excluded — someone who no longer holds a valid
-    ticket has no stake in a venue change. Deduped on the address, so a buyer holding
-    four tickets is one recipient rather than four copies of the same email.
+
+async def _event_notice_recipients(event_id: str) -> List[dict]:
+    """The buyers a notice may reach: anyone still holding a live ticket for this event.
+
+    Deduped on the address, so a buyer holding four tickets is one recipient rather than
+    four copies of the same email.
     """
-    user_ids = await db.tickets.distinct("user_id", {"event_id": event_id, "status": "issued"})
+    user_ids = await db.tickets.distinct(
+        "user_id", {"event_id": event_id, "status": {"$in": list(_NOTIFIABLE_TICKET_STATUSES)}})
     if not user_ids:
         return []
     recipients, seen = [], set()
@@ -3003,13 +3034,20 @@ async def admin_refund(reservation_id: str, user=Depends(require_admin)):
     return {"ok": True}
 
 
-# Every status a ticket can hold. There are exactly four, and each has one writer:
-#   issued   — _finalize_paid_reservation, when payment lands
-#   used     — /scan, first scan wins
-#   denied   — /scan/deny, terminal; scan_ticket only admits `issued`
-#   refunded — three writers: event cancellation, whole-order refund, single-ticket refund
+# Every status a ticket can hold, and who writes it:
+#   issued    — _finalize_paid_reservation, when payment lands
+#   used      — /scan, first scan wins
+#   denied    — /scan/deny, terminal; scan_ticket only admits `issued`
+#   cancelled — admin_cancel_event; the show is off and this holder is owed a refund
+#   refunded  — whole-order refund, or single-ticket refund
 # Kept here rather than inline so the admin filter and the API cannot drift apart.
-TICKET_STATUSES = ("issued", "used", "denied", "refunded")
+TICKET_STATUSES = ("issued", "used", "denied", "cancelled", "refunded")
+
+# Two of those are *events that happened* rather than states a ticket rests in: a denial
+# and a cancellation both end at `refunded` once the money is returned. Filtering them on
+# the current status would hide every settled case — exactly the rows worth auditing — so
+# they match on their timestamp instead and a refunded ticket appears under both.
+_TICKET_HISTORY_FIELDS = {"denied": "denied_at", "cancelled": "cancelled_at"}
 
 
 @api.get("/admin/tickets")
@@ -3020,19 +3058,18 @@ async def admin_list_tickets(
 ):
     """Every ticket and where it stands, newest first, optionally filtered.
 
-    `status=denied` matches on `denied_at` rather than the status field, because a denial
-    that has since been refunded still *happened* — it moves to `refunded` but belongs in
-    both lists. Filtering the denial history on the current status would hide exactly the
-    rows an admin goes looking for after settling up.
+    `denied` and `cancelled` match on their timestamps rather than the status field — see
+    _TICKET_HISTORY_FIELDS. Both end at `refunded` once the money goes back, so filtering
+    them on the current status would hide every case that has been settled, which is the
+    opposite of what someone auditing them wants.
     """
     if status and status not in TICKET_STATUSES:
         raise HTTPException(400, f"Unknown status. Expected one of: {', '.join(TICKET_STATUSES)}")
 
     q = {}
-    if status == "denied":
-        q["denied_at"] = {"$exists": True}
-    elif status:
-        q["status"] = status
+    if status:
+        history_field = _TICKET_HISTORY_FIELDS.get(status)
+        q.update({history_field: {"$exists": True}} if history_field else {"status": status})
     if event_id:
         q["event_id"] = event_id
 
@@ -3042,9 +3079,11 @@ async def admin_list_tickets(
     # tab labels stay stable as you click between them rather than collapsing to the
     # filter you already chose.
     scope = {"event_id": event_id} if event_id else {}
-    counts = {s: await db.tickets.count_documents(
-        {**scope, **({"denied_at": {"$exists": True}} if s == "denied" else {"status": s})}
-    ) for s in TICKET_STATUSES}
+    counts = {}
+    for s in TICKET_STATUSES:
+        field = _TICKET_HISTORY_FIELDS.get(s)
+        counts[s] = await db.tickets.count_documents(
+            {**scope, **({field: {"$exists": True}} if field else {"status": s})})
     counts["all"] = await db.tickets.count_documents(scope)
 
     if not tickets:

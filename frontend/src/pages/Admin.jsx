@@ -457,6 +457,7 @@ const TICKET_FILTERS = [
   ["issued", "Issued"],
   ["used", "Used"],
   ["denied", "Denied"],
+  ["cancelled", "Cancelled"],
   ["refunded", "Refunded"],
 ];
 
@@ -464,6 +465,11 @@ const TICKET_STATUS_CLASS = {
   issued: "border-ink/20 text-ink-2",
   used: "border-ok/50 text-ok",
   denied: "border-brand/60 text-brand",
+  // Solid rather than outlined, and louder than a denial on purpose: one guest refused at
+  // the door is a decision, a cancelled show is money the platform owes every holder.
+  // (There is no `warn` token in the palette — page/ink/brand/ok/line is the whole set —
+  // so this is weight, not a new hue.)
+  cancelled: "bg-brand text-brand-fg border-brand",
   refunded: "border-ink/20 text-ink-4",
 };
 
