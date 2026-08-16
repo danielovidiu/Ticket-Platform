@@ -263,7 +263,8 @@ rather than appends: that is H1, still open.
   unsubscribed. **Invoices and tickets are retained** (with the now-anonymized user
   reference) for fiscal/audit obligations. The last remaining admin cannot delete
   themselves.
-- **Audit log** (`audit_log`): role changes, refunds, event cancel/delete, event change
+- **Audit log** (`audit_log`): role changes, refunds (per order and per ticket), door
+  denials — who refused whom, for which event, and the stated reason — event cancel/delete, event change
   notices (who mailed which event's holders, with the recipient count), newsletter
   deletes, and account deletions.
 

@@ -407,11 +407,34 @@ function EventAlbum({ eventId }) {
   return <AlbumManager eventId={eventId} emptyHint="No photos or videos in this event album yet." />;
 }
 
+// Two things live under Orders: the purchases (reservations) and the tickets those
+// purchases produced. They are different objects with different lifecycles — an order is
+// paid or refunded, a ticket is issued, used, denied or refunded — so they get one view
+// each rather than one confused list.
 function Orders() {
+  const [view, setView] = useState("orders");
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 pb-4 hairline-b">
+        {[["orders", "Purchases"], ["tickets", "Tickets"]].map(([k, label]) => (
+          <button key={k} onClick={() => setView(k)} data-testid={`orders-view-${k}`}
+                  className={`px-3 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${view === k ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="mt-6">
+        {view === "orders" ? <OrderList /> : <TicketList />}
+      </div>
+    </div>
+  );
+}
+
+function OrderList() {
   const [orders, setOrders] = useState([]);
   const load = () => http.get("/admin/orders").then((r) => setOrders(r.data));
   useEffect(() => { load(); }, []);
-  const refund = async (id) => { if (!confirm("Refund?")) return; await http.post(`/admin/orders/${id}/refund`); load(); };
+  const refund = async (id) => { if (!confirm("Refund the whole order? Every ticket on it is refunded.")) return; await http.post(`/admin/orders/${id}/refund`); load(); };
   return (
     <div className="space-y-2">
       {orders.map((o) => (
@@ -424,6 +447,104 @@ function Orders() {
           <div className="lg:col-span-2 min-w-0 lg:text-right">{o.status === "paid" && <button onClick={() => refund(o.reservation_id)} className="btn-primary text-xs">Refund</button>}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// The four statuses a ticket can hold, mirroring TICKET_STATUSES in server.py.
+const TICKET_FILTERS = [
+  ["all", "All"],
+  ["issued", "Issued"],
+  ["used", "Used"],
+  ["denied", "Denied"],
+  ["refunded", "Refunded"],
+];
+
+const TICKET_STATUS_CLASS = {
+  issued: "border-ink/20 text-ink-2",
+  used: "border-ok/50 text-ok",
+  denied: "border-brand/60 text-brand",
+  refunded: "border-ink/20 text-ink-4",
+};
+
+// Every ticket and where it stands. `Denied` is a history filter rather than a status
+// filter — a denial that has since been refunded still happened, so it stays listed here
+// as well as under Refunded. Filtering it on the current status would hide exactly the
+// rows you go looking for after settling up.
+function TicketList() {
+  const [status, setStatus] = useState("all");
+  const [tickets, setTickets] = useState([]);
+  const [counts, setCounts] = useState({});
+  const [events, setEvents] = useState([]);
+  const [eventId, setEventId] = useState("");
+
+  // Bumped after a refund to re-run the fetch. Keeping the request inside the effect
+  // rather than calling a `load()` defined outside it is what keeps the dependency list
+  // honest — the alternative needs either a useCallback or a lint suppression.
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    const q = new URLSearchParams();
+    if (status !== "all") q.set("status", status);
+    if (eventId) q.set("event_id", eventId);
+    http.get(`/admin/tickets?${q}`)
+      .then((r) => { setTickets(r.data.tickets); setCounts(r.data.counts); })
+      .catch(() => { setTickets([]); setCounts({}); });
+  }, [status, eventId, reloadKey]);
+
+  useEffect(() => { http.get("/admin/events").then((r) => setEvents(r.data)).catch(() => setEvents([])); }, []);
+
+  const refund = async (t) => {
+    const price = Number(t.price_ron || 0).toFixed(2);
+    if (!confirm(`Refund this one ticket (${price} RON) to ${t.buyer?.email || "the buyer"}?\n\nThe other tickets on the same order are not affected. Money is returned in the Stripe dashboard.`)) return;
+    try {
+      await http.post(`/admin/tickets/${t.ticket_id}/refund`);
+      toast.success("Ticket marked refunded");
+      setReloadKey((k) => k + 1);
+    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 items-center">
+        {TICKET_FILTERS.map(([k, label]) => (
+          <button key={k} onClick={() => setStatus(k)} data-testid={`ticket-filter-${k}`}
+                  className={`px-3 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${status === k ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>
+            {label}
+            {counts[k] !== undefined && <span className="ml-2 opacity-60">{counts[k]}</span>}
+          </button>
+        ))}
+        <select value={eventId} onChange={(e) => setEventId(e.target.value)}
+                data-testid="ticket-event-filter" className="input-x w-auto ml-auto">
+          <option value="">All events</option>
+          {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
+        </select>
+      </div>
+
+      {tickets.length === 0 ? (
+        <div className="mt-6 font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4">No tickets match this filter.</div>
+      ) : (
+        <div className="mt-4 space-y-2">
+          {tickets.map((t) => (
+            <div key={t.ticket_id} className="border border-ink/10 bg-surface p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center text-sm">
+              <div className="lg:col-span-3 min-w-0 font-display font-bold uppercase break-words lg:truncate">{t.event?.title || t.event_id}</div>
+              <div className="lg:col-span-3 min-w-0 font-mono-x text-xs break-words lg:truncate">{t.buyer?.email || t.user_id}</div>
+              <div className="lg:col-span-2 min-w-0 font-mono-x text-[10px] break-words lg:truncate text-ink-3">{t.qr_code}</div>
+              {/* The denial reason is the one thing a status chip cannot carry, so it
+                  earns its own column wherever a ticket has one. */}
+              <div className="lg:col-span-2 min-w-0 text-xs break-words">
+                {t.denied_at ? (t.deny_reason || <span className="text-ink-4">denied · no reason given</span>) : null}
+              </div>
+              <div className="lg:col-span-2 min-w-0 flex flex-wrap gap-2 lg:justify-end items-center">
+                <span className={`inline-block border px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] ${TICKET_STATUS_CLASS[t.status] || "border-ink/20"}`}>{t.status}</span>
+                {t.status !== "refunded" && (
+                  <button onClick={() => refund(t)} data-testid={`refund-ticket-${t.ticket_id}`} className="btn-primary text-xs">Refund</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

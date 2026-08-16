@@ -143,6 +143,37 @@ holds, so unlike the newsletter they carry no `List-Unsubscribe` header and igno
 marketing opt-ins. Sends are capped per admin per hour, keyed on the account rather than
 the IP so anonymous traffic cannot spend a real admin's budget before a cancellation.
 
+## At the door
+
+The scanner admits a valid ticket once — first scan wins — and can also refuse one.
+**DENY ENTRY** on a valid verdict turns the guest away and moves the ticket to `denied`,
+which is terminal: rescanning reads `TICKET DENIED`, so nobody gets in by rejoining the
+queue. The denial records who refused, when, and an optional reason.
+
+Denials are deliberately **not** queued offline. Scans are, because a queued scan still
+admits the right person once it syncs; a queued denial would tell staff someone was
+refused while the ticket still read `used` in the morning.
+
+A ticket holds exactly one of four statuses, each with a single writer:
+
+| Status | Set by |
+|---|---|
+| `issued` | payment landing (`_finalize_paid_reservation`) |
+| `used` | a successful scan, first one wins |
+| `denied` | **DENY ENTRY** at the door — terminal |
+| `refunded` | event cancellation, whole-order refund, or single-ticket refund |
+
+**Admin → Orders → Tickets** lists them all with a filter per status and per event.
+`Denied` filters on the denial *having happened* rather than on the current status, so a
+denial that has since been refunded appears under both — filtering it on status alone
+would hide exactly the rows you go looking for after settling up.
+
+Refunding is handled there too, and refunds **one ticket** — the per-order refund would
+take the tickets of the friends who were admitted on the same purchase. Like every refund
+here it marks the status; the money is returned in the Stripe dashboard. Wave stock is not
+returned, and does not need to be: a denial can only happen once the event has started, so
+there is nothing left to sell back into.
+
 ## Compliance
 
 Consent logging, newsletter double opt-in + one-click unsubscribe, data export, and
@@ -165,7 +196,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**368 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
+**391 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
 everything else (Mongo URL, database name) comes from `backend/.env`, the same file the
 server reads. If the server isn't running the whole session skips with one clear message
 instead of a wall of connection errors.

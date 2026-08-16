@@ -2629,6 +2629,14 @@ class ScanIn(BaseModel):
     qr_code: str
 
 
+class ScanDenyIn(BaseModel):
+    qr_code: str
+    # Why someone was turned away is most of the value of the record — an unexplained
+    # denial is hard to defend later. Optional because the door is not the place to
+    # force typing, and a blank reason is better than a wrong one.
+    reason: str = Field(default="", max_length=200)
+
+
 @api.post("/scan")
 async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
     t = await db.tickets.find_one({"qr_code": body.qr_code}, {"_id": 0})
@@ -2657,6 +2665,49 @@ async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
 
     ticket = await db.tickets.find_one({"qr_code": body.qr_code}, {"_id": 0})
     return {"valid": True, "ticket": ticket, "event": ev}
+
+
+@api.post("/scan/deny")
+async def deny_ticket(body: ScanDenyIn, user=Depends(require_admin_or_door)):
+    """Turn a guest away whose ticket was otherwise good.
+
+    The opposite outcome to /scan, and until now unrecordable: someone refused at the
+    door for no ID, intoxication or a refused search was left marked `used`, identical in
+    the data to someone who walked in. `denied` is terminal — scan_ticket only admits
+    `issued`, so a denied guest cannot rescan their way back in.
+
+    Only `used` -> `denied`, because the button that calls this appears on a valid
+    verdict and a valid verdict has just marked the ticket used. Same conditional-write
+    shape as the scan itself, so two doors pressing at once resolve to one decision.
+    """
+    t = await db.tickets.find_one({"qr_code": body.qr_code}, {"_id": 0})
+    if not t:
+        return {"ok": False, "reason": "TICKET NOT FOUND"}
+
+    # Idempotent on purpose. Door staff work on a phone at the edge of the wifi; a lost
+    # response followed by a retry must not report failure for a decision that landed.
+    if t["status"] == "denied":
+        return {"ok": True, "reason": "ALREADY DENIED", "ticket": t}
+
+    now_iso = now_utc().isoformat()
+    upd = await db.tickets.update_one(
+        {"qr_code": body.qr_code, "status": "used"},
+        {"$set": {
+            "status": "denied",
+            "denied_at": now_iso,
+            "denied_by": user["user_id"],
+            "deny_reason": body.reason.strip(),
+        }},
+    )
+    if upd.modified_count != 1:
+        current = await db.tickets.find_one({"qr_code": body.qr_code}, {"_id": 0})
+        return {"ok": False, "reason": f"CANNOT DENY — TICKET {current['status'].upper()}",
+                "ticket": current}
+
+    ticket = await db.tickets.find_one({"qr_code": body.qr_code}, {"_id": 0})
+    await _audit(user["user_id"], "door_deny", "ticket", ticket["ticket_id"],
+                 {"event_id": ticket["event_id"], "reason": ticket.get("deny_reason", "")})
+    return {"ok": True, "ticket": ticket}
 
 
 # ---------- Admin ----------
@@ -2950,6 +3001,103 @@ async def admin_refund(reservation_id: str, user=Depends(require_admin)):
     await db.tickets.update_many({"reservation_id": reservation_id}, {"$set": {"status": "refunded"}})
     await _audit(user["user_id"], "order_refund", "reservation", reservation_id, None)
     return {"ok": True}
+
+
+# Every status a ticket can hold. There are exactly four, and each has one writer:
+#   issued   — _finalize_paid_reservation, when payment lands
+#   used     — /scan, first scan wins
+#   denied   — /scan/deny, terminal; scan_ticket only admits `issued`
+#   refunded — three writers: event cancellation, whole-order refund, single-ticket refund
+# Kept here rather than inline so the admin filter and the API cannot drift apart.
+TICKET_STATUSES = ("issued", "used", "denied", "refunded")
+
+
+@api.get("/admin/tickets")
+async def admin_list_tickets(
+    status: Optional[str] = None,
+    event_id: Optional[str] = None,
+    user=Depends(require_admin),
+):
+    """Every ticket and where it stands, newest first, optionally filtered.
+
+    `status=denied` matches on `denied_at` rather than the status field, because a denial
+    that has since been refunded still *happened* — it moves to `refunded` but belongs in
+    both lists. Filtering the denial history on the current status would hide exactly the
+    rows an admin goes looking for after settling up.
+    """
+    if status and status not in TICKET_STATUSES:
+        raise HTTPException(400, f"Unknown status. Expected one of: {', '.join(TICKET_STATUSES)}")
+
+    q = {}
+    if status == "denied":
+        q["denied_at"] = {"$exists": True}
+    elif status:
+        q["status"] = status
+    if event_id:
+        q["event_id"] = event_id
+
+    tickets = await db.tickets.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+    # Counts are computed over the same event scope but ignore the status filter, so the
+    # tab labels stay stable as you click between them rather than collapsing to the
+    # filter you already chose.
+    scope = {"event_id": event_id} if event_id else {}
+    counts = {s: await db.tickets.count_documents(
+        {**scope, **({"denied_at": {"$exists": True}} if s == "denied" else {"status": s})}
+    ) for s in TICKET_STATUSES}
+    counts["all"] = await db.tickets.count_documents(scope)
+
+    if not tickets:
+        return {"tickets": [], "counts": counts}
+
+    # Two lookups rather than one per row — N+1 against Mongo for a screen that can list
+    # a whole event's tickets is waste the admin pays for on every filter click.
+    events = {e["event_id"]: e for e in await db.events.find(
+        {"event_id": {"$in": list({t["event_id"] for t in tickets})}},
+        {"_id": 0, "event_id": 1, "title": 1, "starts_at": 1, "ends_at": 1}).to_list(500)}
+    users = {u["user_id"]: u for u in await db.users.find(
+        {"user_id": {"$in": list({t["user_id"] for t in tickets})}},
+        {"_id": 0, "user_id": 1, "email": 1, "name": 1}).to_list(1000)}
+
+    return {
+        "counts": counts,
+        "tickets": [{
+            **t,
+            "event": events.get(t["event_id"], {}),
+            "buyer": users.get(t["user_id"], {}),
+        } for t in tickets],
+    }
+
+
+@api.post("/admin/tickets/{ticket_id}/refund")
+async def admin_refund_ticket(ticket_id: str, user=Depends(require_admin)):
+    """Refund one ticket, not the order it came on.
+
+    admin_refund above refunds a whole reservation, which is right for a cancellation and
+    wrong for a denial: turning one guest away must not refund the three friends who got
+    in on the same purchase.
+
+    Like that endpoint this only marks the status — the money is returned out-of-band in
+    the Stripe dashboard. And like it, wave stock is not returned: a seat at a finished
+    event has nothing to sell back into.
+
+    `denied_at` and `deny_reason` are left untouched, so after the status moves on to
+    `refunded` the record still says why.
+    """
+    t = await db.tickets.find_one({"ticket_id": ticket_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(404, "Ticket not found")
+    if t["status"] == "refunded":
+        return {"ok": True, "already": True, "ticket": t}
+
+    await db.tickets.update_one(
+        {"ticket_id": ticket_id},
+        {"$set": {"status": "refunded", "refunded_at": now_utc().isoformat()}},
+    )
+    await _audit(user["user_id"], "ticket_refund", "ticket", ticket_id,
+                 {"event_id": t["event_id"], "was": t["status"],
+                  "price_ron": t.get("price_ron")})
+    return {"ok": True, "ticket": await db.tickets.find_one({"ticket_id": ticket_id}, {"_id": 0})}
 
 
 @api.get("/admin/artists")
