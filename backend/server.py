@@ -21,7 +21,7 @@ import httpx
 import qrcode
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, Cookie, Header, UploadFile, File, Form, Query
-from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import urlencode, quote, urlsplit
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -3617,6 +3617,51 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# SECURITY [M3 — fixed]: cross-site request forgery on state-changing routes.
+#
+# The cookie is SameSite=Lax by default, which already refuses to ride along on a
+# cross-site POST. Two things that does not cover, and this middleware does:
+#
+#   * Subdomains are same-site. SameSite considers anything.example.com same-site with
+#     example.com, so a hijacked or user-content subdomain still gets the cookie. An
+#     Origin check does not — a different host is a different origin.
+#   * The whole protection currently rests on one environment variable. COOKIE_SAMESITE
+#     may legitimately be set to "none", and then nothing else stands in the way.
+#
+# What was actually reachable before this: JSON bodies are safe by accident, because
+# application/json forces a CORS preflight the allowlist rejects. multipart/form-data is
+# CORS-safelisted and needs no preflight, which left POST /admin/uploads and the CMS font
+# upload writable cross-site by an authenticated admin's browser.
+#
+# A MISSING Origin header is allowed, deliberately. Browsers always send it on a
+# cross-origin write, so its absence means the caller is not a browser — the Stripe
+# webhook, curl, the test suite on Bearer tokens. Rejecting that would break those and buy
+# nothing, since an attacker driving a browser cannot suppress the header.
+_CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+# Sign in with Apple POSTs the callback from Apple's own origin — a legitimate cross-site
+# write that this check would otherwise kill. It carries its own `state` cookie for the
+# same job. Everything else must come from us.
+_CSRF_EXEMPT_PATHS = ("/api/auth/apple/callback",)
+
+# PUBLIC_APP_URL is unioned in on purpose. CORS_ORIGINS only has to list origins that make
+# *cross-origin* calls, so on a single-origin deployment it can legitimately omit the app's
+# own address — and an Origin check built on that list alone would then reject the
+# frontend's own requests. This is the failure that would only show up in production.
+_ALLOWED_ORIGINS = frozenset(_cors_origins) | {PUBLIC_APP_URL}
+
+
+@app.middleware("http")
+async def csrf_origin_guard(request: Request, call_next):
+    if request.method not in _CSRF_SAFE_METHODS and request.url.path not in _CSRF_EXEMPT_PATHS:
+        origin = request.headers.get("origin", "")
+        if origin and origin not in _ALLOWED_ORIGINS:
+            logger.warning("CSRF: refused %s %s from origin %r",
+                           request.method, request.url.path, origin)
+            return JSONResponse(status_code=403, content={"detail": "Cross-origin request refused"})
+    return await call_next(request)
+
 
 # SECURITY [M1 — fixed]: no security response headers were set at all. Added here rather
 # than at the proxy so the guarantee travels with the app and holds in dev too.

@@ -333,9 +333,15 @@ logged-in user, admins included.
 **Fix.** Store `sha256(token)` and look up by hash. The token stays a bearer secret in
 the cookie; the database stops holding a credential.
 
-### M3 — `SameSite=None` with no CSRF token; multipart upload is exposed
+### M3 — `SameSite=None` with no CSRF token; multipart upload is exposed — **FIXED**
 
-On HTTPS the session cookie is `SameSite=None; Secure` and there is no CSRF token or
+> Partly overtaken by events before the full fix: `COOKIE_SAMESITE` had already been
+> changed to default to `lax` unconditionally, which alone closes the attack described
+> below. The finding as written — "on HTTPS the session cookie is `SameSite=None`" — was
+> stale by then. What remained, and is now also fixed, is the absence of any independent
+> check.
+
+On HTTPS the session cookie *was* `SameSite=None; Secure`, and there was no CSRF token or
 `Origin` check anywhere.
 
 JSON bodies are protected incidentally: `application/json` forces a CORS preflight, which
@@ -348,8 +354,23 @@ storage abuse and content planting.
 `POST /api/auth/apple/callback` is form-encoded for the same reason (unavoidable — it's
 Apple's protocol), and is protected by the `state` cookie instead.
 
-**Fix.** Use `SameSite=Lax` unless the frontend genuinely sits on a different site; add
-an `Origin`/`Referer` check on state-changing routes.
+**Fix (applied).** Both halves of the original recommendation:
+
+1. `COOKIE_SAMESITE` defaults to `lax` unconditionally; `none` is still permitted for a
+   genuinely cross-site frontend, validated at startup and warned about.
+2. `csrf_origin_guard` refuses any state-changing request whose `Origin` is present and
+   not in the allowlist, **before authentication runs**. That is what covers the case
+   `SameSite` structurally cannot: subdomains are same-site, so a hijacked
+   `anything.example.com` still gets the cookie — but it is not the same *origin*.
+
+A missing `Origin` is allowed on purpose: browsers always send it on a cross-origin write,
+so its absence identifies a non-browser caller (Stripe's webhook, `curl`, the test suite on
+Bearer tokens). Rejecting those breaks them and stops nobody. The Apple callback is exempt
+because it is a legitimate cross-site POST from Apple, already guarded by its `state`
+cookie.
+
+No token scheme: a double-submit token needs a JS-readable cookie and client plumbing on
+every call site, for coverage the origin check already provides. See SECURITY.md → CSRF.
 
 ### M4 — Special-link capacity check is TOCTOU (oversell) — **FIXED**
 

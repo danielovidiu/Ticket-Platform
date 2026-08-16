@@ -50,6 +50,7 @@ and the perimeter.
 | H2 | Rate-limiter keys were created per IP and per email and never removed — a memory-exhaustion DoS | Periodic sweep drops keys whose window has expired, plus a per-bucket cap with LRU eviction |
 | M1 | No security response headers at all | `nosniff`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, CSP on every response; HSTS on HTTPS; a sandboxed CSP on `/uploads` |
 | M2 | Session tokens stored in plaintext — a database read yielded live sessions for every user | Only `sha256(token)` is persisted; migrated in place without logging anyone out |
+| M3 | `SameSite=None` plus no CSRF defence left `multipart/form-data` writes reachable cross-site — JSON was safe only by accident, via the preflight the allowlist rejects | Cookie defaults to `SameSite=Lax`, and an `Origin` guard refuses cross-origin writes ahead of authentication. See **CSRF** below |
 | — | `POST /auth/logout` read only the cookie, so a `Bearer` client got `200 {"ok":true}` while its session stayed valid (found while fixing M2) | Both call sites share `_presented_token`; logout revokes either form |
 
 **Still open:**
@@ -57,7 +58,6 @@ and the perimeter.
 | Id | Gap | Effect |
 |---|---|---|
 | H1 | `X-Forwarded-For` trusted with no proxy allowlist | Every rate limit bypassable; mail bombing; brute force |
-| M3 | `SameSite=None` with no CSRF token | Cross-site writes to `/admin/uploads` |
 | M6–M12, L1–L4 | See the audit | |
 
 H1 is pinned by an `xfail(strict=True)` test in `backend/tests/test_security_hardening.py`,
@@ -153,6 +153,47 @@ token from one flow can't be replayed against another:
 | `pwd-reset`    | 1h      | Single-use: bound to the current password-hash tail |
 | `news-confirm` | 7d      | Double opt-in |
 | `news-unsub`   | 365d    | One-click unsubscribe; idempotent |
+
+## CSRF
+
+Two layers, covering different things. Neither is a token scheme — see the note at the end
+for why.
+
+**1. `SameSite=Lax` on the session cookie.** Default, unconditional, and it refuses to send
+the cookie on a cross-site POST at all. `COOKIE_SAMESITE=none` is still accepted for a
+genuinely cross-site frontend, but it is validated at startup and logs a warning.
+
+**2. An `Origin` guard** (`csrf_origin_guard`) on every state-changing method, which is
+what covers the two things `SameSite` cannot:
+
+- **Subdomains are same-site.** `SameSite` considers `anything.example.com` same-site with
+  `example.com`, so a hijacked or user-content subdomain still receives the cookie. A
+  different host is a different *origin*, so the guard rejects it.
+- **One env var should not be the whole defence.** If `COOKIE_SAMESITE` is ever set to
+  `none`, this still stands.
+
+It runs **before authentication**, so a valid admin session does not buy a foreign page a
+write, and the refusal costs no database work.
+
+Three deliberate choices in it, each of which breaks something if reversed:
+
+- **A missing `Origin` is allowed.** Browsers always send it on a cross-origin write, so
+  its absence means the caller is not a browser — the Stripe webhook, `curl`, the test
+  suite on Bearer tokens. Refusing that breaks them and stops no attacker, who cannot
+  suppress the header from a browser.
+- **`POST /api/auth/apple/callback` is exempt.** Sign in with Apple posts it from Apple's
+  origin; that is a legitimate cross-site write, and it carries its own `state` cookie for
+  the same purpose.
+- **`PUBLIC_APP_URL` is unioned into the allowlist.** `CORS_ORIGINS` only needs to list
+  origins making *cross-origin* calls, so a single-origin deployment can legitimately omit
+  its own address — and a guard built on that list alone would then reject the frontend's
+  own requests, in production only.
+
+**Why no CSRF token.** A double-submit token needs a JS-readable cookie, which widens what
+an XSS can do, and adds client plumbing that must not be forgotten on any new call site.
+`Lax` plus an origin check covers the realistic attacks — including the subdomain case a
+token would also cover — at a fraction of the surface. `backend/tests/test_csrf_origin.py`
+pins both the refusals and the exemptions.
 
 ## Rate limiting — which of the two to reach for
 
