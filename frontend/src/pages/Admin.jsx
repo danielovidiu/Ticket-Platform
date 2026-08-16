@@ -9,6 +9,7 @@ import { SOCIAL_PLATFORMS } from "../lib/social";
 import AlbumManager from "../components/AlbumManager";
 import ImageField from "../components/ImageField";
 import { ShopProducts, ShopOrders, ShopSettings } from "../components/ShopAdmin";
+import { eventStatus, STATUS_CLASS, TICKET_FILTERS, TICKET_STATUS_CLASS } from "../lib/ticketStatus";
 
 const TABS = ["stats", "events", "orders", "shop", "shop orders", "shop settings",
               "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
@@ -138,16 +139,6 @@ function Stats() {
 // An event is "past" once it ends (falling back to its start time when no end
 // is set) — matches the same rule the public /events feed uses, so admin status
 // never disagrees with what visitors actually see.
-function eventStatus(e) {
-  if (!e.is_published) return "DRAFT";
-  const endMoment = e.ends_at || e.starts_at;
-  return new Date(endMoment) < new Date() ? "PAST" : "LIVE";
-}
-const STATUS_CLASS = {
-  LIVE: "text-ok",
-  PAST: "text-ink-4",
-  DRAFT: "text-brand",
-};
 
 // Ticket tiers read as full words in the admin form — the abbreviated values
 // ("gen", "early") are storage detail, not something an editor should decode.
@@ -452,26 +443,6 @@ function OrderList() {
 }
 
 // The four statuses a ticket can hold, mirroring TICKET_STATUSES in server.py.
-const TICKET_FILTERS = [
-  ["all", "All"],
-  ["issued", "Issued"],
-  ["used", "Used"],
-  ["denied", "Denied"],
-  ["cancelled", "Cancelled"],
-  ["refunded", "Refunded"],
-];
-
-const TICKET_STATUS_CLASS = {
-  issued: "border-ink/20 text-ink-2",
-  used: "border-ok/50 text-ok",
-  denied: "border-brand/60 text-brand",
-  // Solid rather than outlined, and louder than a denial on purpose: one guest refused at
-  // the door is a decision, a cancelled show is money the platform owes every holder.
-  // (There is no `warn` token in the palette — page/ink/brand/ok/line is the whole set —
-  // so this is weight, not a new hue.)
-  cancelled: "bg-brand text-brand-fg border-brand",
-  refunded: "border-ink/20 text-ink-4",
-};
 
 // Every ticket and where it stands. `Denied` is a history filter rather than a status
 // filter — a denial that has since been refunded still happened, so it stays listed here

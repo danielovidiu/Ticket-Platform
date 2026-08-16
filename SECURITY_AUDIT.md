@@ -6,6 +6,12 @@
 git-history secret scan, and live probing of a locally running instance.
 **Date:** 2026-07-23.
 
+> **Second pass — 2026-08-16.** The original scope has been overtaken: `server.py` is now
+> 4136 lines against the 2332 read here, and `shop_routes.py` (730 lines, 21 routes) did
+> not exist when this was written and was never in scope at all. A pass over that delta is
+> recorded in [Second pass](#second-pass--code-added-after-the-original-scope). It found
+> one issue, **S1**, verified and fixed.
+
 Findings marked **[verified]** were reproduced against a running server; the rest are
 established by code reading. Where I expected a bug and testing disproved it, that is
 recorded too — see [False alarms](#false-alarms-checked-and-cleared).
@@ -47,6 +53,7 @@ both are the kind of thing that gets exploited within days of a public launch.
 | M6 | **Fixed** | Typed patch models on event/artist updates; the dotted-path write is gone |
 | L5 | **Fixed** | Bearer clients could not actually log out (found while fixing M2) |
 | H1 | **Open — half fixed** | App-side `TRUSTED_IP_HEADER` shipped; uvicorn's `proxy_headers` default still rewrites `request.client.host`, so the bypass survives. Pinned by an `xfail(strict=True)` regression test. Top priority |
+| S1 | **Fixed** | Second pass: concurrent order cancel credited stock 6× (verified 5 → 17); write is now conditional |
 | M7–M12, L1–L4 | Open | See the remediation plan |
 | Stale deps | **Fixed** | 126 → 38 runtime packages; `starlette` past CVE-2024-47874 |
 | Test suite | **Fixed** | 240 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
@@ -540,6 +547,67 @@ but the validator is the wrong place to rely on the transport, and the address f
   asserted on the database row rather than trusting the 200.
 
 ---
+
+## Second pass — code added after the original scope
+
+**Date:** 2026-08-16. **Reviewed:** everything in `backend/*.py` that changed between
+`274cc90` and `84dec83` — 3570 added lines across `server.py` (+2242), `shop_routes.py`
+(+730, entirely new), `cms_routes.py` (+392), `mailer.py` (+349), `storage.py` (+130).
+That covers event notices, the SMTP backend, async bcrypt, both oversell fixes, door
+denial, per-ticket refunds, the ticket status model, the CSRF middleware, and the whole
+shop.
+
+### S1 — Concurrent order cancellation credits stock more than once **[verified]** — FIXED
+
+`admin_update_order` read the order, released its stock, then wrote the new status with an
+**unconditional** `$set`. Every request that got past the flow check therefore did the
+whole job, including the side effects — and nothing made the transition exclusive.
+
+**Reproduced.** Six concurrent `PATCH /api/admin/shop/orders/{id}` with
+`{"status": "cancelled"}` against one paid order holding 2 units: **all six returned 200**
+and each credited the stock, taking the variant from 5 to **17** where 7 was correct.
+
+Sequential double-clicks were never affected — the second request fails the flow check,
+since `cancelled` has no onward transitions. Only genuinely concurrent requests raced,
+which makes this a retry/double-submit bug rather than an attack: an admin on a slow
+connection, or a client that retries a timed-out PATCH.
+
+The same shape applied to `shipped`, where the repeatable side effect is a shipping email
+to the buyer rather than inventory.
+
+**What makes it notable** is that the correct pattern was already in the file, eight lines
+above: `expire_stale_orders` flips the status first and releases only on
+`modified_count`, with a comment explaining exactly why. This path had simply been missed.
+
+**Fix (applied).** The status write is now conditional on the status the request read, and
+returns 409 when it loses; the release happens *after* the successful flip, so stock is
+never credited against an order still marked paid. Pinned by
+`test_oversell_races.py::TestShopOrderCancelIsNotRepeatable`.
+
+### Checked and cleared in this pass
+
+- **Mail header injection.** Event titles are admin-controlled and reach the mail
+  `Subject`; recipients come from the database. Probed `_build_mime` directly with `\n`
+  and `\r\n` in both the subject and the recipient — Python's `EmailMessage` raises
+  `ValueError` rather than emitting the header, so `Bcc:` cannot be smuggled in. The
+  resulting send fails and is reported in the notify endpoint's `failed` count.
+- **Shop stock holds.** `hold_stock` is a conditional atomic decrement
+  (`$elemMatch` on `stock: {$gte: qty}` plus `$inc`) — the M4 lesson, already applied.
+  Partial holds roll back before the order is created.
+- **Shop pricing.** `shop_checkout` takes an address and nothing else; every number is
+  recomputed server-side from the database. No client-supplied amount reaches Stripe.
+- **Shop order IDOR.** `GET /shop/orders/{id}` returns 404 rather than 403 for another
+  user's order, so it does not confirm the id exists.
+- **Shop admin surface.** All 8 admin shop routes sit behind `require_admin`;
+  `admin_update_product` filters through an explicit key allowlist (see M6).
+- **Door denial authz.** `/scan/deny` is behind the same guard as `/scan`, and the
+  `denied` status is terminal against a rescan.
+
+### Not re-reviewed
+
+`cms_routes.py` (+392) and `storage.py` (+130) were read for authz and for the M10/M11
+sanitisation findings only. The CMS HTML pipeline is still carrying M10 and M11 as
+originally written.
 
 ## False alarms (checked and cleared)
 

@@ -7,6 +7,7 @@ per ticket, because denying one person cannot refund the friends who were admitt
 the same purchase.
 """
 import uuid
+import pathlib
 from datetime import datetime, timezone, timedelta
 
 import pytest
@@ -14,6 +15,7 @@ import requests
 
 import support
 from support import API, TIMEOUT, db, mint_user
+from server import TICKET_STATUSES  # the authoritative vocabulary, not a copy of it
 
 
 pytestmark = pytest.mark.integration
@@ -453,3 +455,35 @@ class TestTicketListing:
 
     def test_non_admin_cannot_list(self, door_headers):
         assert _list(door_headers, status="denied").status_code == 403
+
+
+class TestStatusVocabularyMatchesTheUI:
+    """The ticket-status list exists twice — `TICKET_STATUSES` in server.py and
+    `TICKET_FILTERS` in frontend/src/lib/ticketStatus.js — because the two runtimes cannot
+    share a constant. Drift between them is silent in both directions: a status the API
+    can produce but the UI has no tab for is invisible to an admin, and a tab for a status
+    the API rejects is a filter that 400s.
+
+    Read as source text rather than imported, the same way
+    test_security_hardening.py guards against the first-user-admin rule coming back.
+    The mirror of this test lives in frontend/src/lib/ticketStatus.test.jsx.
+    """
+
+    def _vocabulary_js(self) -> str:
+        path = (pathlib.Path(__file__).resolve().parent.parent.parent
+                / "frontend" / "src" / "lib" / "ticketStatus.js")
+        if not path.exists():
+            pytest.skip(f"frontend not present at {path}")
+        return path.read_text()
+
+    def test_every_status_has_a_filter_tab(self):
+        src = self._vocabulary_js()
+        filters = src.split("TICKET_FILTERS = [", 1)[1].split("\n];", 1)[0]
+        missing = [s for s in TICKET_STATUSES if f'["{s}"' not in filters]
+        assert not missing, f"statuses the admin UI cannot filter for: {missing}"
+
+    def test_every_status_has_a_chip_style(self):
+        src = self._vocabulary_js()
+        classes = src.split("TICKET_STATUS_CLASS = {", 1)[1].split("\n};", 1)[0]
+        missing = [s for s in TICKET_STATUSES if f"{s}:" not in classes]
+        assert not missing, f"statuses that render as an unstyled chip: {missing}"

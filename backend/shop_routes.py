@@ -616,10 +616,24 @@ def register_shop_routes(api: APIRouter, ctx):
         if body.carrier is not None:
             upd["carrier"] = body.carrier.strip()
         upd[f"{body.status}_at"] = now_iso()
+
+        # Conditional on the status this request *read*, so two requests racing the same
+        # transition cannot both win. It used to be an unconditional `$set` after a
+        # separate read, which made every side effect below repeatable: six concurrent
+        # cancels each returned 200 and each credited the stock, taking a variant from 5
+        # to 17 where 7 was right, and two concurrent "shipped" would have mailed the
+        # buyer twice. `expire_stale_orders` above already flips before releasing for
+        # exactly this reason; this path had been missed.
+        res = await db.shop_orders.update_one(
+            {"order_id": order_id, "status": o["status"]}, {"$set": upd})
+        if not res.modified_count:
+            raise HTTPException(409, "The order changed while this request was in flight")
+
+        # After the flip, never before: a release that lands and then fails to record
+        # itself is stock credited against an order still marked paid.
         if body.status == "cancelled":
             await release_order_stock(o)  # goods never left; put them back on sale
 
-        await db.shop_orders.update_one({"order_id": order_id}, {"$set": upd})
         await ctx.audit(user["user_id"], f"order_{body.status}", "shop_order", order_id, upd)
 
         if body.status == "shipped":

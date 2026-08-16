@@ -451,12 +451,21 @@ def test_home_endpoint_serves_a_page_whatever_its_slug():
         assert k in body
 
 
-def test_home_page_links_to_the_root_in_nav():
+def test_home_page_links_to_the_root_in_nav(seeded):
+    """The homepage must appear in the nav, and point at `/` rather than its own slug.
+
+    This used to skip when the entry was missing — which is the more interesting of the
+    two failures it can have, quietly reported as a non-result. A homepage absent from
+    the nav is a broken install, so it is now asserted; `seeded` guarantees there is
+    content to assert against.
+    """
     home = requests.get(f"{API}/cms/home", timeout=15).json()
     nav = requests.get(f"{API}/cms/nav", timeout=15).json()
     entry = next((n for n in nav if n["slug"] == home["slug"]), None)
-    if entry is None:
-        pytest.skip("the homepage is not in the nav on this install")
+    assert entry is not None, (
+        f"the homepage ({home['slug']!r}) is missing from the nav; "
+        f"nav has {[n['slug'] for n in nav]}"
+    )
     assert entry["route"] == "/", f"homepage should link to / not {entry['route']}"
 
 

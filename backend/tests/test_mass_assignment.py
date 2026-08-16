@@ -19,7 +19,7 @@ import requests
 from support import API, TIMEOUT, db
 
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.critical]  # pins audit M6
 
 
 def _iso(**delta):

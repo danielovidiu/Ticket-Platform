@@ -10,6 +10,7 @@ threads are released into the handler at the same moment rather than trickling i
 sequential version of this file would pass against the *broken* code, which is the whole
 difficulty of testing a race — so the barrier is load-bearing, not decoration.
 """
+import time
 import uuid
 import threading
 from datetime import datetime, timezone, timedelta
@@ -21,7 +22,7 @@ import support
 from support import API, TIMEOUT, db, mint_user
 
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.critical]
 
 
 # --- fixtures ----------------------------------------------------------------------
@@ -79,30 +80,73 @@ def event():
     _cleanup(e["event_id"])
 
 
-def _reserve_simultaneously(calls):
+def _reset_for_retry(event_id: str):
+    """Put the event back exactly as the fixture built it, so a burst can be re-fired.
+
+    Holds are not "released" here so much as overwritten — every wave goes back to its
+    full capacity and every link back to `used: 0` — because a partially-landed burst is
+    precisely the state that must not leak into the retry.
+    """
+    db.reservations.delete_many({"event_id": event_id})
+    db.special_links.update_many({"event_id": event_id}, {"$set": {"used": 0}})
+    ev = db.events.find_one({"event_id": event_id}, {"_id": 0, "waves": 1}) or {}
+    for w in ev.get("waves", []):
+        db.events.update_one({"event_id": event_id, "waves.wave_id": w["wave_id"]},
+                             {"$set": {"waves.$.available": w["capacity"]}})
+
+
+def _sleep_out_window(responses) -> bool:
+    """Wait for the /reservations window to roll. False when nothing was limited."""
+    limited = [r for r in responses if r.status_code == 429]
+    if not limited:
+        return False
+    wait = max(int(r.headers.get("Retry-After", 60) or 60) for r in limited)
+    time.sleep(min(wait, 70) + 1)
+    return True
+
+
+def _reserve_simultaneously(calls, event_id, attempts: int = 3):
     """Release every request into the handler at the same instant.
 
     Without the barrier the threads start staggered by however long it takes to spawn
     them, which is easily enough for one reservation to land before the next reads —
     and a staggered run passes even against the racy code.
+
+    A 429 anywhere in the burst used to skip the test. That was the wrong trade for this
+    file: these two tests are the only proof M4 and M5 stay fixed, and a skip is
+    indistinguishable from a pass in the summary line. `/reservations` allows 20 a minute,
+    so the budget another test spent is worth waiting out — the state is reset between
+    attempts so the retry is a genuine cold burst, not a continuation of a half-landed one.
     """
     barrier = threading.Barrier(len(calls))
-    out = [None] * len(calls)
 
-    def run(i, headers, payload):
-        barrier.wait()
-        out[i] = requests.post(f"{API}/reservations", json=payload,
-                               headers=headers, timeout=TIMEOUT)
+    def fire():
+        out = [None] * len(calls)
 
-    threads = [threading.Thread(target=run, args=(i, h, p))
-               for i, (h, p) in enumerate(calls)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+        def run(i, headers, payload):
+            barrier.wait()
+            out[i] = requests.post(f"{API}/reservations", json=payload,
+                                   headers=headers, timeout=TIMEOUT)
 
-    if any(r.status_code == 429 for r in out):
-        pytest.skip("/reservations rate-limit budget spent by another test in this window")
+        threads = [threading.Thread(target=run, args=(i, h, p))
+                   for i, (h, p) in enumerate(calls)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return out
+
+    for attempt in range(attempts):
+        out = fire()
+        if attempt == attempts - 1 or not _sleep_out_window(out):
+            break
+        barrier.reset()
+        _reset_for_retry(event_id)
+
+    assert not [r for r in out if r.status_code == 429], (
+        f"/reservations still rate-limited after {attempts} attempts — the burst never "
+        "ran cleanly, so this says nothing about the oversell guard"
+    )
     return out
 
 
@@ -125,7 +169,7 @@ class TestSpecialLinkCapacity:
             calls.append((headers, {"event_id": event["event_id"], "wave_id": wave_id,
                                     "quantity": 1, "special_link_token": token}))
 
-        responses = _reserve_simultaneously(calls)
+        responses = _reserve_simultaneously(calls, event["event_id"])
         accepted = [r for r in responses if r.status_code == 200]
         rejected = [r for r in responses if r.status_code == 400]
 
@@ -150,8 +194,7 @@ class TestSpecialLinkCapacity:
         payload = {"event_id": event["event_id"], "wave_id": wave_id,
                    "quantity": 1, "special_link_token": token}
 
-        r = requests.post(f"{API}/reservations", json=payload, headers=headers, timeout=TIMEOUT)
-        support.skip_if_rate_limited(r, "reservations")
+        r = support.patient.post(f"{API}/reservations", json=payload, headers=headers)
         assert r.status_code == 200, r.text
         assert db.special_links.find_one({"token": token})["used"] == 1
 
@@ -162,8 +205,7 @@ class TestSpecialLinkCapacity:
         )
 
         headers2, _uid2, _email2 = mint_user()
-        r2 = requests.post(f"{API}/reservations", json=payload, headers=headers2, timeout=TIMEOUT)
-        support.skip_if_rate_limited(r2, "reservations")
+        r2 = support.patient.post(f"{API}/reservations", json=payload, headers=headers2)
         assert r2.status_code == 200, (
             "the expired reservation's capacity was never returned — "
             f"link now reads used={db.special_links.find_one({'token': token})['used']}"
@@ -184,7 +226,7 @@ class TestPerUserCap:
         try:
             calls = [(headers, {"event_id": e["event_id"], "wave_id": wave_id,
                                 "quantity": 1}) for _ in range(6)]
-            responses = _reserve_simultaneously(calls)
+            responses = _reserve_simultaneously(calls, e["event_id"])
             accepted = [r for r in responses if r.status_code == 200]
 
             assert len(accepted) == cap, (
@@ -207,7 +249,7 @@ class TestPerUserCap:
         try:
             calls = [(headers, {"event_id": e["event_id"], "wave_id": wave_id,
                                 "quantity": 1}) for _ in range(5)]
-            responses = _reserve_simultaneously(calls)
+            responses = _reserve_simultaneously(calls, e["event_id"])
             accepted = sum(1 for r in responses if r.status_code == 200)
             assert accepted == cap
 
@@ -226,10 +268,99 @@ class TestPerUserCap:
         wave_id = e["waves"][0]["wave_id"]
         headers, _uid, _email = mint_user()
         try:
-            r = requests.post(f"{API}/reservations", timeout=TIMEOUT, headers=headers,
-                              json={"event_id": e["event_id"], "wave_id": wave_id, "quantity": 3})
-            support.skip_if_rate_limited(r, "reservations")
+            r = support.patient.post(f"{API}/reservations", headers=headers,
+                                     json={"event_id": e["event_id"], "wave_id": wave_id, "quantity": 3})
             assert r.status_code == 200, r.text
             assert r.json()["quantity"] == 3
         finally:
             _cleanup(e["event_id"])
+
+
+# --- shop orders (found re-auditing shop_routes.py, which the audit never covered) ------
+
+class TestShopOrderCancelIsNotRepeatable:
+    """Cancelling a paid shop order credits its stock back. That has to happen once.
+
+    `admin_update_order` read the order, released the stock, then wrote the new status
+    with an unconditional `$set` — so every request that got through the flow check did
+    the full job. Six concurrent cancels each returned 200 and each credited the stock:
+    a variant went 5 -> 17 where 7 was correct. Sequential double-clicks were always
+    safe (the second fails the flow check); only genuinely concurrent ones raced.
+
+    Reproduced before the fix, which is why the numbers above are specific.
+    """
+
+    def _product(self, stock: int = 5):
+        pid, vid = f"prd_pytest_{uuid.uuid4().hex[:10]}", f"var_pytest_{uuid.uuid4().hex[:10]}"
+        db.products.insert_one({
+            "product_id": pid, "slug": f"test-race-{uuid.uuid4().hex[:8]}",
+            "name": "TEST_race", "description": "", "images": [], "price_ron": 100.0,
+            "category": "TEST_race", "gender": "unisex", "is_published": False,
+            "sort_order": 0, "created_at": _iso(),
+            "variants": [{"variant_id": vid, "size": "M", "sku": "R-M", "stock": stock}],
+        })
+        return pid, vid
+
+    def _paid_order(self, pid, vid, user_id, quantity=2):
+        oid = f"ord_pytest_{uuid.uuid4().hex[:10]}"
+        db.shop_orders.insert_one({
+            "order_id": oid, "user_id": user_id, "email": "race@pytest.invalid",
+            "status": "paid", "items": [{
+                "product_id": pid, "variant_id": vid, "slug": "s", "name": "TEST_race",
+                "size": "M", "sku": "R-M", "unit_price_ron": 100.0,
+                "quantity": quantity, "line_total_ron": 100.0 * quantity}],
+            "subtotal_ron": 200.0, "shipping_ron": 0.0, "total_ron": 200.0,
+            "vat_rate": 0.19, "net_ron": 168.07, "vat_amount_ron": 31.93,
+            "shipping_zone": "RO", "shipping_address": {}, "hold_expires_at": _iso(),
+            "created_at": _iso(), "paid_at": _iso(), "shipped_at": None,
+            "delivered_at": None, "tracking_number": "", "carrier": "", "invoice_id": None,
+        })
+        return oid
+
+    def _stock(self, pid):
+        return db.products.find_one({"product_id": pid})["variants"][0]["stock"]
+
+    def test_concurrent_cancels_credit_the_stock_once(self, admin_headers):
+        pid, vid = self._product(stock=5)
+        _h, uid, _e = mint_user()
+        oid = self._paid_order(pid, vid, uid, quantity=2)
+        try:
+            barrier = threading.Barrier(6)
+            out = [None] * 6
+
+            def cancel(i):
+                barrier.wait()
+                out[i] = requests.patch(f"{API}/admin/shop/orders/{oid}",
+                                        json={"status": "cancelled"},
+                                        headers=admin_headers, timeout=TIMEOUT)
+
+            threads = [threading.Thread(target=cancel, args=(i,)) for i in range(6)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert sum(1 for r in out if r.status_code == 200) == 1, \
+                f"more than one cancel succeeded: {sorted(r.status_code for r in out)}"
+            assert self._stock(pid) == 7, (
+                f"stock is {self._stock(pid)}; 5 held 2 back, so 7 is right — anything "
+                "higher is the same credit applied more than once"
+            )
+            assert db.shop_orders.find_one({"order_id": oid})["status"] == "cancelled"
+        finally:
+            db.products.delete_many({"product_id": pid})
+            db.shop_orders.delete_many({"order_id": oid})
+
+    def test_a_single_cancel_still_works(self, admin_headers):
+        """The guard must not break the ordinary one-admin-one-click path."""
+        pid, vid = self._product(stock=5)
+        _h, uid, _e = mint_user()
+        oid = self._paid_order(pid, vid, uid, quantity=2)
+        try:
+            r = requests.patch(f"{API}/admin/shop/orders/{oid}", json={"status": "cancelled"},
+                               headers=admin_headers, timeout=TIMEOUT)
+            assert r.status_code == 200, r.text
+            assert self._stock(pid) == 7
+        finally:
+            db.products.delete_many({"product_id": pid})
+            db.shop_orders.delete_many({"order_id": oid})

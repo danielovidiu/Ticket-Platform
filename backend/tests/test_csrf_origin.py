@@ -18,7 +18,7 @@ import support
 from support import API, TIMEOUT
 
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.critical]  # pins audit M3
 
 # Always allowed: the middleware unions PUBLIC_APP_URL into the allowlist regardless of
 # CORS_ORIGINS, because a single-origin deployment has no reason to list itself there.
@@ -83,9 +83,16 @@ class TestNotOverreaching:
         assert REFUSAL not in r.text
 
     def test_json_writes_still_work_from_our_origin(self):
-        """The guard must not disturb the ordinary path the frontend uses."""
+        """The guard must not disturb the ordinary path the frontend uses.
+
+        `/auth/login` is rate-limited, and this used to skip whenever another test had
+        spent the budget — which meant the one test covering the *allow* half of M3 was
+        the flakiest in the file. It never needed to: the guard is HTTP middleware, so it
+        runs before routing and therefore before the route's rate-limit dependency. A 429
+        is as good a proof as a 401 that the request got past the guard. What is asserted
+        is what the test is actually about — the refusal did not happen.
+        """
         r = _post(f"{API}/auth/login", origin=OURS,
                   json={"email": "nobody@pytest.invalid", "password": "wrong"})
-        support.skip_if_rate_limited(r, "login")
-        assert r.status_code == 401
+        assert r.status_code in (401, 429), r.text
         assert REFUSAL not in r.text

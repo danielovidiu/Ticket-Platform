@@ -52,6 +52,7 @@ and the perimeter.
 | M2 | Session tokens stored in plaintext — a database read yielded live sessions for every user | Only `sha256(token)` is persisted; migrated in place without logging anyone out |
 | M3 | `SameSite=None` plus no CSRF defence left `multipart/form-data` writes reachable cross-site — JSON was safe only by accident, via the preflight the allowlist rejects | Cookie defaults to `SameSite=Lax`, and an `Origin` guard refuses cross-origin writes ahead of authentication. See **CSRF** below |
 | M6 | `PATCH /admin/events/{id}` and `/admin/artists/{id}` took an untyped `dict` and `$set` it wholesale, so the caller chose the *key names* — and a dotted one like `waves.0.available` wrote straight into a wave, past the code that derives stock from what has sold | `EventPatchIn` / `ArtistPatchIn`; unknown keys are dropped, so `$set` only ever sees names the model declares. See **Admin patch bodies** below |
+| S1 | Cancelling a paid shop order released its stock and then wrote the status with an unconditional `$set` — six concurrent cancels all returned 200 and each credited the stock (verified: a variant went 5 → 17 where 7 was right) | The status write is conditional on the status the request read, 409 when it loses, and the release happens after the flip |
 | — | `POST /auth/logout` read only the cookie, so a `Bearer` client got `200 {"ok":true}` while its session stayed valid (found while fixing M2) | Both call sites share `_presented_token`; logout revokes either form |
 
 **Still open:**

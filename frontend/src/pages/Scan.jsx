@@ -168,7 +168,10 @@ export default function Scan() {
  * is a modal decision: it owns the screen until someone acts on it, and the only action
  * is always in reach.
  */
-function ScanResult({ result, onNext, onDeny }) {
+// Exported for its tests. The rest of this page needs a camera, a session and a network;
+// the verdict overlay needs none of those, and it is the part where a wrong render costs
+// somebody their entry — so it is the part worth testing directly.
+export function ScanResult({ result, onNext, onDeny }) {
   // Asking for a reason inline rather than through confirm() + prompt(): two native
   // dialogs in a row on a phone, at a door, in the dark, is the worst version of this.
   const [denying, setDenying] = useState(false);

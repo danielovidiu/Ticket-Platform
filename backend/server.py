@@ -12,6 +12,7 @@ import base64
 import secrets
 import hashlib
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Literal, Optional
@@ -383,7 +384,21 @@ client = AsyncIOMotorClient(
 )
 db = client[DB_NAME]
 
-app = FastAPI(title="Supersanity API")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup/shutdown, in the form FastAPI still supports.
+
+    These were `@app.on_event("startup"/"shutdown")`, which has been deprecated since
+    Starlette 0.26 and accounted for every warning the test suite emitted. The handlers
+    themselves are unchanged and still defined further down, next to the schema-version
+    constant they belong with — the names resolve when this runs, not when it is defined.
+    """
+    await init_app()
+    yield
+    await close_db_pool()
+
+
+app = FastAPI(title="Supersanity API", lifespan=lifespan)
 api = APIRouter(prefix="/api")
 
 # Uploaded media lives in Vercel Blob when BLOB_READ_WRITE_TOKEN is set, and on local
@@ -3845,7 +3860,6 @@ async def security_headers(request: Request, call_next):
 SCHEMA_VERSION = 6
 
 
-@app.on_event("startup")
 async def init_app():
     """One-time database setup, skipped once the database says it is already done.
 
@@ -4125,8 +4139,7 @@ async def migrate_newsletter_optins():
         logger.info("Backfilled %d newsletter subscription(s) from news_opt_in", added)
 
 
-@app.on_event("shutdown")
-async def shutdown():
+async def close_db_pool():
     # Only close the pool where "shutdown" means the process is going away for good.
     # Serverless instances are torn down with the pool still open — Vercel allows ~500ms
     # after SIGTERM and does not surface logs from it — so there is nothing to gain by

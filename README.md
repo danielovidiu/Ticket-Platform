@@ -206,10 +206,32 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**426 passed, 1 xfailed.** Point it at another environment with `TICKET_PLATFORM_URL`;
-everything else (Mongo URL, database name) comes from `backend/.env`, the same file the
-server reads. If the server isn't running the whole session skips with one clear message
-instead of a wall of connection errors.
+**462 passed, 1 xfailed, 0 skipped.** Point it at another environment with
+`TICKET_PLATFORM_URL`; everything else (Mongo URL, database name) comes from
+`backend/.env`, the same file the server reads.
+
+There is a frontend suite too, and it needs nothing running:
+
+```bash
+cd frontend && CI=true yarn test --watchAll=false
+```
+
+**25 passed** — the scanner's verdict overlay (`ScanResult`) and the admin list
+vocabularies.
+
+### Two things the suite refuses to do quietly
+
+**Report green having run nothing.** With no backend reachable, a local run still skips
+with one clear message — but under `CI`, or with `TICKET_PLATFORM_REQUIRE_ENV=1`, it
+fails instead. Skipping 462 tests and exiting 0 is the wrong answer for a pipeline.
+
+**Lose a security regression test to a rate limit.** The suite runs from one IP, so a
+test that spends a budget can leave another with none, and the convention was to skip. It
+landed hardest on the tests pinning fixed audit findings: two consecutive runs skipped 2
+then 5 tests, different ones each time, and both said green. Those modules are now marked
+`critical` — the runner prints a `CRITICAL TESTS THAT DID NOT RUN` block and fails under
+`CI` — and the ones that could avoid skipping now do, by waiting out a 60-second window or
+by asserting something a 429 does not invalidate.
 
 The single `xfail` is deliberate: it is audit finding H1 (X-Forwarded-For rate-limit
 bypass), recorded as `xfail(strict=True)` so the gap stays visible *and* so fixing it
