@@ -36,7 +36,13 @@ cd frontend
 yarn install && yarn start    # http://localhost:3000
 ```
 
-Both servers are also in .claude/launch.json, so an agent or editor that reads launch configs starts them on these ports rather than guessing, carrying the same FORWARDED_ALLOW_IPS="" as the command above. That is the spelling to use: --forwarded-allow-ips means the same thing to uvicorn but outranks the variable, and server.py cannot read the flag back — so the app refuses to start rather than validate a setting the server is not using. backend/tests/test_deploy_config.py asserts the launch config still carries it.
+Both servers are also in `.claude/launch.json`, so an agent or editor that reads launch
+configs starts them on these ports rather than guessing, carrying the same
+`FORWARDED_ALLOW_IPS=""` as the command above. That is the spelling to use:
+`--forwarded-allow-ips` means the same thing to uvicorn but outranks the variable, and
+`server.py` cannot read the flag back — so the app refuses to start rather than validate
+a setting the server is not using. `backend/tests/test_deploy_config.py` asserts the
+launch config still carries it.
 
 Everything works with **no external credentials**: password auth is native, emails land
 in the `outbox` collection (and the logs), and payments run a local simulator. Google,
