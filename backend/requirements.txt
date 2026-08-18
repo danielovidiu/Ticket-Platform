@@ -12,9 +12,14 @@ anyio==4.14.2
     # via
     #   httpx
     #   starlette
+    #   vercel
+    #   vercel-oidc
+    #   vercel-workers
     #   watchfiles
 bcrypt==5.0.0
     # via -r requirements.in
+cbor2==6.1.4
+    # via vercel
 certifi==2026.7.22
     # via
     #   httpcore
@@ -28,7 +33,7 @@ charset-normalizer==3.4.9
     #   requests
 click==8.4.2
     # via uvicorn
-cryptography==49.0.0
+cryptography==50.0.0
     # via
     #   -r requirements.in
     #   pyjwt
@@ -45,7 +50,13 @@ httpcore==1.0.9
 httptools==0.8.0
     # via uvicorn
 httpx==0.28.1
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   vercel
+    #   vercel-cache
+    #   vercel-internal-telemetry
+    #   vercel-oidc
+    #   vercel-workers
 idna==3.18
     # via
     #   anyio
@@ -65,6 +76,8 @@ pydantic==2.13.4
     # via
     #   -r requirements.in
     #   fastapi
+    #   vercel
+    #   vercel-workers
 pydantic-core==2.46.4
     # via pydantic
 pyjwt==2.13.0
@@ -79,6 +92,8 @@ python-dotenv==1.2.2
     # via
     #   -r requirements.in
     #   uvicorn
+    #   vercel
+    #   vercel-workers
 python-multipart==0.0.32
     # via -r requirements.in
 pyyaml==6.0.3
@@ -113,8 +128,29 @@ uvicorn==0.51.0
 uvloop==0.22.1
     # via uvicorn
 vercel==0.7.2
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   vercel-workers
+vercel-cache==0.7.2
+    # via vercel
+vercel-headers==0.7.1
+    # via
+    #   vercel
+    #   vercel-cache
+    #   vercel-oidc
+vercel-internal-telemetry==0.7.2
+    # via
+    #   vercel
+    #   vercel-cache
+vercel-oidc==0.8.0
+    # via
+    #   vercel
+    #   vercel-internal-telemetry
+vercel-workers==0.0.25
+    # via vercel
 watchfiles==1.2.0
     # via uvicorn
 websockets==16.1.1
-    # via uvicorn
+    # via
+    #   uvicorn
+    #   vercel
