@@ -32,16 +32,16 @@ reaching production. Second is that every rate limit in the application can be b
 with one spoofed HTTP header, which I verified. Neither is a subtle cryptographic flaw —
 both are the kind of thing that gets exploited within days of a public launch.
 
-> Both are now fixed, along with every other Critical and High finding and all but four
-> Medium ones; what remains is M7-M9, M12 and L1-L4. The two headline items turned out to
-> have the same shape: the defect was not a line of code but what happened when nobody
-> stated a value. Both now refuse to start rather than pick a default.
+> Both are now fixed, along with **every other Critical, High and Medium finding**. Only
+> the four Low items remain. The two headline issues turned out to have the same shape:
+> the defect was not a line of code but what happened when nobody stated a value, and both
+> now refuse to start rather than pick a default.
 
 | Severity | Count | Theme |
 |---|---|---|
 | Critical | 1 | Payment bypass via default config — **fixed** |
 | High | 3 | Rate-limit bypass, memory DoS, admin bootstrap race — **all three fixed** |
-| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1–M7, M10–M12 fixed; M9 partly; M8 open** |
+| Medium | 12 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **all fixed** |
 | Low | 4 | Info leaks, incomplete refund path |
 
 ### Remediation status
@@ -58,13 +58,15 @@ both are the kind of thing that gets exploited within days of a public launch.
 | M6 | **Fixed** | Typed patch models on event/artist updates; the dotted-path write is gone |
 | L5 | **Fixed** | Bearer clients could not actually log out (found while fixing M2) |
 | H1 | **Fixed** | `FORWARDED_ALLOW_IPS` required on a public deployment; every start path sets it; the nginx overwrite it depends on is asserted. `xfail` marker removed |
+| S2 | **Fixed** | Third pass: `/auth/forgot-password` and `/newsletter` mailed a caller-named address under an IP-only limit |
 | S1 | **Fixed** | Second pass: concurrent order cancel credited stock 6× (verified 5 → 17); write is now conditional |
 | M10 | **Fixed** | HTML cleaned server-side with nh3 on save/publish/restore; DOMPurify upgraded past its own bypass |
 | M11 | **Fixed** | Embed host allowlist + `sandbox`; CSP `frame-src` already blocked the payload, now matched by the code |
 | M7 | **Fixed** | `origin_url` removed from the model, not validated — the client was sending a value the server already had |
-| M9 | **Partly fixed** | 88 unbounded string fields closed via `ApiModel`; free-form CMS payloads capped. Streaming upload cap outstanding |
+| M9 | **Fixed** | 88 unbounded string fields closed via `ApiModel`; free-form CMS payloads capped; uploads refused at 413 while streaming |
 | M12 | **Fixed** | Control characters refused at input and again at the mailer; the audit's "safe because Resend takes JSON" premise had expired |
-| M8, L1–L4 | Open | See the remediation plan |
+| M8 | **Fixed** | Bytes verified against the declared type and re-encoded; polyglot and EXIF stripping both verified |
+| L1–L4 | Open | Info leaks and an incomplete refund path — see the remediation plan |
 | Stale deps | **Fixed** | 126 → 38 runtime packages; `starlette` past CVE-2024-47874 |
 | Test suite | **Fixed** | 240 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
 
@@ -499,7 +501,7 @@ telling the server something the server knew. An allowlist would have been a con
 around a value nobody needed. `create_checkout` now derives the origin the same way
 `shop_checkout` always has, from configuration.
 
-### M8 — Upload type is decided by client-declared `Content-Type`, and original bytes are stored verbatim
+### M8 — Upload type is decided by client-declared `Content-Type`, and original bytes are stored verbatim — **FIXED**
 
 `admin_upload_media` maps `file.content_type` to an extension. Images have a thumbnail
 re-encoded through Pillow, but **the original file is written unmodified**
@@ -512,10 +514,34 @@ It becomes one the moment `nosniff` is missing (M1) and a browser sniffs a polyg
 the moment SVG is added to the allowlist. Combined with M3 the write is reachable
 cross-site.
 
-**Fix.** Verify the magic bytes, re-encode images, and serve `/uploads` with `nosniff`
-plus `Content-Disposition: attachment` for non-image types.
+**Fix (applied).** Three parts, in decreasing order of what they buy:
 
-### M9 — Request size is checked after the body is fully read — **PARTLY FIXED**
+1. **Re-encode.** The stored bytes are Pillow's output, not the caller's input. That is
+   what actually kills a polyglot — a file that is both a valid GIF and a valid HTML
+   document does not survive being decoded to pixels and written back out. Verified with
+   a real GIF/HTML polyglot: it uploads, and `<script>` is absent from what is stored.
+   It also strips every metadata block, so EXIF **GPS coordinates stop being published**
+   as a side effect — for a collective posting photos from venues, worth as much as the
+   polyglot defence. Animated GIF and WebP are re-encoded in place rather than flattened.
+
+2. **Verify against the claim.** `Image.open().verify()` refuses anything undecodable,
+   and the format Pillow reports is compared to the declared `Content-Type` — a PNG
+   announced as a JPEG is refused rather than quietly stored. The stored extension and
+   `Content-Type` follow the bytes, not the claim.
+
+3. **Sniff video containers.** ffmpeg is not a dependency, so video cannot be re-encoded;
+   the ISO-BMFF `ftyp` box and the EBML magic are checked instead. This remains the
+   weakest of the defences here, and is stated as such in the code.
+
+`nosniff` and a sandboxed CSP on `/uploads` landed earlier with M1 and the deployment
+headers, in both the app and nginx.
+
+**A corrupt file was already being stored.** The fix turned an existing test red: its
+hardcoded "1x1 PNG" has a bad IDAT header checksum and Pillow will not decode it. Nothing
+noticed, because the route wrote the bytes verbatim and let the thumbnail step fail into
+an `except Exception`. The fixture was an unintentional demonstration of the finding.
+
+### M9 — Request size is checked after the body is fully read — **FIXED**
 
 `data = await file.read()` loads the entire upload into memory, *then* compares against
 `MAX_UPLOAD_BYTES`. Starlette spools to disk past a threshold, so this is disk-then-RAM
@@ -553,9 +579,11 @@ fields to something semantically meaningful is a separate, smaller job.
 approach as `test_rbac.py`, and it reaches the models defined inside
 `register_shop_routes` and `register_cms_routes` that a module-level scan misses.
 
-**Still outstanding:** `await file.read()` in `admin_upload_media` still buffers the whole
-body before comparing against `MAX_UPLOAD_BYTES`. On the VPS nginx caps it at the edge
-(`client_max_body_size 25M`); the direct and serverless paths do not.
+**The streaming half is now fixed too.** `_read_capped` reads in 64 KB chunks and
+refuses the moment the total passes the ceiling, so an oversized body is rejected while it
+is arriving rather than after it has all been buffered. The status is now **413** rather
+than 400 — "too large" rather than "bad request" for a request that was fine apart from
+size. nginx still caps at the edge on the VPS; this covers the direct and serverless paths.
 
 ### M10 — CMS HTML is sanitized only in the browser — **FIXED**
 
@@ -691,6 +719,52 @@ raising deep inside a provider call.
   revoking anything is worse than one that fails loudly. Both now resolve the token
   through a shared `_presented_token` helper. This surfaced because the new M2 test
   asserted on the database row rather than trusting the 200.
+
+---
+
+## Third pass — mail amplification
+
+**Date:** 2026-08-18. Found while reviewing the API against a standard list (broken auth,
+IDOR, NoSQL injection, mass assignment, rate limiting, SSRF). Five of the six were clean;
+this is what the sixth turned up.
+
+### S2 — Mail-sending endpoints were limited per caller, not per recipient — **FIXED**
+
+`/auth/forgot-password` and `/newsletter` each send an email to an address **the caller
+names**, and both carried only an IP-keyed limit. `/auth/login` and
+`/auth/resend-verification` already had identity-keyed siblings; these two did not.
+
+An IP bucket limits one attacker. It does nothing about many hosts pointed at one victim,
+and every request that gets through is a *legitimate* delivery from this domain. That is
+the mail-bomb impact H1 described, reached by **having** many keys rather than faking
+them — which is precisely why closing H1 did not close this.
+
+**Fix (applied).** `_email_rate_check("auth_forgot_email", email, 3, 900)` and
+`_email_rate_check("newsletter_email", email, 3, 3600)`, keyed on the recipient and
+checked before the send. On the reset path the bucket is keyed **before** the user lookup,
+so it stays silent about whether an account exists: a 429 means "asked recently", never
+"this address is real". `test_mail_amplification.py` asserts that the codes are identical
+for a known and an unknown address.
+
+### Checked and cleared in this pass
+
+- **NoSQL injection.** `{"$gt": ""}` and friends are rejected by Pydantic as
+  `string_type` before any query is built. Every request model was swept for `dict`/`Any`
+  fields; the four that exist (`links`, `draft` ×2) are stored as *values* and never used
+  as filters. No `$where`, and no client-controlled `$regex`.
+- **IDOR.** Six owned-resource routes probed with a second user's session: QR image 403,
+  shop order 404, invoice PDF 403, reservation 404, checkout 404. Ids are `uuid4`-derived
+  rather than sequential, and `_id` is never exposed — every query projects `{"_id": 0}`.
+- **Mass assignment.** Six escalation payloads against `PATCH /auth/profile`
+  (`role`, `is_admin`, `user_id`, `email`, `password_hash`, `email_verified_at`); none
+  were written. `ProfileUpdate` declares three fields.
+- **Broken authentication.** `algorithms=["HS256"]` is pinned, so `alg: none` and
+  RS256→HS256 confusion do not apply; the audience is scoped per token purpose; all four
+  purposes carry TTLs; sessions expire at 7 days with a Mongo TTL index actually reaping
+  them.
+- **SSRF.** Every outbound request goes to a hardcoded host — Google's token and JWKS
+  endpoints, Apple's JWKS, Resend's API. No route accepts a URL and fetches it. This
+  changes the day an image proxy or outbound webhooks are added.
 
 ---
 

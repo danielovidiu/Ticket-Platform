@@ -9,16 +9,16 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 - **Frontend**: React 19 (CRA/craco), `frontend/`.
 - **Deploying**: one Vercel project, two services — see **[DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md)**.
 
-> **Status: hardening in progress.**
-> A security audit found one critical and three high-severity issues. **Three are fixed** —
-> C1 (payment bypass), H2 (limiter memory DoS) and H3 (admin takeover) — along with M1
-> (security headers), M2 (plaintext session tokens), M3 (CSRF on state-changing routes),
-> both oversell races — M4 (special-link capacity) and M5 (per-user cap) — M6
-> (mass assignment on the admin patch routes), M10 (CMS HTML now sanitized server-side,
-> not only in the browser) and M11 (embed host allowlist).
-> **H1 (spoofable rate-limit key) is now closed too**, which clears every Critical and
-> High finding. M8, the streaming half of M9, and the four Low items remain — full detail in
-> **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**.
+> **Status: audit findings closed down to Low.**
+> A security audit found one critical and three high-severity issues, plus twelve medium.
+> **All of them are now closed** — payment bypass, the spoofable rate-limit key, the admin
+> bootstrap race, the limiter memory DoS, both oversell races, CSRF, mass assignment,
+> plaintext session tokens, security headers, CMS HTML sanitization, the embed allowlist,
+> upload trust, input bounds and CRLF in email inputs. Two findings raised after the audit
+> (a concurrent-cancel stock race and mail amplification) are closed too.
+>
+> The four **Low** items remain: info leaks and an incomplete refund path. Full detail,
+> including what was reproduced and how, in **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**.
 
 ## Run it locally
 
@@ -198,7 +198,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000 --forwarded-allow-ips ""
 cd backend && venv/bin/python -m pytest
 ```
 
-**897 passed, 0 xfailed** — the last strict xfail was H1, and closing it removed the marker. Point it at another environment with
+**917 passed, 0 xfailed** — the last strict xfail was H1, and closing it removed the marker. Point it at another environment with
 `TICKET_PLATFORM_URL`; everything else (Mongo URL, database name) comes from
 `backend/.env`, the same file the server reads.
 

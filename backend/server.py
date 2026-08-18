@@ -468,6 +468,93 @@ if storage.is_local():
 IMAGE_CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
 VIDEO_CONTENT_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov"}
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 64 * 1024
+
+# What Pillow must report for a file the client called an image. Keyed by the declared
+# type so the two can be compared: a PNG announced as a JPEG is not a mistake worth
+# tolerating, it is the shape of a polyglot.
+IMAGE_SNIFF_FORMATS = {"image/jpeg": {"JPEG", "MPO"}, "image/png": {"PNG"},
+                       "image/webp": {"WEBP"}, "image/gif": {"GIF"}}
+
+# Container signatures for the formats we accept as video. ffmpeg is not a dependency, so
+# these cannot be re-encoded the way images are — reading the container header is what is
+# available, and it is still strictly better than believing the Content-Type.
+#   MP4/MOV: an ISO-BMFF `ftyp` box at offset 4.   WebM: the EBML magic.
+VIDEO_SNIFF = {"video/mp4": [(4, b"ftyp")], "video/quicktime": [(4, b"ftyp")],
+               "video/webm": [(0, b"\x1a\x45\xdf\xa3")]}
+
+
+async def _read_capped(upload: UploadFile, limit: int = MAX_UPLOAD_BYTES) -> bytes:
+    """Read an upload, refusing it the moment it passes `limit` (audit M9).
+
+    `await upload.read()` buffered the whole body and *then* compared, so the ceiling
+    protected nothing it was meant to protect. Starlette spools past a threshold, making
+    that disk-then-RAM rather than pure RAM, but a limit enforced after the fact is a
+    limit on what gets stored, not on what gets sent.
+
+    nginx also caps the body at 25 MB on the VPS (`client_max_body_size`); this covers the
+    paths where nothing is in front.
+    """
+    chunks, total = [], 0
+    while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(413, f"File too large (max {limit // (1024 * 1024)}MB)")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _reencode_image(data: bytes, declared: str) -> tuple:
+    """Verify the bytes really are the image they claim, then rebuild them (audit M8).
+
+    Returns `(bytes, content_type, extension)` for what should actually be stored.
+
+    Two separate jobs. **Verification** — `Image.open` plus `verify()` refuses anything
+    that is not a decodable image, and the format it reports is checked against what the
+    client declared, so a PNG announced as a JPEG is refused rather than quietly stored.
+    **Re-encoding** — the returned bytes are Pillow's output, not the caller's. That is
+    what actually kills a polyglot: a file that is both a valid GIF and a valid HTML
+    document does not survive being decoded to pixels and written back out.
+
+    It also strips every metadata block, EXIF included. For a collective posting photos
+    from venues, that means GPS coordinates stop being published as a side effect, which
+    is worth as much as the polyglot defence.
+
+    Animation is the one case worth preserving rather than flattening, so GIF and animated
+    WebP are re-encoded in place rather than converted to JPEG.
+    """
+    try:
+        Image.open(io.BytesIO(data)).verify()          # verify() exhausts the file object
+        img = Image.open(io.BytesIO(data))             # …so re-open it to actually use it
+    except Exception:
+        raise HTTPException(400, "That file is not a readable image")
+
+    fmt = (img.format or "").upper()
+    if fmt not in IMAGE_SNIFF_FORMATS.get(declared, set()):
+        raise HTTPException(
+            400, f"File content is {fmt or 'unrecognised'}, which does not match the "
+                 f"declared type {declared}")
+
+    out = io.BytesIO()
+    if getattr(img, "is_animated", False):
+        img.save(out, format=fmt, save_all=True)
+        return out.getvalue(), declared, IMAGE_CONTENT_TYPES[declared]
+    if fmt == "PNG":
+        img.convert("RGBA").save(out, format="PNG", optimize=True)
+        return out.getvalue(), "image/png", ".png"
+    if fmt == "WEBP":
+        img.convert("RGBA").save(out, format="WEBP", quality=90)
+        return out.getvalue(), "image/webp", ".webp"
+    img.convert("RGB").save(out, format="JPEG", quality=90, optimize=True)
+    return out.getvalue(), "image/jpeg", ".jpg"
+
+
+def _sniff_video(data: bytes, declared: str) -> None:
+    """Check the container header. Raises when it does not match the declared type."""
+    for offset, magic in VIDEO_SNIFF.get(declared, []):
+        if data[offset:offset + len(magic)] == magic:
+            return
+    raise HTTPException(400, f"File content does not look like {declared}")
 
 # ---------- Utility ----------
 
@@ -1440,6 +1527,15 @@ async def verify_email(token: str):
 @api.post("/auth/forgot-password", dependencies=[Depends(rate_limit("auth_forgot", 5, 900))])
 async def forgot_password(body: ForgotPasswordIn):
     email = body.email.strip().lower()
+    # Per-address as well as per-IP. The IP bucket alone stops one host hammering the
+    # endpoint; it does nothing about many hosts hammering one *victim*, and every request
+    # that gets through sends a real email from our domain to an address the caller chose.
+    # That is a mail-bomb with our sending reputation behind it — the same impact H1
+    # described, reached by having many keys rather than faking them.
+    #
+    # Keyed on the address whether or not an account exists, so it stays silent about that:
+    # a 429 means "this address has been asked for recently", never "this address is real".
+    _email_rate_check("auth_forgot_email", email, 3, 900)
     u = await db.users.find_one({"email": email}, {"_id": 0})
     # Only send when a password account actually exists, but ALWAYS return ok
     # (no account enumeration).
@@ -1930,6 +2026,11 @@ async def newsletter_subscribe(body: NewsletterIn):
     email = body.email.strip().lower()
     if not _valid_email(email):
         raise HTTPException(400, "Invalid email")
+    # Same reasoning as /auth/forgot-password: double opt-in means every call mails a
+    # confirmation to an address the caller names, so an IP-only limit is a per-attacker
+    # limit rather than a per-victim one. Checked after validation so a malformed address
+    # cannot spend a real address's budget.
+    _email_rate_check("newsletter_email", email, 3, 3600)
     existing = await db.newsletter_subscriptions.find_one({"email": email}, {"_id": 0})
     if existing and _newsletter_status(existing) == "confirmed":
         return {"ok": True}  # never reveal subscription state
@@ -3597,28 +3698,32 @@ async def admin_upload_media(
     # exists for. Not an escalation — an editor can already publish a custom_html block.
     user=Depends(require_admin_or_editor),
 ):
-    # SECURITY [M3/M8/M9 — see SECURITY_AUDIT.md]. Three things to know about this route:
-    #   * The media type is decided by the CLIENT-DECLARED Content-Type below; nothing
-    #     sniffs the actual bytes. The extension allowlist contains no HTML or SVG type
-    #     and names are server-generated UUIDs, which is what keeps this from being stored
-    #     XSS today — it stops being true if SVG is ever added, or if /uploads is served
-    #     without `X-Content-Type-Options: nosniff` (currently it is: no headers are set).
-    #   * Only the *thumbnail* is re-encoded through Pillow. The original bytes are
-    #     written verbatim, and videos are never re-encoded at all.
-    #   * The size cap is enforced AFTER the whole body is read into memory, and because
-    #     multipart is a CORS-safelisted content type this POST needs no preflight — so
-    #     with SameSite=None it is reachable cross-site against a logged-in admin.
-    content_type = file.content_type or ""
-    if content_type in IMAGE_CONTENT_TYPES:
-        media_type, ext = "image", IMAGE_CONTENT_TYPES[content_type]
-    elif content_type in VIDEO_CONTENT_TYPES:
-        media_type, ext = "video", VIDEO_CONTENT_TYPES[content_type]
+    """Audit M8 and M9 (uploads). The Content-Type still selects which branch runs, but it
+    is no longer *believed*: the bytes are checked against it, and for images the stored
+    file is Pillow's output rather than the caller's input.
+
+    Video cannot be re-encoded without ffmpeg, so it gets a container-header check and
+    nothing more. That leaves it the weakest of the three defences here — the others being
+    the extension allowlist (no HTML or SVG type exists in it) and `/uploads` being served
+    with `nosniff` and a sandboxed CSP by both the app and nginx.
+    """
+    declared = file.content_type or ""
+    if declared in IMAGE_CONTENT_TYPES:
+        media_type = "image"
+    elif declared in VIDEO_CONTENT_TYPES:
+        media_type = "video"
     else:
         raise HTTPException(400, "Unsupported file type — images (JPEG/PNG/WebP/GIF) or video (MP4/WebM/MOV) only")
 
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(400, "File too large (max 25MB)")
+    data = await _read_capped(file)
+
+    if media_type == "image":
+        # Reassigns all three: re-encoding can legitimately change the format, and the
+        # stored extension and Content-Type have to follow the bytes rather than the claim.
+        data, content_type, ext = _reencode_image(data, declared)
+    else:
+        _sniff_video(data, declared)
+        content_type, ext = declared, VIDEO_CONTENT_TYPES[declared]
 
     file_id = uuid.uuid4().hex
     url = await storage.save(f"{file_id}{ext}", data, content_type)
@@ -3639,9 +3744,8 @@ async def admin_upload_media(
         # browser at upload time and sent alongside. Treated as untrusted image
         # bytes: re-encoded through Pillow rather than written through as-is.
         try:
-            pdata = await poster.read()
-            if len(pdata) > MAX_UPLOAD_BYTES:
-                raise ValueError("poster too large")
+            pdata = await _read_capped(poster)
+            _reencode_image(pdata, poster.content_type or "image/jpeg")  # verify, then thumbnail
             pimg = Image.open(io.BytesIO(pdata)).convert("RGB")
             pimg.thumbnail((640, 640))
             buf = io.BytesIO()
