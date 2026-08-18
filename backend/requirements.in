@@ -20,7 +20,7 @@
 # do not drop this line when bumping fastapi.
 fastapi>=0.115
 starlette>=0.40
-uvicorn[standard]>=0.30
+uvicorn[standard]>=0.52.3
 python-multipart>=0.0.18
 
 # --- Data layer ---
