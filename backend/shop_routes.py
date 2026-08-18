@@ -20,6 +20,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from models_base import ApiModel, LONG_TEXT, MAX_JSON_DOC_BYTES
 
 # Stock is held while the buyer is on Stripe's page and released if they never pay. Long
 # enough to type card details, short enough that an abandoned cart doesn't sit on the last
@@ -204,12 +205,12 @@ def register_shop_routes(api: APIRouter, ctx):
 
     # ---------- cart ----------
 
-    class CartItemIn(BaseModel):
+    class CartItemIn(ApiModel):
         product_id: str
         variant_id: str
         quantity: int = 1
 
-    class CartQtyIn(BaseModel):
+    class CartQtyIn(ApiModel):
         quantity: int
 
     async def get_cart_doc(user_id: str) -> dict:
@@ -314,7 +315,7 @@ def register_shop_routes(api: APIRouter, ctx):
 
     # ---------- checkout ----------
 
-    class AddressIn(BaseModel):
+    class AddressIn(ApiModel):
         full_name: str
         phone: str = ""
         line1: str
@@ -489,13 +490,13 @@ def register_shop_routes(api: APIRouter, ctx):
 
     # ---------- admin: catalogue ----------
 
-    class VariantIn(BaseModel):
+    class VariantIn(ApiModel):
         variant_id: Optional[str] = None
         size: str
         sku: str
         stock: int = 0
 
-    class ProductIn(BaseModel):
+    class ProductIn(ApiModel):
         name: str
         slug: str = ""
         description: str = ""
@@ -592,7 +593,7 @@ def register_shop_routes(api: APIRouter, ctx):
         q = {} if not status else {"status": status}
         return await db.shop_orders.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
 
-    class OrderStatusIn(BaseModel):
+    class OrderStatusIn(ApiModel):
         status: str
         tracking_number: Optional[str] = None
         carrier: Optional[str] = None
@@ -644,7 +645,7 @@ def register_shop_routes(api: APIRouter, ctx):
 
     # ---------- admin: settings ----------
 
-    class ShopSettingsIn(BaseModel):
+    class ShopSettingsIn(ApiModel):
         shipping_ro_ron: Optional[float] = None
         shipping_eu_ron: Optional[float] = None
         free_over_ron: Optional[float] = None

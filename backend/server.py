@@ -28,6 +28,7 @@ from urllib.parse import urlencode, quote, urlsplit
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 from pydantic import BaseModel, Field
+from models_base import ApiModel, LONG_TEXT, MAX_JSON_DOC_BYTES
 from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -661,12 +662,33 @@ def _initial_role(email: str) -> str:
     return "user"
 
 
+# Anything below 0x20, plus DEL. CR and LF are the ones that matter — an address is a
+# mail header value, and a newline inside one starts a new header — but a tab or a NUL in
+# an address is equally meaningless, so the whole class goes.
+_EMAIL_FORBIDDEN = frozenset(chr(c) for c in range(0x20)) | {"\x7f"}
+
+
 def _valid_email(email: str) -> bool:
-    # SECURITY [M12]: deliberately loose, but it does NOT reject CR/LF. That is safe only
-    # because the mailer talks JSON to Resend; it would become header injection the moment
-    # anything builds SMTP headers from this value. Reject \r and \n here rather than
-    # relying on the transport.
+    """Deliberately loose on shape, strict on control characters (audit M12).
+
+    The audit noted this did not reject CR/LF and called it "safe only because the mailer
+    talks JSON to Resend". That premise expired when the SMTP backend landed: `_build_mime`
+    now builds real headers from this value. Python's `EmailMessage` does refuse a header
+    containing CR/LF — so injection was still blocked — but `send_mail` swallows provider
+    exceptions on purpose (an email failure must never fail a paid-ticket finalization), so
+    the outcome was a *silent non-delivery* traceable only through a logged exception.
+
+    Rejecting here turns that into a 400 at the point of entry, which is where the person
+    who typed it can see it.
+
+    `strip()` alone was never enough: it only removes leading and trailing whitespace, and
+    the payload is interior. Worse, the domain check reads `split("@")[-1]`, so
+    "a@b.com\r\nBcc: attacker@evil.example" was validated against `evil.example` — a
+    well-formed domain — and passed.
+    """
     email = (email or "").strip()
+    if _EMAIL_FORBIDDEN & set(email):
+        return False
     return "@" in email and "." in email.split("@")[-1] and 3 <= len(email) <= 254
 
 
@@ -907,7 +929,7 @@ async def _get_or_create_user(email, *, name="", first_name="", last_name="", pi
 
 # ---------- Models (light-touch, we use dicts for storage) ----------
 
-class RegisterIn(BaseModel):
+class RegisterIn(ApiModel):
     email: str
     password: str
     first_name: str = ""
@@ -919,55 +941,55 @@ class RegisterIn(BaseModel):
     promo_opt_in: bool = False
 
 
-class LoginIn(BaseModel):
+class LoginIn(ApiModel):
     email: str
     password: str
 
 
-class ConsentsIn(BaseModel):
+class ConsentsIn(ApiModel):
     email_opt_in: Optional[bool] = None
     news_opt_in: Optional[bool] = None
     promo_opt_in: Optional[bool] = None
 
 
-class ForgotPasswordIn(BaseModel):
+class ForgotPasswordIn(ApiModel):
     email: str
 
 
-class ResetPasswordIn(BaseModel):
+class ResetPasswordIn(ApiModel):
     token: str
     new_password: str
 
 
-class ProfileUpdate(BaseModel):
+class ProfileUpdate(ApiModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
 
 
-class ResendVerifyIn(BaseModel):
+class ResendVerifyIn(ApiModel):
     email: str
 
 
-class ArtistIn(BaseModel):
+class ArtistIn(ApiModel):
     name: str
     slug: str
-    bio: str = ""
+    bio: str = Field(default="", max_length=LONG_TEXT)
     image_url: str = ""
     links: dict = {}
 
 
-class ProjectIn(BaseModel):
+class ProjectIn(ApiModel):
     title: str
     slug: str
-    description: str = ""
+    description: str = Field(default="", max_length=LONG_TEXT)
     year: Optional[int] = None
     image_url: str = ""
     artist_ids: List[str] = []
     is_past: bool = False
 
 
-class WaveIn(BaseModel):
+class WaveIn(ApiModel):
     name: str
     price_ron: float
     capacity: int
@@ -979,10 +1001,10 @@ class WaveIn(BaseModel):
     access_from: Optional[str] = None
 
 
-class EventIn(BaseModel):
+class EventIn(ApiModel):
     title: str
     slug: str
-    description: str = ""
+    description: str = Field(default="", max_length=LONG_TEXT)
     venue: str = ""
     city: str = ""
     starts_at: str
@@ -1010,7 +1032,7 @@ class WavePatchIn(WaveIn):
     wave_id: Optional[str] = None
 
 
-class EventPatchIn(BaseModel):
+class EventPatchIn(ApiModel):
     """Partial update for an event. Every field optional; unknown keys are dropped.
 
     This mirrors `EventIn` rather than reusing it because a PATCH means something
@@ -1018,7 +1040,7 @@ class EventPatchIn(BaseModel):
     """
     title: Optional[str] = None
     slug: Optional[str] = None
-    description: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=LONG_TEXT)
     venue: Optional[str] = None
     city: Optional[str] = None
     starts_at: Optional[str] = None
@@ -1032,7 +1054,7 @@ class EventPatchIn(BaseModel):
     waves: Optional[List[WavePatchIn]] = None
 
 
-class ArtistPatchIn(BaseModel):
+class ArtistPatchIn(ApiModel):
     """Partial update for an artist. Same bargain as `EventPatchIn`.
 
     `links` stays a free-form dict on purpose — it is a bag of social URLs keyed by
@@ -1041,12 +1063,12 @@ class ArtistPatchIn(BaseModel):
     """
     name: Optional[str] = None
     slug: Optional[str] = None
-    bio: Optional[str] = None
+    bio: Optional[str] = Field(default=None, max_length=LONG_TEXT)
     image_url: Optional[str] = None
     links: Optional[dict] = None
 
 
-class EventNoticeIn(BaseModel):
+class EventNoticeIn(ApiModel):
     """A change announcement an admin sends to an event's ticket holders.
 
     Typed on purpose, like the patch models above: this endpoint fans a body out to real
@@ -1056,7 +1078,7 @@ class EventNoticeIn(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
-class DiscountIn(BaseModel):
+class DiscountIn(ApiModel):
     code: str
     percent_off: int
     expires_at: Optional[str] = None
@@ -1064,14 +1086,14 @@ class DiscountIn(BaseModel):
     event_id: Optional[str] = None
 
 
-class SpecialLinkIn(BaseModel):
+class SpecialLinkIn(ApiModel):
     event_id: str
     label: str
     price_ron: float
     capacity: int
 
 
-class ReserveIn(BaseModel):
+class ReserveIn(ApiModel):
     event_id: str
     wave_id: str
     quantity: int
@@ -1079,9 +1101,13 @@ class ReserveIn(BaseModel):
     special_link_token: Optional[str] = None
 
 
-class CheckoutIn(BaseModel):
+class CheckoutIn(ApiModel):
+    """Audit M7: `origin_url` used to live here and was handed to Stripe as the
+    success/cancel redirect. The client was telling the server something the server
+    already knows — the only caller sent `window.location.origin`, which is
+    `PUBLIC_APP_URL`. Removed rather than validated: a field nobody needs is not worth an
+    allowlist, and the shop checkout has always derived its own paths server-side."""
     reservation_id: str
-    origin_url: str
 
 
 # ---------- Auth Endpoints ----------
@@ -1602,9 +1628,13 @@ async def apple_start(return_: str = Query("/", alias="return")):
 @api.post("/auth/apple/callback", dependencies=[Depends(rate_limit("oauth_apple_cb", 20, 60))])
 async def apple_callback(
     request: Request,
-    id_token: str = Form(""),
-    state: str = Form(""),
-    user: str = Form(""),  # JSON {name:{firstName,lastName}, email} — first authorization ONLY
+    # Bounded individually: FastAPI builds the body model for a Form() signature itself,
+    # and that generated class does not inherit ApiModel, so the config-level ceiling does
+    # not apply here (audit M9). Sizes are Apple's shapes with headroom — an id_token is a
+    # JWT of roughly a kilobyte, `user` a small JSON object sent once.
+    id_token: str = Form("", max_length=8_000),
+    state: str = Form("", max_length=500),
+    user: str = Form("", max_length=4_000),  # JSON {name:{firstName,lastName}, email} — first authorization ONLY
     a_state: Optional[str] = Cookie(default=None),
     a_return: Optional[str] = Cookie(default=None),
 ):
@@ -1858,10 +1888,10 @@ async def gallery_clusters():
             "settings": await _gallery_settings()}
 
 
-class ContactMsg(BaseModel):
+class ContactMsg(ApiModel):
     name: str
     email: str
-    message: str
+    message: str = Field(max_length=LONG_TEXT)
 
 
 @api.post("/contact", dependencies=[Depends(rate_limit("contact", 5, 60))])
@@ -1878,12 +1908,12 @@ async def contact(msg: ContactMsg):
 
 # ---------- Newsletter ----------
 
-class NewsletterIn(BaseModel):
+class NewsletterIn(ApiModel):
     email: str
     source: Optional[str] = None  # optional label ("home hero", "footer", …)
 
 
-class NewsletterUnsubIn(BaseModel):
+class NewsletterUnsubIn(ApiModel):
     token: str
 
 
@@ -2270,10 +2300,9 @@ async def create_checkout(body: CheckoutIn, request: Request, user=Depends(get_c
     if parse_dt(r["expires_at"]) < now_utc():
         raise HTTPException(400, "Reservation expired")
 
-    # SECURITY [M7]: origin_url is client-supplied and unvalidated, then handed to Stripe
-    # as the success/cancel redirect. The client has no legitimate reason to choose this —
-    # derive it from PUBLIC_APP_URL server-side and drop the field from CheckoutIn.
-    origin = body.origin_url.rstrip("/")
+    # Server-side, from configuration — never from the request (audit M7). Matches what
+    # `shop_checkout` has always done with its own success_path/cancel_path.
+    origin = PUBLIC_APP_URL.rstrip("/")
     success_url = f"{origin}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{origin}/checkout/cancel?reservation_id={r['reservation_id']}"
     metadata = {"reservation_id": r["reservation_id"], "user_id": user["user_id"], "event_id": r["event_id"]}
@@ -2407,9 +2436,9 @@ async def create_stripe_session(*, user: dict, total_ron: float, metadata: dict,
                                 line_items: List[dict], success_path: str, cancel_path: str):
     """Open a Checkout Session (or simulate one) and return (session_id, url).
 
-    Redirect targets are built from PUBLIC_APP_URL rather than anything the client sent —
-    the ticket path takes an `origin_url` from the request body, which is the open-redirect
-    noted as M7 in the audit and is not repeated here.
+    Redirect targets are built from PUBLIC_APP_URL rather than anything the client sent.
+    This helper always did; the ticket path took an `origin_url` from the request body
+    until audit M7 was closed, and now derives it the same way.
     """
     success_url = f"{PUBLIC_APP_URL}{success_path}"
     cancel_url = f"{PUBLIC_APP_URL}{cancel_path}"
@@ -2745,11 +2774,11 @@ async def invoice_pdf(invoice_id: str, user=Depends(get_current_user)):
 
 # ---------- Door scanner ----------
 
-class ScanIn(BaseModel):
+class ScanIn(ApiModel):
     qr_code: str
 
 
-class ScanDenyIn(BaseModel):
+class ScanDenyIn(ApiModel):
     qr_code: str
     # Why someone was turned away is most of the value of the record — an unexplained
     # denial is hard to defend later. Optional because the door is not the place to
@@ -3414,7 +3443,7 @@ async def admin_gallery(event_id: Optional[str] = None, user=Depends(require_adm
     return await db.gallery.find(query, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(500)
 
 
-class GalleryIn(BaseModel):
+class GalleryIn(ApiModel):
     image_url: str
     thumbnail_url: str = ""
     caption: str = ""
@@ -3454,7 +3483,7 @@ async def admin_add_gallery(body: GalleryIn, user=Depends(require_admin)):
     return {k: v for k, v in g.items() if k != "_id"}
 
 
-class GalleryReorderIn(BaseModel):
+class GalleryReorderIn(ApiModel):
     event_id: Optional[str] = None
     ordered_ids: List[str]
 
@@ -3475,7 +3504,7 @@ async def admin_reorder_gallery(body: GalleryReorderIn, user=Depends(require_adm
     return {"ok": True, "count": len(body.ordered_ids)}
 
 
-class GallerySettingsIn(BaseModel):
+class GallerySettingsIn(ApiModel):
     title: Optional[str] = None
     slug: Optional[str] = None
     description: Optional[str] = None
@@ -3515,7 +3544,7 @@ async def admin_update_gallery_settings(body: GallerySettingsIn, user=Depends(re
     return await _gallery_settings()
 
 
-class GalleryPatchIn(BaseModel):
+class GalleryPatchIn(ApiModel):
     caption: Optional[str] = None
     is_cover: Optional[bool] = None
 

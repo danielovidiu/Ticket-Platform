@@ -6,11 +6,13 @@ renders everything dynamically from that data.
 """
 from datetime import datetime, timezone
 from typing import List, Optional
+import json
 import re
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from models_base import ApiModel, LONG_TEXT, MAX_JSON_DOC_BYTES
 
 import storage
 from sanitize import sanitize_draft, sanitize_blocks
@@ -105,6 +107,26 @@ RESERVED_SLUGS = frozenset({
 # space or a capital could be stored and would then be unroutable — the same silent
 # disappearance the reserved list exists to prevent, by a different route.
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+
+def _refuse_oversized(payload, what: str):
+    """Bound the free-form `dict` payloads (audit M9).
+
+    `str_max_length` on the model config covers every *typed* string field, which is most
+    of the API. It cannot reach these: a CMS draft is `Optional[dict]` — a block tree whose
+    shape is the block set's business, not Pydantic's — so nothing bounded it at all.
+
+    Measured rather than guessed: the largest real page is 3.6 KB, so the ceiling is two
+    orders of magnitude of headroom and exists to stop "arbitrarily large", not to tell an
+    editor when to stop writing.
+    """
+    if payload is None:
+        return
+    size = len(json.dumps(payload, default=str).encode("utf-8"))
+    if size > MAX_JSON_DOC_BYTES:
+        raise HTTPException(
+            413, f"{what} is {size // 1024} KB; the limit is {MAX_JSON_DOC_BYTES // 1024} KB")
 
 
 def page_route(slug: str) -> str:
@@ -204,24 +226,24 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
     def new_id(prefix):
         return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
-    class PageIn(BaseModel):
+    class PageIn(ApiModel):
         slug: str
         title: str
         nav_label: Optional[str] = None
         nav_order: int = 100
         in_nav: bool = True
 
-    class PagePatch(BaseModel):
+    class PagePatch(ApiModel):
         title: Optional[str] = None
         nav_label: Optional[str] = None
         nav_order: Optional[int] = None
         in_nav: Optional[bool] = None
         draft: Optional[dict] = None  # {blocks: [...]}
 
-    class ReorderIn(BaseModel):
+    class ReorderIn(ApiModel):
         order: List[str]  # page_ids in desired nav order
 
-    class ThemePatch(BaseModel):
+    class ThemePatch(ApiModel):
         draft: dict  # partial theme values
 
     # ---------- Public ----------
@@ -359,6 +381,7 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
 
     @api.patch("/admin/cms/pages/{page_id}")
     async def admin_update_page(page_id: str, body: PagePatch, user=Depends(require_admin_or_editor)):
+        _refuse_oversized(body.draft, "This page")
         upd = {k: v for k, v in body.model_dump().items() if v is not None}
         # Clean HTML on the way in, not only on the way out (audit M10). The React
         # renderer still runs DOMPurify, but this is what keeps live payloads out of the
@@ -483,6 +506,7 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
 
     @api.patch("/admin/cms/theme")
     async def admin_patch_theme(body: ThemePatch, user=Depends(require_admin_or_editor)):
+        _refuse_oversized(body.draft, "This theme")
         await db.cms_theme.update_one(
             {"doc_id": "theme_current"},
             {"$set": {"draft": body.draft, "updated_at": now_iso()}},
@@ -547,9 +571,11 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
     @api.post("/admin/cms/fonts")
     async def admin_upload_font(
         file: UploadFile = File(...),
-        family: str = Form(...),
+        # Bounded here rather than by ApiModel: FastAPI generates the body model for a
+        # Form() signature and it does not inherit our base (audit M9).
+        family: str = Form(..., max_length=200),
         weight: int = Form(400),
-        style: str = Form("normal"),
+        style: str = Form("normal", max_length=50),
         user=Depends(require_admin_or_editor),
     ):
         """Store one font file as one (family, weight, style) face.

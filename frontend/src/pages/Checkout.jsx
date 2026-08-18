@@ -31,7 +31,7 @@ export default function Checkout() {
   const goPay = async () => {
     setBusy(true);
     try {
-      const { data } = await http.post("/checkout", { reservation_id: reservationId, origin_url: window.location.origin });
+      const { data } = await http.post("/checkout", { reservation_id: reservationId });
       window.location.href = data.url;
     } catch (e) {
       // /checkout answers with a plain string, but the account gates on the reservation

@@ -195,10 +195,9 @@ def _create_reservation_for(user_headers, quantity=1):
 def test_checkout_returns_url_and_creates_txn():
     user_headers = _fresh_user_headers()
     res = _create_reservation_for(user_headers, quantity=1)
-    payload = {
-        "reservation_id": res["reservation_id"],
-        "origin_url": BASE_URL,
-    }
+    # `origin_url` used to be sent here and handed to Stripe as the redirect target
+    # (audit M7). The field is gone; the server derives it from PUBLIC_APP_URL.
+    payload = {"reservation_id": res["reservation_id"]}
     r = requests.post(f"{API}/checkout", json=payload, headers=user_headers, timeout=30)
     assert r.status_code == 200, r.text
     data = r.json()

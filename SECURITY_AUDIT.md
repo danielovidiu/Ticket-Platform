@@ -41,7 +41,7 @@ both are the kind of thing that gets exploited within days of a public launch.
 |---|---|---|
 | Critical | 1 | Payment bypass via default config — **fixed** |
 | High | 3 | Rate-limit bypass, memory DoS, admin bootstrap race — **all three fixed** |
-| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1–M6, M10 and M11 fixed; M7–M9, M12 open** |
+| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1–M7, M10–M12 fixed; M9 partly; M8 open** |
 | Low | 4 | Info leaks, incomplete refund path |
 
 ### Remediation status
@@ -61,7 +61,10 @@ both are the kind of thing that gets exploited within days of a public launch.
 | S1 | **Fixed** | Second pass: concurrent order cancel credited stock 6× (verified 5 → 17); write is now conditional |
 | M10 | **Fixed** | HTML cleaned server-side with nh3 on save/publish/restore; DOMPurify upgraded past its own bypass |
 | M11 | **Fixed** | Embed host allowlist + `sandbox`; CSP `frame-src` already blocked the payload, now matched by the code |
-| M7–M9, M12, L1–L4 | Open | See the remediation plan |
+| M7 | **Fixed** | `origin_url` removed from the model, not validated — the client was sending a value the server already had |
+| M9 | **Partly fixed** | 88 unbounded string fields closed via `ApiModel`; free-form CMS payloads capped. Streaming upload cap outstanding |
+| M12 | **Fixed** | Control characters refused at input and again at the mailer; the audit's "safe because Resend takes JSON" premise had expired |
+| M8, L1–L4 | Open | See the remediation plan |
 | Stale deps | **Fixed** | 126 → 38 runtime packages; `starlette` past CVE-2024-47874 |
 | Test suite | **Fixed** | 240 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
 
@@ -485,11 +488,16 @@ unreachable before precisely *because* the junk was being written.
 only ever writes a role validated against a four-value enum. Both take `body: dict`, so
 they match on a grep, but neither is a mass-assignment hole.
 
-### M7 — `origin_url` from the client drives Stripe redirect URLs
+### M7 — `origin_url` from the client drives Stripe redirect URLs — **FIXED**
 
-`create_checkout` builds `success_url` and `cancel_url` from `body.origin_url` with no
-validation, and passes them to Stripe. It should be derived from `PUBLIC_APP_URL`
-server-side; the client has no legitimate reason to choose it.
+`create_checkout` built `success_url` and `cancel_url` from `body.origin_url` with no
+validation and passed them to Stripe.
+
+**Fix (applied).** The field is **removed**, not validated. The only caller sent
+`window.location.origin`, which is what `PUBLIC_APP_URL` already holds — the client was
+telling the server something the server knew. An allowlist would have been a control
+around a value nobody needed. `create_checkout` now derives the origin the same way
+`shop_checkout` always has, from configuration.
 
 ### M8 — Upload type is decided by client-declared `Content-Type`, and original bytes are stored verbatim
 
@@ -507,7 +515,7 @@ cross-site.
 **Fix.** Verify the magic bytes, re-encode images, and serve `/uploads` with `nosniff`
 plus `Content-Disposition: attachment` for non-image types.
 
-### M9 — Request size is checked after the body is fully read
+### M9 — Request size is checked after the body is fully read — **PARTLY FIXED**
 
 `data = await file.read()` loads the entire upload into memory, *then* compares against
 `MAX_UPLOAD_BYTES`. Starlette spools to disk past a threshold, so this is disk-then-RAM
@@ -516,6 +524,38 @@ rather than pure RAM, but the 25 MB ceiling is enforced too late to protect eith
 Relatedly, no Pydantic model in the codebase sets `max_length`. `ContactMsg.message`,
 event descriptions, and CMS block payloads are unbounded, so a single request can store
 an arbitrarily large document.
+
+**The `max_length` half is fixed; the streaming upload cap is not.**
+
+Measured before the change: **88 of 90 string fields unbounded**. Setting a limit on 88
+fields by hand would have been 88 chances to miss one, and would have covered only the
+fields that existed that day. `models_base.ApiModel` sets `str_max_length` on the model
+config instead — it applies to every string field a model has, including ones not yet
+written — and 38 models were rebased onto it. A per-field `Field(max_length=…)` still
+overrides it *upward*, which is how prose fields get `LONG_TEXT` without loosening the
+default for names and slugs.
+
+Two things that approach could not reach, both found by the guard test rather than by
+reading:
+
+* **`Form(...)` endpoints.** FastAPI synthesises a body model from the signature and that
+  generated class does not inherit `ApiModel`, so `/auth/apple/callback` and the font
+  upload were still unbounded. Bounded per-parameter.
+* **Free-form `dict` payloads.** A CMS draft is `Optional[dict]` — a block tree whose
+  shape belongs to the block set, not to Pydantic. `_refuse_oversized` caps the serialised
+  document at 256 KB; the largest real page is 3.6 KB.
+
+Ceilings were chosen against the live data (longest stored string: 1491 characters), so
+they bound the absurd without touching anything anyone has written. Tightening individual
+fields to something semantically meaningful is a separate, smaller job.
+
+`test_input_bounds.py` derives the model list from the live route table — the same
+approach as `test_rbac.py`, and it reaches the models defined inside
+`register_shop_routes` and `register_cms_routes` that a module-level scan misses.
+
+**Still outstanding:** `await file.read()` in `admin_upload_media` still buffers the whole
+body before comparing against `MAX_UPLOAD_BYTES`. On the VPS nginx caps it at the edge
+(`client_max_body_size 25M`); the direct and serverless paths do not.
 
 ### M10 — CMS HTML is sanitized only in the browser — **FIXED**
 
@@ -605,12 +645,28 @@ an embed that breaks only in production, and a host in the CSP but not the code 
 permission granted for nothing. Restoring the passthrough fails 4 frontend tests; widening
 either CSP fails 2 backend ones.
 
-### M12 — Email inputs are not checked for CRLF
+### M12 — Email inputs are not checked for CRLF — **FIXED**
 
 `_valid_email` requires an `@`, a dot in the domain, and a length between 3 and 254. It
-does not reject `\r`/`\n`. Resend takes JSON so header injection is not reachable today,
-but the validator is the wrong place to rely on the transport, and the address flows into
-`List-Unsubscribe` header construction.
+did not reject `\r`/`\n`.
+
+**The premise expired.** "Resend takes JSON so header injection is not reachable today"
+was true when written; the SMTP backend added since builds real MIME headers from this
+value. Python's `EmailMessage` does refuse a header containing CR/LF — verified directly —
+so injection was still blocked, but `send_mail` swallows provider exceptions by design (an
+email failure must never fail a paid-ticket finalization), so the outcome was a **silent
+non-delivery** with only a logged exception.
+
+**Worse than the audit implies, for a different reason than stated.** `strip()` removes
+only leading and trailing whitespace, and the domain check reads `split("@")[-1]` — so
+`a@b.com\r\nBcc: attacker@evil.example` was validated against `evil.example`, a
+well-formed domain, and **passed**. Confirmed against the running validator before the fix.
+
+**Fix (applied).** `_valid_email` rejects the whole C0 control range plus DEL, so the
+class goes rather than the two characters that happen to matter today. `send_mail` refuses
+a recipient containing CR/LF/NUL as a second line of defence at the boundary that actually
+builds headers — reachable by any future caller — returning a clear reason instead of
+raising deep inside a provider call.
 
 ---
 

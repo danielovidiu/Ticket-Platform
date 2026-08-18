@@ -403,6 +403,16 @@ async def _persist_to_outbox(kind, to, subject, html_body, headers, payload) -> 
 async def send_mail(kind: str, to: str, payload: dict) -> dict:
     """Render + deliver (or persist to outbox). Returns a small status dict.
     Never raises — logs and returns {'ok': False, ...} on failure."""
+    # Audit M12, second line of defence. `_valid_email` rejects control characters at the
+    # input boundary, which covers every address this app stores — but `send_mail` is what
+    # actually builds headers, and it is reachable from any future caller with any string.
+    # Refusing here returns a clear reason instead of raising out of `_build_mime` deep in
+    # a provider call, where the swallow-all-exceptions contract would turn it into an
+    # unexplained non-delivery.
+    if not isinstance(to, str) or any(c in to for c in "\r\n\x00"):
+        _log.error("send_mail: refusing %r — control characters in the recipient", kind)
+        return {"ok": False, "reason": "invalid_recipient"}
+
     tpl = TEMPLATES.get(kind)
     if tpl is None:
         _log.error("send_mail: unknown kind %r", kind)

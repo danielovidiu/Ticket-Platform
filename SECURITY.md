@@ -99,13 +99,16 @@ and the perimeter.
 | M10 | CMS custom HTML was cleaned only by DOMPurify at render time, so MongoDB held the raw string and every non-React consumer got it — and the pinned DOMPurify (3.4.12) had a published bypass | Cleaned server-side with `nh3` on save, publish and version-restore (`backend/sanitize.py`); DOMPurify upgraded to 3.4.13 and narrowed to match. See **CMS HTML** below |
 | M11 | The video block fell through to the author's raw URL for anything that was not YouTube/Vimeo, framing any page on the internet inside a real Supersanity URL — phishing with your domain in the address bar | `resolveEmbed` emits a canonical src from a fixed host list or nothing; the iframe is sandboxed; the CMS preview says why an embed was refused. See **Embeds** below |
 | H1 | `X-Forwarded-For` chose the rate-limit bucket. The app-side half shipped early and the other half defeated it: uvicorn rewrites `request.client.host` from that header for any peer in `forwarded_allow_ips` (default `127.0.0.1`), so the "socket peer" fallback was attacker-supplied. Verified: 14 of 14 accepted while rotating the header | `FORWARDED_ALLOW_IPS` must be stated explicitly on a public deployment or startup fails; every documented start path sets it; and the nginx line it rests on -- overwrite, not append -- is asserted. See **Trusted proxies** below |
+| M7 | `create_checkout` took `origin_url` from the request body and handed it to Stripe as the post-payment redirect | The field is removed rather than validated — the only caller sent `window.location.origin`, which is `PUBLIC_APP_URL`. Derived server-side, as the shop always did |
+| M9 (part) | No model set `max_length`: 88 of 90 string fields were unbounded, and CMS drafts are free-form `dict`s nothing bounded at all | `ApiModel` sets `str_max_length` for every field a model has; prose overrides upward; CMS payloads capped at 256 KB. Streaming upload cap still open |
+| M12 | `_valid_email` did not reject CR/LF, and `a@b.com\r\nBcc: …` passed because the domain check reads `split("@")[-1]` — the *injected* domain | Control characters refused at input and again at the mailer boundary |
 | — | `POST /auth/logout` read only the cookie, so a `Bearer` client got `200 {"ok":true}` while its session stayed valid (found while fixing M2) | Both call sites share `_presented_token`; logout revokes either form |
 
 **Still open:**
 
 | Id | Gap | Effect |
 |---|---|---|
-| M7–M9, M12, L1–L4 | See the audit | |
+| M8, M9 (uploads), L1–L4 | See the audit | M8 is guarded today by three separate things; the fix is about not depending on all three |
 
 Every Critical and High finding is now closed. What remains is documented in the audit:
 M7 (client-supplied Stripe redirect URLs), M8/M9 (upload trust and late size checks), M12

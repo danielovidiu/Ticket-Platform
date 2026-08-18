@@ -17,7 +17,7 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 > (mass assignment on the admin patch routes), M10 (CMS HTML now sanitized server-side,
 > not only in the browser) and M11 (embed host allowlist).
 > **H1 (spoofable rate-limit key) is now closed too**, which clears every Critical and
-> High finding. M7–M9, M12 and the four Low items remain — full detail in
+> High finding. M8, the streaming half of M9, and the four Low items remain — full detail in
 > **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**.
 
 ## Run it locally
@@ -198,7 +198,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000 --forwarded-allow-ips ""
 cd backend && venv/bin/python -m pytest
 ```
 
-**794 passed, 0 xfailed** — the last strict xfail was H1, and closing it removed the marker. Point it at another environment with
+**897 passed, 0 xfailed** — the last strict xfail was H1, and closing it removed the marker. Point it at another environment with
 `TICKET_PLATFORM_URL`; everything else (Mongo URL, database name) comes from
 `backend/.env`, the same file the server reads.
 
