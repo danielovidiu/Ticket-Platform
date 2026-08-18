@@ -36,6 +36,15 @@ cd frontend
 yarn install && yarn start    # http://localhost:3000
 ```
 
+Both servers are also in `.claude/launch.json`, so an agent or editor that reads launch
+configs starts them on these ports rather than guessing. It spells the proxy setting as
+`FORWARDED_ALLOW_IPS=""` instead of the flag above: uvicorn treats the two identically
+(it reads the variable when the flag is absent, and tests it for `None`, so empty means
+trust nobody), but `server.py` reads that same variable — so with only the flag it warns
+that the setting is missing while uvicorn is in fact configured correctly.
+`backend/tests/test_deploy_config.py` asserts the setting is still there, in either
+spelling.
+
 Everything works with **no external credentials**: password auth is native, emails land
 in the `outbox` collection (and the logs), and payments run a local simulator. Google,
 Apple, Stripe, Resend and SMTP all switch on only when their env vars are set — see

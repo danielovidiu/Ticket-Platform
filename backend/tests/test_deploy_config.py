@@ -24,12 +24,21 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CRACO = ROOT / "frontend" / "craco.config.js"
 VERCEL_JSON = ROOT / "vercel.json"
 DEPLOY_VPS = ROOT / "DEPLOY_VPS.md"
+LAUNCH_JSON = ROOT / ".claude" / "launch.json"
 
 
 def _nginx_block() -> str:
     blocks = re.findall(r"```nginx\n(.*?)```", DEPLOY_VPS.read_text(), re.S)
     assert blocks, "no nginx block in DEPLOY_VPS.md"
     return blocks[0]
+
+
+def _launch_config(name: str) -> dict:
+    data = json.loads(LAUNCH_JSON.read_text())
+    for cfg in data["configurations"]:
+        if cfg["name"] == name:
+            return cfg
+    raise AssertionError(f"no {name!r} configuration in .claude/launch.json")
 
 
 def _vercel_headers() -> dict:
@@ -152,3 +161,55 @@ class TestScriptSrcStaysStrict:
                 f"{label} script-src allows unsafe-inline: {m.group(1)}"
             assert "unsafe-eval" not in m.group(1), \
                 f"{label} script-src allows unsafe-eval: {m.group(1)}"
+
+
+class TestDevLaunchConfigDoesNotReopenH1:
+    """The dev launcher is the one start path that is not a deployment, and it is the
+    one where H1 was actually reproduced. `uvicorn` defaults to
+    `forwarded_allow_ips="127.0.0.1"`, so a laptop server rewrites
+    `request.client.host` from whatever `X-Forwarded-For` the caller sent — and the
+    app only warns here rather than refusing, so nothing else catches it.
+
+    That also makes this a prerequisite for the suite: the H1 regression in
+    test_security_hardening.py rotates the header against a running server, and it can
+    only pass against a server started the way this config starts one.
+
+    Either spelling disables the trust — uvicorn reads `FORWARDED_ALLOW_IPS` from the
+    environment when the flag is absent, and reads it as `is None`, so an empty value
+    means "trust nobody" rather than falling back to the default. The config uses the
+    environment variable because `server.py` reads the same one: with only the flag,
+    the app cannot see it and warns that it is unset while uvicorn is in fact
+    configured correctly.
+    """
+
+    def test_backend_disables_uvicorns_proxy_header_trust(self):
+        cmd = " ".join(_launch_config("backend")["runtimeArgs"])
+
+        flag = re.search(r"--forwarded-allow-ips\s+(\S+)", cmd)
+        env = re.search(r"FORWARDED_ALLOW_IPS=(\S*)", cmd)
+        assert flag or env, (
+            "the backend launch config sets neither FORWARDED_ALLOW_IPS nor "
+            "--forwarded-allow-ips, so uvicorn falls back to trusting X-Forwarded-For "
+            "from 127.0.0.1 and every rate limit is bypassable locally (audit H1)"
+        )
+
+        for label, m in (("--forwarded-allow-ips", flag), ("FORWARDED_ALLOW_IPS", env)):
+            if m is None:
+                continue
+            value = m.group(1).strip("\\")
+            assert value in ('""', "''", ""), (
+                f"the dev launcher trusts a proxy at {label}={m.group(1)} — nothing "
+                'fronts the app locally, so this must be empty (audit H1)'
+            )
+
+    def test_ports_match_the_documented_ones(self):
+        """The frontend's dev proxy and the test suite's default both assume 8000."""
+        assert _launch_config("backend")["port"] == 8000
+        assert _launch_config("frontend")["port"] == 3000
+
+    def test_ports_are_pinned_rather_than_reassigned(self):
+        """A launcher that quietly moves the backend to 8001 on a busy port leaves the
+        frontend and the tests talking to whatever still holds 8000."""
+        for name in ("backend", "frontend"):
+            assert _launch_config(name).get("autoPort") is False, \
+                f"the {name} launch config may be reassigned to another port"
