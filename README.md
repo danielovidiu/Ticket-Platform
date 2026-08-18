@@ -16,9 +16,9 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 > both oversell races — M4 (special-link capacity) and M5 (per-user cap) — M6
 > (mass assignment on the admin patch routes), M10 (CMS HTML now sanitized server-side,
 > not only in the browser) and M11 (embed host allowlist).
-> **H1 (spoofable rate-limit key) is only half fixed and is still exploitable under
-> uvicorn** — see the checklist below.
-> **P1–P3 remain open.** Full detail in **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**.
+> **H1 (spoofable rate-limit key) is now closed too**, which clears every Critical and
+> High finding. M7–M9, M12 and the four Low items remain — full detail in
+> **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**.
 
 ## Run it locally
 
@@ -27,7 +27,7 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 cd backend
 python -m venv venv && venv/bin/pip install -r requirements.txt
 cp .env.example .env
-venv/bin/uvicorn server:app --port 8000 --reload
+venv/bin/uvicorn server:app --port 8000 --reload --forwarded-allow-ips ""
 
 # frontend
 cd frontend
@@ -62,30 +62,21 @@ The audit's P0 items.
       `Permissions-Policy` and a path-specific CSP on every response, plus HSTS on HTTPS.
 - [x] **Session tokens hashed at rest.** *(M2)* Only `sha256(token)` is stored; existing
       sessions were migrated in place without logging anyone out.
-- [ ] **Trusted-proxy handling.** *(H1 — half done, still exploitable)* `X-Forwarded-For`
-      used to be trusted unconditionally, so every rate limit was bypassable by rotating
-      the header and `/api/newsletter` and `/api/auth/forgot-password` worked as mail-bomb
-      amplifiers. The application-level half shipped: forwarding headers are believed only
-      when `TRUSTED_IP_HEADER` names one. Set it to `x-vercel-forwarded-for` on Vercel, or
-      to `x-forwarded-for` behind a proxy that **replaces** rather than appends.
+- [x] **Trusted-proxy handling.** *(H1)* `X-Forwarded-For` used to choose the rate-limit
+      bucket, which made `/api/newsletter` and `/api/auth/forgot-password` mail-bomb
+      amplifiers. The application half — believe a forwarding header only when
+      `TRUSTED_IP_HEADER` names one — shipped early and was defeated by the half that had
+      not: uvicorn rewrites `request.client.host` from that same header for any peer in
+      `forwarded_allow_ips`, whose default is `127.0.0.1`.
 
-      **The other half did not, and it defeats the first.** `_client_ip()` falls back to
-      `request.client.host` believing it to be the socket peer. Under uvicorn it is not:
-      `proxy_headers` defaults to `True` and `forwarded_allow_ips` to `127.0.0.1`, so
-      uvicorn rewrites `request.client.host` from `X-Forwarded-For` before the app ever
-      sees the request — for any client on the allowlist, which includes every reverse
-      proxy on the same host. Verified against `/api/contact` (limit 5/60s) on a default
-      `uvicorn server:app`:
-
-      ```
-      no header:              200 200 200 200 200 429 429 429 429
-      rotating X-Forwarded-For: 200 200 200 200 200 200 200 200 200
-      ```
-
-      The audit's remediation was always two-part; only part one was done. Run uvicorn
-      with `--forwarded-allow-ips` naming the proxy (or `""` when nothing fronts it), or
-      set `FORWARDED_ALLOW_IPS`. This is the top open item — see
-      [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) H1.
+      Both halves are in now. **`FORWARDED_ALLOW_IPS` must be set explicitly on a public
+      deployment or the app refuses to start** — `""` when nothing fronts it, or the
+      proxy's address when something does. uvicorn reads the same variable, so they cannot
+      disagree. Set `TRUSTED_IP_HEADER` to match your proxy
+      (`x-vercel-forwarded-for` on Vercel, `x-real-ip` behind the nginx config in
+      `DEPLOY_VPS.md`), and make sure that proxy **overwrites** `X-Forwarded-For` rather
+      than appending — the test suite now asserts that line, because it is what the whole
+      thing rests on.
 
 Configuration the app already enforces (it refuses to start otherwise): `APP_ENV=production`,
 a 32-byte `SESSION_SECRET`, and an explicit `CORS_ORIGINS` allowlist. `SESSION_SECRET` is
@@ -200,14 +191,14 @@ The suite is **integration-style**: it drives a live server over HTTP and reads 
 directly for role fixtures. Start the backend first.
 
 ```bash
-cd backend && venv/bin/uvicorn server:app --port 8000
+cd backend && venv/bin/uvicorn server:app --port 8000 --forwarded-allow-ips ""
 ```
 
 ```bash
 cd backend && venv/bin/python -m pytest
 ```
 
-**786 passed, 1 xfailed.** Point it at another environment with
+**794 passed, 0 xfailed** — the last strict xfail was H1, and closing it removed the marker. Point it at another environment with
 `TICKET_PLATFORM_URL`; everything else (Mongo URL, database name) comes from
 `backend/.env`, the same file the server reads.
 

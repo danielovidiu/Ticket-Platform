@@ -216,6 +216,50 @@ def _is_public_deployment() -> bool:
     host = (urlsplit(PUBLIC_APP_URL).hostname or "").lower()
     return host not in {"localhost", "127.0.0.1", "::1", ""} and not host.endswith(".local")
 
+
+# SECURITY [H1]: who is allowed to tell us the client's IP.
+#
+# `TRUSTED_IP_HEADER` decides whether the *application* believes a forwarding header. It
+# does not, and cannot, decide whether `request.client.host` is the socket peer — and that
+# is the other half of H1, which defeated the first half for months.
+#
+# uvicorn's ProxyHeadersMiddleware is ON by default (`--proxy-headers`) with
+# `forwarded_allow_ips="127.0.0.1"`. For any peer in that list it **rewrites**
+# `request.client.host` from `X-Forwarded-For` before the app sees the request. So the
+# fallback in `_client_ip()` — the one that looks like "use the socket peer, which cannot
+# be faked" — is reading an attacker-supplied header whenever the attacker can reach the
+# app from an allowed address. Reproduced against `/api/contact` (5 per 60s): 14 of 14
+# accepted while rotating the header, versus 5-then-429 without it.
+#
+# Whether that is exploitable depends entirely on the topology, which is exactly why it
+# must not be left to a default:
+#
+#   * nothing in front         -> "" . uvicorn trusts no forwarding header at all.
+#   * nginx on the same host   -> "127.0.0.1", and the proxy MUST overwrite the header
+#                                 (`proxy_set_header X-Forwarded-For $remote_addr`) rather
+#                                 than append (`$proxy_add_x_forwarded_for`). With append,
+#                                 the left-most entry is the caller's and the bypass is
+#                                 back — see DEPLOY_VPS.md, where that line is asserted by
+#                                 test_deploy_config.py.
+#   * serverless               -> not applicable; the platform terminates, and
+#                                 TRUSTED_IP_HEADER=x-vercel-forwarded-for is the answer.
+#
+# An unset value is refused on a public deployment rather than defaulted, because the
+# default is the unsafe one and "we happened to be behind a proxy that overwrites" is not
+# a control. Read here only to validate: uvicorn reads the same variable itself.
+FORWARDED_ALLOW_IPS = os.environ.get("FORWARDED_ALLOW_IPS")
+
+if FORWARDED_ALLOW_IPS is None and not SERVERLESS and _is_public_deployment():
+    raise RuntimeError(
+        "FORWARDED_ALLOW_IPS must be set explicitly on a public deployment (audit H1). "
+        "uvicorn otherwise trusts X-Forwarded-For from 127.0.0.1 and rewrites "
+        "request.client.host with it, which makes every rate limit bypassable if anything "
+        "on this host can reach the app. Set it to \"\" when nothing fronts the app, or to "
+        "the proxy's address (e.g. 127.0.0.1 for nginx on the same host) when something "
+        "does — and make sure that proxy OVERWRITES X-Forwarded-For rather than appending "
+        "to it."
+    )
+
 # Feature flag for the mandatory phone number. OFF by default: an account needs a first
 # name and a surname, and the phone is collected but optional. Set REQUIRE_PHONE=1 to
 # make it mandatory everywhere at once — registration, the profile form, and the
@@ -227,6 +271,17 @@ REQUIRE_PHONE = os.environ.get("REQUIRE_PHONE", "").strip() == "1"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("supersanity")
+
+# The dev half of the H1 guard above — a hard failure there covers public deployments, and
+# this covers a laptop, where the same bypass is real but the fix is a flag nobody knows
+# to pass. Lives here rather than beside its constant only because `logger` is defined
+# between the two.
+if FORWARDED_ALLOW_IPS is None:
+    logger.warning(
+        "FORWARDED_ALLOW_IPS not set — uvicorn trusts X-Forwarded-For from 127.0.0.1, so "
+        "rate limits are bypassable from this host (audit H1). Start with "
+        '--forwarded-allow-ips "" unless something fronts the app.'
+    )
 
 # ---------- Payment mode (fails closed) ----------
 # Two modes. "stripe" uses the real SDK and requires a webhook signing secret. "fake"

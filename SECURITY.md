@@ -98,51 +98,18 @@ and the perimeter.
 | S1 | Cancelling a paid shop order released its stock and then wrote the status with an unconditional `$set` — six concurrent cancels all returned 200 and each credited the stock (verified: a variant went 5 → 17 where 7 was right) | The status write is conditional on the status the request read, 409 when it loses, and the release happens after the flip |
 | M10 | CMS custom HTML was cleaned only by DOMPurify at render time, so MongoDB held the raw string and every non-React consumer got it — and the pinned DOMPurify (3.4.12) had a published bypass | Cleaned server-side with `nh3` on save, publish and version-restore (`backend/sanitize.py`); DOMPurify upgraded to 3.4.13 and narrowed to match. See **CMS HTML** below |
 | M11 | The video block fell through to the author's raw URL for anything that was not YouTube/Vimeo, framing any page on the internet inside a real Supersanity URL — phishing with your domain in the address bar | `resolveEmbed` emits a canonical src from a fixed host list or nothing; the iframe is sandboxed; the CMS preview says why an embed was refused. See **Embeds** below |
+| H1 | `X-Forwarded-For` chose the rate-limit bucket. The app-side half shipped early and the other half defeated it: uvicorn rewrites `request.client.host` from that header for any peer in `forwarded_allow_ips` (default `127.0.0.1`), so the "socket peer" fallback was attacker-supplied. Verified: 14 of 14 accepted while rotating the header | `FORWARDED_ALLOW_IPS` must be stated explicitly on a public deployment or startup fails; every documented start path sets it; and the nginx line it rests on -- overwrite, not append -- is asserted. See **Trusted proxies** below |
 | — | `POST /auth/logout` read only the cookie, so a `Bearer` client got `200 {"ok":true}` while its session stayed valid (found while fixing M2) | Both call sites share `_presented_token`; logout revokes either form |
 
 **Still open:**
 
 | Id | Gap | Effect |
 |---|---|---|
-| H1 | `X-Forwarded-For` trusted with no proxy allowlist | Every rate limit bypassable; mail bombing; brute force |
 | M7–M9, M12, L1–L4 | See the audit | |
 
-H1 is pinned by an `xfail(strict=True)` test in `backend/tests/test_security_hardening.py`,
-so the suite goes red the moment it is fixed without removing the marker.
-
-**H1 is now the single most valuable remaining fix.** With H2 done the limiter can no
-longer be used to exhaust memory, but it still cannot stop a determined attacker: anyone
-can choose their own bucket by setting a header, which leaves `/api/newsletter` and
-`/api/auth/forgot-password` usable as mail-bomb amplifiers against third parties.
-
-**Half of the fix is in, and the half that is missing cancels it.** `TRUSTED_IP_HEADER`
-now gates which forwarding header the application will believe, and unset means "believe
-none of them". That is correct as far as it goes, but `_client_ip()` then falls back to
-`request.client.host` on the assumption that it is the socket peer — and under uvicorn it
-is not. `proxy_headers` defaults to `True` and `forwarded_allow_ips` to `127.0.0.1`, so
-uvicorn's `ProxyHeadersMiddleware` rewrites `request.client.host` from `X-Forwarded-For`
-before the application is reached, for any client on that allowlist. A reverse proxy on
-the same host is on that allowlist by default, which is the standard container layout.
-
-Reproduced against `/api/contact` (limit 5/60s) on a default `uvicorn server:app`, with
-`TRUSTED_IP_HEADER` unset:
-
-```
-no header:                200 200 200 200 200 429 429 429 429
-rotating X-Forwarded-For: 200 200 200 200 200 200 200 200 200
-```
-
-So the application-level guard cannot be verified by reading `server.py` alone — the
-process that runs it has to be checked too. Pass `--forwarded-allow-ips` naming the real
-proxy, or `""` when nothing fronts the app. This matters most for the planned move off
-Vercel: Vercel's Python runtime does not invoke the uvicorn CLI, so a container running
-uvicorn behind nginx inherits an exposure the current deployment does not have.
-
-Code at each of these points carries a `SECURITY [id]` comment keyed to the audit:
-
-```bash
-grep -rn "SECURITY \[" backend frontend/src
-```
+Every Critical and High finding is now closed. What remains is documented in the audit:
+M7 (client-supplied Stripe redirect URLs), M8/M9 (upload trust and late size checks), M12
+(CRLF in email inputs) and the four Low findings.
 
 ## Authentication
 
@@ -289,8 +256,9 @@ Everything else is IP-keyed on the route; `grep -n 'rate_limit("' backend/*.py` 
 **Two caveats that apply to both.** The table lives in process memory, so N workers means
 N times the configured allowance — which is why `DEPLOY_VPS.md` runs a single uvicorn
 worker, and why moving the limiter to Redis is a prerequisite for ever running more than
-one. And IP keying is only as honest as `TRUSTED_IP_HEADER` plus a proxy that overwrites
-rather than appends: that is H1, still open.
+one. And IP keying is only as honest as `TRUSTED_IP_HEADER`, `FORWARDED_ALLOW_IPS` and a
+proxy that overwrites rather than appends -- that was H1, and all three are now required
+and asserted rather than assumed. See **Trusted proxies**.
 
 ## Roles — enforced server-side, and checked exhaustively
 
@@ -405,8 +373,9 @@ afterwards.
 
 `svg` is deliberately absent from both passes: it widened the mXSS surface for a
 capability no block uses. `iframe` is absent too — video embeds are their own block type
-with a URL prop, and allowing raw iframes here would reintroduce audit M11 sideways. M11
-itself, on that dedicated embed block, is still open.
+with a URL prop, and allowing raw iframes here would reintroduce audit M11 sideways —
+which is now fixed on its own terms too (see **Embeds**), so letting one back in here
+would undo it by the side door.
 
 `backend/tests/test_html_sanitization.py` asserts against **what is in MongoDB** rather
 than the response body: a test reading only the response would pass against a server that
@@ -451,6 +420,49 @@ granted for nothing, which is how a narrow policy quietly becomes a wide one.
 **An unresolvable URL is loud where it can be fixed.** Nothing renders on the public site;
 the CMS preview shows an explicit panel naming the rejected URL. It used to be an empty
 box for both.
+
+## Trusted proxies — who may tell us the client's IP
+
+Every rate limit buckets on the caller's IP, and the consent log records it as evidence,
+so the answer to "who is calling?" is load-bearing. Three settings decide it, and audit H1
+was what happens when only two of them are considered.
+
+| Setting | Decides |
+|---|---|
+| `TRUSTED_IP_HEADER` | whether the **application** believes a forwarding header, and which one. Unset means "believe none" |
+| `FORWARDED_ALLOW_IPS` | whether **uvicorn** rewrites `request.client.host` from `X-Forwarded-For` before the app is called |
+| the proxy's own config | whether that header is **overwritten** or **appended to** |
+
+**The trap, which cost this project months.** The app-side half shipped first:
+`TRUSTED_IP_HEADER` unset means no header is trusted, and `_client_ip()` falls back to
+`request.client.host` — the socket peer, which cannot be faked. Except under uvicorn it
+is not the socket peer. `ProxyHeadersMiddleware` is on by default with
+`forwarded_allow_ips="127.0.0.1"`, and for any peer on that list it overwrites
+`request.client.host` from `X-Forwarded-For`. The guard was being applied to a value the
+process had already replaced. 14 of 14 requests were accepted against a 5-per-60s limit
+while rotating the header.
+
+**There is no safe default, so the app refuses to pick one.** On a public deployment,
+startup fails unless `FORWARDED_ALLOW_IPS` is set:
+
+- `""` — nothing fronts the app; uvicorn trusts no forwarding header at all.
+- `127.0.0.1` — nginx on the same host, **and that proxy overwrites the header**.
+
+Development gets a warning rather than a refusal, so the quickstart still works. Serverless
+is exempt: uvicorn is not the server on Vercel, where `TRUSTED_IP_HEADER=x-vercel-forwarded-for`
+is the control that applies. uvicorn reads the same variable the app validates, so the two
+cannot drift.
+
+**The third setting is the one that hides.** Trusting `127.0.0.1` is safe *only* because
+the nginx block does `proxy_set_header X-Forwarded-For $remote_addr` — it replaces the
+header with the real peer. The idiom people paste from the internet is
+`$proxy_add_x_forwarded_for`, which **appends**; the left-most entry is then whatever the
+caller sent, uvicorn believes it, and the bypass is back. One variable name is the entire
+difference between a closed finding and an open one, so
+`test_deploy_config.py::TestTheProxyOverwritesTheForwardedHeader` fails if it changes.
+
+That the finding lived in how the process was launched, not in `server.py`, is why it
+survived a code review that closed everything around it.
 
 ## Payments & fulfillment
 

@@ -4,49 +4,70 @@
 #
 #    pip-compile --output-file=requirements.txt --strip-extras requirements.in
 #
-annotated-doc==0.0.4
+annotated-doc==0.0.5
     # via fastapi
-annotated-types==0.7.0
+annotated-types==0.8.0
     # via pydantic
 anyio==4.14.2
     # via
     #   httpx
     #   starlette
+    #   vercel
+    #   vercel-internal-core
+    #   vercel-oidc
+    #   vercel-queue
+    #   vercel-sandbox
     #   watchfiles
 bcrypt==5.0.0
     # via -r requirements.in
+cbor2==6.1.4
+    # via vercel
 certifi==2026.7.22
     # via
     #   httpcore
     #   httpx
     #   requests
-cffi==2.1.0
+cffi==2.1.1
     # via cryptography
-charset-normalizer==3.4.9
+charset-normalizer==3.5.1
     # via
     #   reportlab
     #   requests
 click==8.4.2
     # via uvicorn
-cryptography==49.0.0
+cryptography==50.0.0
     # via
     #   -r requirements.in
     #   pyjwt
 dnspython==2.8.0
     # via pymongo
-fastapi==0.139.2
+fastapi==0.141.1
     # via -r requirements.in
 h11==0.16.0
     # via
     #   httpcore
     #   uvicorn
+h2==4.4.1
+    # via httpx
+hpack==4.2.0
+    # via h2
 httpcore==1.0.9
     # via httpx
 httptools==0.8.0
     # via uvicorn
 httpx==0.28.1
-    # via -r requirements.in
-idna==3.18
+    # via
+    #   -r requirements.in
+    #   vercel
+    #   vercel-cache
+    #   vercel-internal-core
+    #   vercel-internal-telemetry
+    #   vercel-oidc
+    #   vercel-queue
+    #   vercel-sandbox
+hyperframe==6.1.0
+    # via h2
+idna==3.19
     # via
     #   anyio
     #   httpx
@@ -65,6 +86,8 @@ pydantic==2.13.4
     # via
     #   -r requirements.in
     #   fastapi
+    #   vercel
+    #   vercel-sandbox
 pydantic-core==2.46.4
     # via pydantic
 pyjwt==2.13.0
@@ -75,12 +98,15 @@ pymongo==4.17.0
     # via
     #   -r requirements.in
     #   motor
-python-dotenv==1.2.2
+python-dotenv==1.2.3
     # via
     #   -r requirements.in
     #   uvicorn
+    #   vercel
 python-multipart==0.0.32
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   vercel-queue
 pyyaml==6.0.3
     # via uvicorn
 qrcode==8.2
@@ -89,11 +115,11 @@ reportlab==5.0.0
     # via -r requirements.in
 requests==2.34.2
     # via stripe
-starlette==1.3.1
+starlette==1.6.0
     # via
     #   -r requirements.in
     #   fastapi
-stripe==15.3.1
+stripe==15.5.0
     # via -r requirements.in
 typing-extensions==4.16.0
     # via
@@ -102,19 +128,49 @@ typing-extensions==4.16.0
     #   pydantic-core
     #   stripe
     #   typing-inspection
-typing-inspection==0.4.2
+    #   vercel-queue
+typing-inspection==0.4.4
     # via
     #   fastapi
     #   pydantic
 urllib3==2.7.0
     # via requests
-uvicorn==0.51.0
+uvicorn==0.52.3
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
-vercel==0.7.2
+vercel==0.10.0
     # via -r requirements.in
+vercel-cache==0.7.2
+    # via vercel
+vercel-headers==0.7.1
+    # via
+    #   vercel
+    #   vercel-cache
+    #   vercel-oidc
+    #   vercel-queue
+vercel-internal-core==0.1.2
+    # via
+    #   vercel
+    #   vercel-queue
+    #   vercel-sandbox
+vercel-internal-telemetry==0.7.2
+    # via
+    #   vercel
+    #   vercel-cache
+vercel-oidc==0.8.0
+    # via
+    #   vercel
+    #   vercel-internal-telemetry
+    #   vercel-queue
+    #   vercel-sandbox
+vercel-queue==0.8.0
+    # via vercel
+vercel-sandbox==0.4.0
+    # via vercel
 watchfiles==1.2.0
     # via uvicorn
 websockets==16.1.1
-    # via uvicorn
+    # via
+    #   uvicorn
+    #   vercel

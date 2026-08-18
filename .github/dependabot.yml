@@ -22,15 +22,20 @@ updates:
         applies-to: security-updates
         patterns: ["*"]
 
+  # Not security-only, unlike npm above. That restriction exists because CRA's
+  # 1581-package tree would raise a PR a day and train everyone to ignore them; the
+  # backend is 40 packages and quiet, so routine bumps are reviewable — and leaving them
+  # unraised is how a lockfile silently drifts from what `pip-compile` produces. One
+  # grouped PR a week, minor and patch together, majors on their own so they get read.
   - package-ecosystem: pip
     directory: /backend
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      pip-security:
-        applies-to: security-updates
+      pip-minor-and-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: github-actions
     directory: /

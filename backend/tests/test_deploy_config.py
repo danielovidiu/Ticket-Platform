@@ -102,6 +102,40 @@ class TestTheThreeHeaderCopiesAgree:
         assert "sandbox" in body, "the uploads CSP lost its sandbox"
 
 
+class TestTheProxyOverwritesTheForwardedHeader:
+    """The single line audit H1 now rests on.
+
+    uvicorn is told to trust `X-Forwarded-For` from 127.0.0.1, which is safe *only*
+    because nginx replaces the header with the real peer. The usual copy-paste is
+    `$proxy_add_x_forwarded_for`, which APPENDS — and then the left-most entry is whatever
+    the caller sent, uvicorn believes it, and every rate limit is bypassable again. One
+    variable name is the whole difference, and nothing but this test would notice.
+    """
+
+    def test_x_forwarded_for_is_set_not_appended(self):
+        block = _nginx_block()
+        m = re.search(r"proxy_set_header\s+X-Forwarded-For\s+(\S+);", block)
+        assert m, "the nginx block no longer sets X-Forwarded-For at all"
+        value = m.group(1)
+        assert value == "$remote_addr", (
+            f"X-Forwarded-For is set from {value} — it must be $remote_addr. "
+            "$proxy_add_x_forwarded_for appends the caller's value, which reopens H1."
+        )
+
+    def test_x_real_ip_is_the_peer(self):
+        block = _nginx_block()
+        m = re.search(r"proxy_set_header\s+X-Real-IP\s+(\S+);", block)
+        assert m, "the nginx block no longer sets X-Real-IP"
+        assert m.group(1) == "$remote_addr", f"X-Real-IP is set from {m.group(1)}"
+
+    def test_forwarded_allow_ips_is_documented_as_required(self):
+        text = DEPLOY_VPS.read_text()
+        assert "FORWARDED_ALLOW_IPS" in text, (
+            "DEPLOY_VPS.md no longer mentions FORWARDED_ALLOW_IPS — the app will refuse "
+            "to boot in production and the runbook will not say why"
+        )
+
+
 class TestScriptSrcStaysStrict:
 
     def test_no_unsafe_inline_in_script_src(self):

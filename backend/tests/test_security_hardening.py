@@ -98,6 +98,10 @@ class TestPaymentModeFailsClosed:
         base = {
             **os.environ, "APP_ENV": "production", "SESSION_SECRET": "x" * 64,
             "CORS_ORIGINS": "https://example.test",
+            # Part of the production startup contract since H1 was fixed. Set here so a
+            # payments test fails on payments: without it every row refuses to start for
+            # the proxy reason and the matrix stops saying anything about C1.
+            "FORWARDED_ALLOW_IPS": "",
         }
         for k in ("STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET", "LOCAL_FAKE_PAYMENTS"):
             base.pop(k, None)
@@ -231,13 +235,24 @@ class TestRateLimiterIsBounded:
         assert size <= 50, f"key table grew to {size} despite a cap of 50"
 
 
-class TestKnownUnfixedFindings:
-    """Findings from SECURITY_AUDIT.md that are documented but NOT yet fixed. xfail(strict)
-    so the gap can't be quietly forgotten, and can't be quietly closed either — fixing one
-    turns the suite red until the marker is removed."""
+class TestForwardedHeaderCannotChooseTheRateLimitBucket:
+    """Audit H1, and the marker that used to sit here.
 
-    @pytest.mark.xfail(strict=True, reason="Audit H1: X-Forwarded-For is trusted with no "
-                                           "proxy allowlist, so rotating it bypasses every rate limit")
+    This was `xfail(strict=True)` for months: the application half of the fix shipped
+    (`TRUSTED_IP_HEADER` gates whether a forwarding header is believed) while the other
+    half did not, and the other half defeated it. uvicorn's ProxyHeadersMiddleware
+    rewrites `request.client.host` from `X-Forwarded-For` for any peer in
+    `forwarded_allow_ips` — default `127.0.0.1` — so `_client_ip()`'s "use the socket
+    peer" fallback was reading an attacker-supplied header.
+
+    The strict marker did its job exactly as intended: it made the gap impossible to
+    forget and impossible to close quietly, and removing it is now part of the fix.
+
+    Passing this requires the server to run with `--forwarded-allow-ips ""` (nothing
+    fronts it), which is what the README quickstart and the dev launch config now pass.
+    In production the app refuses to boot unless `FORWARDED_ALLOW_IPS` is set explicitly.
+    """
+
     def test_xff_spoofing_does_not_bypass_rate_limit(self):
         codes = []
         for i in range(14):
@@ -310,20 +325,43 @@ class TestRateLimitNewsletter:
 
 
 class TestRateLimitContact:
-    """Limit is 5/min. 6th must return 429."""
+    """Limit is 5/min. 6th must return 429.
+
+    Shares the /contact bucket with the H1 test above, which spends all of it — that test
+    stopped being an `xfail` and now genuinely drives the limiter to 429. Rather than
+    depend on which runs first, this one waits for a clean window: asserting "the 6th is
+    refused" is meaningless if the 1st already was.
+    """
+
+    def _fresh_window(self, attempts=2):
+        """Return the first response, having waited out a window already in progress."""
+        for attempt in range(attempts):
+            r = requests.post(
+                f"{BASE_URL}/api/contact",
+                json={"name": "TEST_rl_probe", "email": "rl@t.dev", "message": "window probe"},
+                timeout=15)
+            if r.status_code != 429:
+                return r
+            if attempt < attempts - 1:
+                time.sleep(min(int(r.headers.get("Retry-After", 60) or 60), 70) + 1)
+        return r
+
     def test_contact_6th_returns_429(self):
-        codes = []
-        for i in range(6):
+        first = self._fresh_window()
+        assert first.status_code == 200, (
+            f"could not get a clean /contact window: {first.status_code} {first.text[:120]}")
+
+        codes = [first.status_code]
+        for i in range(1, 6):
             r = requests.post(
                 f"{BASE_URL}/api/contact",
                 json={"name": f"TEST_rl_{i}", "email": f"rl{i}@t.dev", "message": "rate-limit test"},
-            )
+                timeout=15)
             codes.append(r.status_code)
             if r.status_code == 429:
                 break
         assert codes[:5].count(200) == 5, f"first 5 should be 200: {codes}"
         assert codes[-1] == 429, f"6th should be 429: {codes}"
-        # Cleanup contact messages
         db.contact_messages.delete_many({"name": {"$regex": "^TEST_rl_"}})
 
 

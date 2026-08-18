@@ -32,10 +32,15 @@ reaching production. Second is that every rate limit in the application can be b
 with one spoofed HTTP header, which I verified. Neither is a subtle cryptographic flaw —
 both are the kind of thing that gets exploited within days of a public launch.
 
+> Both are now fixed, along with every other Critical and High finding and all but four
+> Medium ones; what remains is M7-M9, M12 and L1-L4. The two headline items turned out to
+> have the same shape: the defect was not a line of code but what happened when nobody
+> stated a value. Both now refuse to start rather than pick a default.
+
 | Severity | Count | Theme |
 |---|---|---|
 | Critical | 1 | Payment bypass via default config — **fixed** |
-| High | 3 | Rate-limit bypass, memory DoS, admin bootstrap race — **1 of 3 fixed (H3)** |
+| High | 3 | Rate-limit bypass, memory DoS, admin bootstrap race — **all three fixed** |
 | Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1–M6, M10 and M11 fixed; M7–M9, M12 open** |
 | Low | 4 | Info leaks, incomplete refund path |
 
@@ -52,7 +57,7 @@ both are the kind of thing that gets exploited within days of a public launch.
 | M4, M5 | **Fixed** | Both oversells closed without transactions; races reproduced first |
 | M6 | **Fixed** | Typed patch models on event/artist updates; the dotted-path write is gone |
 | L5 | **Fixed** | Bearer clients could not actually log out (found while fixing M2) |
-| H1 | **Open — half fixed** | App-side `TRUSTED_IP_HEADER` shipped; uvicorn's `proxy_headers` default still rewrites `request.client.host`, so the bypass survives. Pinned by an `xfail(strict=True)` regression test. Top priority |
+| H1 | **Fixed** | `FORWARDED_ALLOW_IPS` required on a public deployment; every start path sets it; the nginx overwrite it depends on is asserted. `xfail` marker removed |
 | S1 | **Fixed** | Second pass: concurrent order cancel credited stock 6× (verified 5 → 17); write is now conditional |
 | M10 | **Fixed** | HTML cleaned server-side with nh3 on save/publish/restore; DOMPurify upgraded past its own bypass |
 | M11 | **Fixed** | Embed host allowlist + `sandbox`; CSP `frame-src` already blocked the payload, now matched by the code |
@@ -168,7 +173,7 @@ hard failure instead of a silent downgrade.
 
 ## High
 
-### H1 — Every rate limit is bypassable with a spoofed `X-Forwarded-For` **[verified]**
+### H1 — Every rate limit is bypassable with a spoofed `X-Forwarded-For` **[verified]** — FIXED
 
 `server.py:42` and `server.py:261` both take the client IP as:
 
@@ -202,42 +207,57 @@ password.
 **Fix.** Only honour `X-Forwarded-For` from a configured trusted-proxy CIDR; otherwise
 use `request.client.host`. Run uvicorn with `--forwarded-allow-ips` set to the proxy.
 
-#### Status: part one done, part two outstanding — still exploitable **[re-verified]**
+#### Status: FIXED — both halves, and the marker is gone
 
-`TRUSTED_IP_HEADER` implements the first sentence: no forwarding header is believed
-unless it is named, and unset is the default. The second sentence was never applied, and
-it turns out to carry the fix rather than merely reinforce it.
+The first half shipped long ago: `TRUSTED_IP_HEADER` means no forwarding header is
+believed unless it is named, and unset is the default. The second half was never applied,
+and it turned out to carry the fix rather than reinforce it.
 
 `_client_ip()` falls back to `request.client.host` believing it to be the socket peer.
 Under uvicorn it is not. `proxy_headers` defaults to `True` and `forwarded_allow_ips` to
-`127.0.0.1` (uvicorn 0.51.0), so `ProxyHeadersMiddleware` overwrites `request.client.host`
-from `X-Forwarded-For` before the ASGI app is called, for every client on that allowlist —
-which includes any reverse proxy sharing the host. The application's own guard is applied
-to a value that was already substituted underneath it.
-
-Re-verified against `/api/contact` (limit 5/60s), default `uvicorn server:app`,
-`TRUSTED_IP_HEADER` unset:
+`127.0.0.1`, so `ProxyHeadersMiddleware` overwrites `request.client.host` from
+`X-Forwarded-For` before the ASGI app is called, for every client on that allowlist. The
+application's guard was being applied to a value the application had already lost control
+of. Re-verified against `/api/contact` (5 per 60s) on a default `uvicorn server:app`:
 
 ```
 no header:                200 200 200 200 200 429 429 429 429
 rotating X-Forwarded-For: 200 200 200 200 200 200 200 200 200
 ```
 
-The `xfail(strict=True)` marker is therefore still correct and must stay. Note the
-consequence for reviewers: this finding cannot be closed by reading `server.py`, because
-the defect lives in how the process is launched.
+**Fix (applied), in three parts, because the defect was never only in `server.py`.**
 
-Scope by deployment shape:
+1. **The app refuses to guess.** `FORWARDED_ALLOW_IPS` must be set explicitly on a public
+   deployment or startup fails, in the same fail-closed style as C1. There is no safe
+   default: the right value depends on the topology, and uvicorn's default is the unsafe
+   one. Development gets a warning instead, so the quickstart still works. Serverless is
+   exempt — uvicorn is not the server on Vercel, and `TRUSTED_IP_HEADER=x-vercel-forwarded-for`
+   is the control that applies there.
 
-| Shape | Exposed? |
+2. **Every documented way of starting the app now states it.** The README quickstart, the
+   dev launch config and the systemd unit in `DEPLOY_VPS.md` all pass or set it. uvicorn
+   reads the same environment variable the app validates, so the two cannot drift.
+
+3. **The line the whole thing rests on is asserted.** On the VPS, `127.0.0.1` is trusted
+   *only* because nginx overwrites the header —
+   `proxy_set_header X-Forwarded-For $remote_addr`. The usual copy-paste is
+   `$proxy_add_x_forwarded_for`, which **appends**, and then the left-most entry is the
+   caller's again and the bypass is back. One variable name is the entire difference;
+   `test_deploy_config.py` now fails if it changes.
+
+**The `xfail(strict=True)` marker earned its keep and has been removed.** It made the gap
+impossible to forget for months and impossible to close quietly — removing it was part of
+this change, exactly as intended. The test is now an ordinary passing assertion, and it
+fails against a server started with uvicorn's defaults, which was confirmed by starting
+one.
+
+Scope by deployment shape, before the fix:
+
+| Shape | Was exposed? |
 |---|---|
 | `uvicorn` on a laptop or a container, direct | Yes, from any client the allowlist covers (`127.0.0.1` by default) |
-| `uvicorn` behind nginx/Caddy on the same host | Yes — the proxy is on the allowlist, so a client-supplied header is honoured unless the proxy replaces it |
-| Vercel Python runtime (current production) | No — the uvicorn CLI is not what serves requests there |
-
-Remaining work: pass `--forwarded-allow-ips` naming the real proxy (or `""` when nothing
-fronts the app), or set `FORWARDED_ALLOW_IPS`. This becomes urgent with the planned move
-off Vercel to a container, which is exactly the shape in the second row.
+| `uvicorn` behind nginx/Caddy on the same host | Only if the proxy appends rather than replaces — now asserted |
+| Vercel Python runtime | No — the uvicorn CLI is not what serves requests there |
 
 ### H2 — Rate-limiter state grows without bound (memory-exhaustion DoS) — FIXED
 

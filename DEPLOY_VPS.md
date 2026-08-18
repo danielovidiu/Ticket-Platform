@@ -175,6 +175,10 @@ User=deploy
 Group=deploy
 WorkingDirectory=/home/deploy/ticket-platform/backend
 EnvironmentFile=/home/deploy/ticket-platform/backend/.env
+# FORWARDED_ALLOW_IPS comes from the EnvironmentFile above and is read by uvicorn
+# itself, so the app's startup guard and uvicorn's proxy handling cannot disagree.
+# Set it to 127.0.0.1 here: nginx is on this host, and the nginx block OVERWRITES
+# X-Forwarded-For rather than appending, which is what makes trusting it safe.
 ExecStart=/home/deploy/ticket-platform/backend/venv/bin/uvicorn server:app \
           --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers
 Restart=always
@@ -400,6 +404,7 @@ Environment differences from the Vercel deployment:
 | `BLOB_READ_WRITE_TOKEN` | **unset** | Switches `storage.py` to local disk |
 | `PUBLIC_APP_URL` | `https://your-domain` | Every emailed link resolves against it |
 | `TRUSTED_IP_HEADER` | `x-real-ip` | Matches what nginx sets in section 5 |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | **Required** — the app refuses to boot without it (audit H1). nginx is on this host and overwrites `X-Forwarded-For`, which is what makes trusting it safe. Read by uvicorn too, so the two cannot drift |
 | `COOKIE_SAMESITE` | `lax` | Frontend and API share an origin |
 | `SESSION_SECRET` | a fresh 32-byte hex | Required; no ephemeral fallback in production |
 | `APP_ENV` | `production` | Refuses to boot with the fake payment simulator |

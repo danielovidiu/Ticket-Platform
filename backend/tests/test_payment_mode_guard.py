@@ -31,8 +31,15 @@ def run_import(**env):
     # Wipe everything the guards read, so the host's own .env cannot decide the outcome.
     for k in ("APP_ENV", "VERCEL", "PUBLIC_APP_URL", "STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET",
               "LOCAL_FAKE_PAYMENTS", "I_ACCEPT_FREE_TICKETS_IN_PUBLIC", "COOKIE_SAMESITE",
-              "SESSION_SECRET", "CORS_ORIGINS"):
+              "SESSION_SECRET", "CORS_ORIGINS", "FORWARDED_ALLOW_IPS"):
         base.pop(k, None)
+    # Satisfied by default so these cases fail on payments, which is what they are about.
+    # Since H1 was fixed, a public deployment also refuses to start without
+    # FORWARDED_ALLOW_IPS — and without this default every case below would refuse for
+    # that reason instead, leaving the payment guard untested while still going green.
+    # Pass FORWARDED_ALLOW_IPS=None to leave it genuinely unset and exercise that guard.
+    if "FORWARDED_ALLOW_IPS" not in env:
+        base["FORWARDED_ALLOW_IPS"] = ""
     base.update({k: v for k, v in env.items() if v is not None})
     # server.py load_dotenv()s backend/.env; run from a directory where that is absent so
     # the file cannot reintroduce a key the case under test is meant to be missing.
@@ -48,6 +55,41 @@ def modes(res):
         line.split("=", 1) for line in res.stdout.splitlines() if "=" in line and line.split("=")[0].isupper()
     )
     return out
+
+
+class TestForwardedAllowIpsIsRequiredInPublic:
+    """Audit H1. uvicorn's default (`forwarded_allow_ips="127.0.0.1"`) rewrites
+    `request.client.host` from `X-Forwarded-For`, so the socket-peer fallback in
+    `_client_ip()` is attacker-controlled wherever something on the host can reach the
+    app. The value depends on the topology and there is no safe default, so a public
+    deployment must state it."""
+
+    # Everything else is configured correctly, so the only reason to refuse is this one.
+    CONFIGURED = dict(PUBLIC_APP_URL="https://tickets.example", SESSION_SECRET="x" * 64,
+                      CORS_ORIGINS="https://tickets.example",
+                      STRIPE_API_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_x")
+
+    def test_a_public_deployment_refuses_to_start_without_it(self):
+        res = run_import(FORWARDED_ALLOW_IPS=None, **self.CONFIGURED)
+        assert res.returncode != 0, f"booted with an unset FORWARDED_ALLOW_IPS: {res.stdout}"
+        assert "FORWARDED_ALLOW_IPS" in res.stderr, res.stderr[-400:]
+
+    def test_it_starts_once_the_answer_is_stated(self):
+        """Both answers are valid; what is refused is leaving it to the default."""
+        for value in ("", "127.0.0.1"):
+            res = run_import(FORWARDED_ALLOW_IPS=value, **self.CONFIGURED)
+            assert res.returncode == 0, f"{value!r} rejected: {res.stderr[-300:]}"
+
+    def test_serverless_is_exempt(self):
+        """Vercel terminates the connection itself; uvicorn is not the server there, and
+        TRUSTED_IP_HEADER=x-vercel-forwarded-for is the control that applies."""
+        res = run_import(FORWARDED_ALLOW_IPS=None, VERCEL="1", **self.CONFIGURED)
+        assert res.returncode == 0, res.stderr[-300:]
+
+    def test_local_development_is_exempt(self):
+        """A laptop gets a warning, not a refusal — the README quickstart must still work."""
+        res = run_import(FORWARDED_ALLOW_IPS=None, SESSION_SECRET="x" * 64)
+        assert res.returncode == 0, res.stderr[-300:]
 
 
 class TestFakePaymentsRefusedInPublic:
