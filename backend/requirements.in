@@ -37,7 +37,7 @@ cryptography>=42
 bcrypt>=4.1.3
 
 # --- Integrations ---
-stripe>=14.4.1
+stripe>=15.5.0
 httpx>=0.27
 
 # --- Content safety ---
