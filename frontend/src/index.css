@@ -1,5 +1,75 @@
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
-@import url("https://api.fontshare.com/v2/css?f[]=clash-display@200,300,400,500,600,700&display=swap");
+/* Baseline typefaces, self-hosted.
+   This was an @import url() to fonts.googleapis.com, which put a third-party round trip
+   on the critical path of every page load — a CSS @import blocks rendering and cannot be
+   preloaded — and handed Google a visitor IP before anything was drawn. The weights are
+   exactly the ones that request asked for, so nothing renders differently.
+
+   Clash Display below is still fetched from Fontshare; it is not published to npm.
+
+   The STATIC package, deliberately, not @fontsource-variable/manrope: the variable one
+   declares its family as "Manrope Variable". Every CMS theme document stores the family
+   by name and applyTheme() writes it straight into --font-body, so a renamed family
+   would silently drop every saved theme to system-ui. */
+@import '@fontsource/manrope/300.css';
+@import '@fontsource/manrope/400.css';
+@import '@fontsource/manrope/500.css';
+@import '@fontsource/manrope/600.css';
+@import '@fontsource/manrope/700.css';
+@import '@fontsource/manrope/800.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+/* Clash Display, the default display face. Vendored rather than imported: the Indian
+   Type Foundry publishes it through Fontshare only, not npm, so there is no package to
+   depend on. The six weights, the font-display and the family name are exactly what
+   api.fontshare.com was serving, so nothing renders differently — but the stylesheet
+   round trip and the second one to cdn.fontshare.com are both gone, and with them the
+   three Fontshare hosts in the CSP.
+
+   Licensed under the ITF Free Font Licence, which permits self-hosting. Files fetched
+   from cdn.fontshare.com on 18 August 2026. */
+@font-face {
+  font-family: 'Clash Display';
+  src: url('./assets/fonts/clash-display-200.woff2') format('woff2');
+  font-weight: 200;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Clash Display';
+  src: url('./assets/fonts/clash-display-300.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Clash Display';
+  src: url('./assets/fonts/clash-display-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Clash Display';
+  src: url('./assets/fonts/clash-display-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Clash Display';
+  src: url('./assets/fonts/clash-display-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Clash Display';
+  src: url('./assets/fonts/clash-display-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
 
 @tailwind base;
 @tailwind components;
