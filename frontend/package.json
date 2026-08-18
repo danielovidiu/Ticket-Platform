@@ -38,7 +38,7 @@
     "cmdk": "1.1.1",
     "cra-template": "1.2.0",
     "date-fns": "4.1.0",
-    "dayjs": "1.11.13",
+    "dayjs": "1.11.21",
     "dompurify": "^3.4.13",
     "embla-carousel-react": "8.6.0",
     "framer-motion": "11.18.0",
