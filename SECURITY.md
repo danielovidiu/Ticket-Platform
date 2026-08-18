@@ -54,6 +54,15 @@ the CRA build emits no inline scripts — check with
 fix the build rather than relaxing the policy. `style-src` does need `'unsafe-inline'`:
 React renders `style={{…}}` as inline attributes.
 
+**No source maps in production.** They were 3.9 MB against 912 KB of application code and
+nothing consumed them — there is no error tracker wired up. This is not a secrecy claim:
+the bundle carries no secrets (verified against the build artefact for twelve secret
+shapes), and minified JS is reversible anyway. It removes a free, readable map of the
+attack surface and 80% of the transfer. Disabled in `craco.config.js` rather than by
+`GENERATE_SOURCEMAP=false`, because `.env*` is gitignored and so an env file would never
+reach Vercel or a fresh clone — and nginx refuses `.map` outright as a backstop for a
+build that predates the change. `test_deploy_config.py` fails if either is undone.
+
 Verified by serving the production build behind the exact policy and walking eight routes:
 zero violations. That test is also what caught the mistake worth repeating — fonts are
 declared from `api.fontshare.com` but *served* from `cdn.fontshare.com`, so the first

@@ -245,6 +245,19 @@ server {
     set $csp "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.fontshare.com; font-src 'self' data: https://fonts.gstatic.com https://api.fontshare.com https://cdn.fontshare.com; img-src 'self' data: blob: https://images.unsplash.com; media-src 'self' blob:; frame-src https://www.youtube.com https://player.vimeo.com; connect-src 'self'";
     add_header Content-Security-Policy $csp always;
 
+    # Source maps are never served, whatever is on disk.
+    #
+    # The build already emits none (craco.config.js sets devtool=false for production),
+    # so this catches the case that config cannot: a build made before that change, a
+    # deploy that ran with it patched out, or a stray .map copied in by hand. A rule the
+    # server enforces outlives a flag someone has to remember.
+    #
+    # Regex locations win over prefix ones, so this also covers /uploads/.
+    location ~ \.map$ {
+        access_log off;
+        return 404;
+    }
+
     # Static build. try_files falls back to index.html so React Router owns the routes.
     root /home/deploy/ticket-platform/frontend/build;
     location / {
