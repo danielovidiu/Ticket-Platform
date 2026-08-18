@@ -50,3 +50,28 @@ become `""`.
 `build/`, not Vite's default `dist/` — `vercel.json` and the nginx root in
 `DEPLOY_VPS.md` both name that path. Source maps are off, and
 `backend/tests/test_deploy_config.py` fails if that changes.
+
+## Dependency pins (`resolutions`)
+
+The `resolutions` block in `package.json` forces transitive dependencies to patched
+versions. Most entries are CVE mitigations, so nothing there is decorative.
+
+**Audited 2026-08-18.** The block was inherited from the react-scripts/craco era and
+had accumulated pins for packages the Vite toolchain no longer installs — a resolution
+that matches nothing is silently inert, which makes the list look like more coverage
+than it gives. Twenty-nine dead entries were removed and twelve live ones kept.
+
+The check, against a clean `yarn install --frozen-lockfile`:
+
+- a bare key (`flatted`) is live only if that package is in `node_modules`
+- a scoped key (`**/axios/form-data`) is live only if the **parent** is installed *and*
+  actually declares that dependency — `**/eslint/js-yaml` failed on the second half,
+  since `eslint` has no direct `js-yaml` dep
+
+Two removals looked risky and were not: the `js-yaml` and `form-data` copies that exist
+come in via `@eslint/eslintrc` and `axios`, which keep their own pins, so the patched
+versions still win. Removing the dead keys left the resolved tree byte-identical.
+
+Do not delete a pin because its name looks obsolete — `rollup` reads like Vite-era dead
+weight but is pulled in by `react-qr-reader`, and dropping it would un-patch it. Re-run
+the check above instead, and update the date here.
