@@ -1,0 +1,61 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+@import '@fontsource-variable/fraunces';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+
+@theme {
+  /* near-black backgrounds */
+  --color-ink-950: #050506;
+  --color-ink-900: #0e0e10;
+  --color-ink-800: #1a1a1d;
+  --color-ink-700: #28282c;
+
+  /* off-white foreground */
+  --color-paper-50: #f7f5f0;
+  --color-paper-300: #c9c6bc;
+  --color-paper-500: #8b8880;
+
+  /* primary CTA accent */
+  --color-signal-500: #e8402c;
+  --color-signal-600: #c4331f;
+
+  /* secondary accent for dividers / featured tags */
+  --color-gold-400: #d4af6a;
+
+  --font-display: 'Fraunces Variable', 'Fraunces', serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+
+  --text-display-1: 4.5rem;
+  --text-display-1--line-height: 0.95;
+  --text-display-1--letter-spacing: -0.02em;
+  --text-display-2: 3rem;
+  --text-display-2--line-height: 1;
+  --text-display-2--letter-spacing: -0.015em;
+  --text-display-3: 2rem;
+  --text-display-3--line-height: 1.05;
+  --text-display-4: 1.5rem;
+  --text-display-4--line-height: 1.1;
+
+  --spacing-18: 4.5rem;
+  --spacing-22: 5.5rem;
+
+  --radius-none: 0px;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-ink-950 text-paper-50 font-sans antialiased;
+  }
+
+  ::selection {
+    @apply bg-signal-500 text-paper-50;
+  }
+}
