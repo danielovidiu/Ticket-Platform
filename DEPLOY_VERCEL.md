@@ -1,7 +1,7 @@
 # Deploying to Vercel + MongoDB Atlas
 
 One Vercel project serves both halves of this repo. `vercel.json` declares two
-[services](https://vercel.com/docs/services): the CRA frontend and the FastAPI backend,
+[services](https://vercel.com/docs/services): the Vite frontend and the FastAPI backend,
 with top-level rewrites sending `/api/*` to the backend and everything else to the
 frontend.
 
@@ -25,6 +25,28 @@ relative and the session cookie is same-site — no CORS preflight, no `SameSite
 > carry it. Setting `REACT_APP_BACKEND_URL` here — the name this used to have — would
 > not error. Vite would decline to expose it, `src/api.js` would fall back to `""`, and
 > every API call would go to the frontend's own origin and 404.
+
+**The frontend service declares its own SPA fallback, and has to.** This app is a single
+page: only `/index.html` exists on disk, and every route below it — `/login`, `/events`,
+`/shop/:slug` — is resolved by the router in the browser. A hard navigation to one of
+those (`startLogin()` does exactly that, via `window.location.assign("/login?...")`), or
+a refresh, asks Vercel for a file that was never built. The `rewrites` block inside the
+`frontend` service is what answers those with `index.html` instead of a 404.
+
+Nothing declared it before, because the `create-react-app` framework preset supplied the
+fallback implicitly and nobody had to know. `framework: "vite"` does not: Vite builds
+multi-page sites too, so Vercel will not assume a single-page fallback. Switching the one
+line to `vite` silently removed deep-link routing, and only a hard navigation revealed it
+— client-side clicks kept working, so the app looked fine until someone hit Sign In or
+pressed reload.
+
+Two details make this the fix rather than a near miss. Rewrites run **after** the
+filesystem check, so real files (`/assets/*`, `/favicon.ico`) still serve themselves and
+only unmatched paths reach `index.html`. And `/api/*` is claimed by the *top-level*
+rewrite before the frontend service is ever selected, so this catch-all cannot swallow an
+API call. That ordering matters: [routing into a service is
+final](https://vercel.com/docs/services/routing) — if nothing inside the service matches,
+Vercel returns the service's 404 rather than falling back to another top-level rule.
 
 ## 1. MongoDB Atlas
 

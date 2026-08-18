@@ -215,3 +215,37 @@ class TestDevLaunchConfigDoesNotReopenH1:
         for name in ("backend", "frontend"):
             assert _launch_config(name).get("autoPort") is False, \
                 f"the {name} launch config may be reassigned to another port"
+
+
+class TestDeepLinksReachTheApp:
+    """Only `/index.html` is ever built. `/login`, `/events`, `/shop/:slug` exist solely
+    in the router, so any request that reaches a server for one of them — a refresh, a
+    shared link, or `startLogin()`'s `window.location.assign("/login?...")` — asks for a
+    file that was never emitted. Both servers have to answer those with the shell.
+
+    nginx always said so out loud (`try_files ... /index.html`). Vercel did not: the
+    `create-react-app` framework preset supplied the fallback implicitly, so switching
+    that one line to `vite` — which builds multi-page sites too, and therefore assumes
+    nothing — removed deep-link routing from production without touching a rewrite. The
+    two targets diverged silently, and client-side clicks kept working, so it surfaced
+    only when someone hard-navigated to Sign In and got a 404 from the edge.
+    """
+
+    def test_vercel_serves_the_shell_for_unbuilt_paths(self):
+        rewrites = json.loads(VERCEL_JSON.read_text())["services"]["frontend"].get("rewrites")
+        assert rewrites, (
+            "the frontend service declares no rewrites, so an unmatched path returns "
+            "Vercel's 404 — routing into a service is final and does not fall back to "
+            "the top-level rules"
+        )
+        assert any(r.get("destination") == "/index.html" for r in rewrites), (
+            f"no rewrite falls back to /index.html: {rewrites!r}"
+        )
+
+    def test_nginx_serves_the_shell_for_unbuilt_paths(self):
+        """The same invariant on the VPS, where it has always been explicit."""
+        block = _nginx_block()
+        m = re.search(r"location\s+/\s*\{([^}]*)\}", block)
+        assert m, "the nginx block no longer has a `location /`"
+        assert "/index.html" in m.group(1), \
+            f"`location /` no longer falls back to index.html: {m.group(1)!r}"
