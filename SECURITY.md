@@ -58,7 +58,7 @@ React renders `style={{…}}` as inline attributes.
 nothing consumed them — there is no error tracker wired up. This is not a secrecy claim:
 the bundle carries no secrets (verified against the build artefact for twelve secret
 shapes), and minified JS is reversible anyway. It removes a free, readable map of the
-attack surface and 80% of the transfer. Disabled in `craco.config.js` rather than by
+attack surface and 80% of the transfer. Disabled in `vite.config.mjs` rather than by
 `GENERATE_SOURCEMAP=false`, because `.env*` is gitignored and so an env file would never
 reach Vercel or a fresh clone — and nginx refuses `.map` outright as a backstop for a
 build that predates the change. `test_deploy_config.py` fails if either is undone.
@@ -78,7 +78,7 @@ the upload path, not editing the policy.
 
 > **`connect-src 'self'` assumes the API is same-origin.** It is, on both deployments —
 > Vercel rewrites `/api/*` to the backend service, and nginx proxies it — which is why
-> `REACT_APP_BACKEND_URL` is built empty. Split the two onto different hosts and every
+> `VITE_BACKEND_URL` is built empty. Split the two onto different hosts and every
 > API call fails silently until the API origin is added here.
 
 ## Reporting a vulnerability

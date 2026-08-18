@@ -254,7 +254,7 @@ server {
 
     # Source maps are never served, whatever is on disk.
     #
-    # The build already emits none (craco.config.js sets devtool=false for production),
+    # The build already emits none (vite.config.mjs sets build.sourcemap=false),
     # so this catches the case that config cannot: a build made before that change, a
     # deploy that ran with it patched out, or a stray .map copied in by hand. A rule the
     # server enforces outlives a flag someone has to remember.
@@ -319,7 +319,7 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 ```
 
-Build the frontend with the API on the same origin, so `REACT_APP_BACKEND_URL` can be empty:
+Build the frontend with the API on the same origin, so `VITE_BACKEND_URL` can be empty:
 
 ```bash
 cd frontend && yarn install && yarn build

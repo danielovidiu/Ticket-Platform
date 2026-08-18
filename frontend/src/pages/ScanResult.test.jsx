@@ -17,8 +17,8 @@ const VALID = { valid: true, event: { title: "OBSIDIAN" } };
 const INVALID = { valid: false, reason: "TICKET ALREADY USED" };
 const DENIED = { valid: false, denied: true, ticket: { deny_reason: "NO ID" } };
 
-const setup = (result, onDeny = jest.fn().mockResolvedValue({})) => {
-  const onNext = jest.fn();
+const setup = (result, onDeny = vi.fn().mockResolvedValue({})) => {
+  const onNext = vi.fn();
   render(<ScanResult result={result} onNext={onNext} onDeny={onDeny} />);
   return { onNext, onDeny, user: userEvent.setup() };
 };
@@ -96,7 +96,7 @@ describe("the denial takes a deliberate second step", () => {
 
 describe("when the denial does not land", () => {
   test("the error is shown and the panel stays open", async () => {
-    const onDeny = jest.fn().mockResolvedValue({ error: "NO CONNECTION — DENIAL NOT RECORDED" });
+    const onDeny = vi.fn().mockResolvedValue({ error: "NO CONNECTION — DENIAL NOT RECORDED" });
     const { user } = setup(VALID, onDeny);
 
     await user.click(screen.getByTestId("deny-entry"));
@@ -109,7 +109,7 @@ describe("when the denial does not land", () => {
 
   test("the buttons are disabled while it is in flight", async () => {
     let release;
-    const onDeny = jest.fn(() => new Promise((res) => { release = res; }));
+    const onDeny = vi.fn(() => new Promise((res) => { release = res; }));
     const { user } = setup(VALID, onDeny);
 
     await user.click(screen.getByTestId("deny-entry"));

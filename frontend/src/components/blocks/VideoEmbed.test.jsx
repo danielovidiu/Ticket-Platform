@@ -12,9 +12,9 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 
-jest.mock("react-router-dom", () => ({ Link: ({ children }) => <a href="/">{children}</a> }), { virtual: true });
-jest.mock("../../api", () => ({ http: { get: jest.fn(), post: jest.fn() } }), { virtual: true });
-jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }), { virtual: true });
+vi.mock("react-router-dom", () => ({ Link: ({ children }) => <a href="/">{children}</a> }));
+vi.mock("../../api", () => ({ http: { get: vi.fn(), post: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { BlockRenderer } from "./index";
 
