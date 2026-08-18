@@ -6,7 +6,7 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 
 - **Backend**: FastAPI + MongoDB (Motor), single module `backend/server.py` (+
   `cms_routes.py`, `shop_routes.py`, `mailer.py`, `storage.py`).
-- **Frontend**: React 19 (CRA/craco), `frontend/`.
+- **Frontend**: React 19 (Vite), `frontend/`.
 - **Deploying**: one Vercel project, two services — see **[DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md)**.
 
 > **Status: every audit finding closed.**

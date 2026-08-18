@@ -1,70 +1,52 @@
-# Getting Started with Create React App
+# Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+React 19 on Vite, Tailwind and shadcn/ui. The public site, the checkout, the ticket
+scanner and the CMS editor all live here.
 
-## Available Scripts
+Deployment, environment variables and the security posture are documented at the repo
+root — see [DEPLOY_VERCEL.md](../DEPLOY_VERCEL.md), [DEPLOY_VPS.md](../DEPLOY_VPS.md)
+and [SECURITY.md](../SECURITY.md). This file covers only what you run locally.
 
-In the project directory, you can run:
+## Scripts
 
-### `npm start`
+```bash
+yarn start     # dev server on http://localhost:3000
+yarn build     # production bundle into build/
+yarn preview   # serve that bundle, to check it before deploying
+yarn test      # Vitest, once, no watch
+```
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+The backend has to be running for anything that talks to the API; see the repo README.
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Configuration
 
-### `npm test`
+One variable, in `frontend/.env`, which is gitignored:
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+```
+VITE_BACKEND_URL=http://localhost:8000
+```
 
-### `npm run build`
+Neither deployment sets it. Both serve the API on the same origin — Vercel rewrites
+`/api/*`, nginx proxies it — so `src/api.js` falls back to `""` and every request is
+relative. That is also what `connect-src 'self'` in the CSP rests on.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+**The `VITE_` prefix is load-bearing.** Vite exposes only variables carrying it, so
+reverting to the old `REACT_APP_` name would not error — the value would silently
+become `""`.
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Layout
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+- `src/pages/` — one file per route
+- `src/components/ui/` — vendored shadcn/ui primitives; generated, so edit with care
+- `src/components/blocks/` — the CMS block renderers
+- `src/lib/` — the CMS theme loader, fonts, media URLs, rich text
+- `src/assets/fonts/` — Clash Display, vendored because Fontshare does not publish it
+  to npm
 
-### `npm run eject`
+`@/` resolves to `src/`, configured in `vite.config.mjs`.
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+## Build output
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+`build/`, not Vite's default `dist/` — `vercel.json` and the nginx root in
+`DEPLOY_VPS.md` both name that path. Source maps are off, and
+`backend/tests/test_deploy_config.py` fails if that changes.

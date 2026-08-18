@@ -1,7 +1,7 @@
-// ESLint 9 flat-config for standalone `yarn eslint` runs (CI / editor).
-// CRA's internal webpack-eslint uses craco.config.js eslint.configure — this file
-// is only for command-line `eslint` invocations, which previously failed with
-// "ESLint couldn't find an eslint.config.(js|mjs|cjs) file".
+// ESLint 9 flat-config, and now the only lint configuration there is.
+// It used to share the job with craco.config.js, which configured CRA's internal
+// webpack-eslint for builds and left this file to serve command-line runs. Vite does
+// not lint during a build, so linting is whatever `yarn eslint` does with this.
 
 const js = require("@eslint/js");
 const reactHooks = require("eslint-plugin-react-hooks");

@@ -3,7 +3,7 @@
   "services": {
     "frontend": {
       "root": "frontend",
-      "framework": "create-react-app",
+      "framework": "vite",
       "outputDirectory": "build",
       "headers": [
         {

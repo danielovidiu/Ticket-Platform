@@ -8,7 +8,7 @@ frontend.
 ```
                        ┌─ /api/*  ──▶  backend service   (Python 3.13, server:app)
   supersanity.app ─────┤
-                       └─ /*      ──▶  frontend service  (create-react-app, build/)
+                       └─ /*      ──▶  frontend service  (Vite, build/)
 ```
 
 The service receives the **original** path, so the app's `/api` router prefix is
@@ -18,8 +18,13 @@ relative and the session cookie is same-site — no CORS preflight, no `SameSite
 > **Services is a Vercel Beta feature and is permission-gated per account.** If the
 > first deploy rejects `vercel.json`, that gate is why. The fallback is two separate
 > Vercel projects (a static frontend and a Python backend) with
-> `REACT_APP_BACKEND_URL` pointing at the backend's domain — at the cost of
+> `VITE_BACKEND_URL` pointing at the backend's domain — at the cost of
 > cross-origin cookies, so you'd then leave `COOKIE_SAMESITE` unset.
+>
+> The `VITE_` prefix is load-bearing, not decoration: Vite exposes only variables that
+> carry it. Setting `REACT_APP_BACKEND_URL` here — the name this used to have — would
+> not error. Vite would decline to expose it, `src/api.js` would fall back to `""`, and
+> every API call would go to the frontend's own origin and 404.
 
 ## 1. MongoDB Atlas
 

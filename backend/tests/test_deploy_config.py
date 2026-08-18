@@ -3,7 +3,7 @@ Deployment configuration that security depends on, asserted rather than describe
 
 None of this is application code, so none of it is covered by anything else — and all of
 it is the kind of thing that gets edited during an incident at 2am and never put back.
-Three files have to agree: `craco.config.js` (what the build emits), `vercel.json` (how
+Three files have to agree: `vite.config.mjs` (what the build emits), `vercel.json` (how
 Vercel serves it) and the nginx block in `DEPLOY_VPS.md` (how the VPS serves it).
 
 SECURITY.md describes these invariants in prose. Prose does not fail a build.
@@ -21,7 +21,7 @@ import pytest
 pytestmark = [pytest.mark.critical, pytest.mark.xdist_group("test_deploy_config")]  # config-only; needs no server
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-CRACO = ROOT / "frontend" / "craco.config.js"
+VITE_CONFIG = ROOT / "frontend" / "vite.config.mjs"
 VERCEL_JSON = ROOT / "vercel.json"
 DEPLOY_VPS = ROOT / "DEPLOY_VPS.md"
 LAUNCH_JSON = ROOT / ".claude" / "launch.json"
@@ -52,12 +52,14 @@ class TestSourceMapsAreNotShipped:
     tracker wired up. Not a secrecy claim (the bundle carries no secrets, verified
     separately); it removes a free, readable map of the attack surface."""
 
-    def test_the_production_build_disables_devtool(self):
-        src = CRACO.read_text()
-        assert re.search(r'mode\s*===\s*"production"', src), \
-            "craco.config.js no longer branches on a production build"
-        assert re.search(r"devtool\s*=\s*false", src), \
-            "craco.config.js no longer disables source maps (webpackConfig.devtool = false)"
+    def test_the_production_build_emits_no_source_maps(self):
+        """Was a craco assertion on `webpackConfig.devtool = false`. Vite states the same
+        thing declaratively and for every build rather than behind a mode check, so there
+        is no branch left to assert -- only the setting."""
+        src = VITE_CONFIG.read_text()
+        assert re.search(r"sourcemap\s*:\s*false", src), \
+            "vite.config.mjs no longer sets build.sourcemap = false, so a production " \
+            "build would publish source maps again"
 
     def test_nginx_refuses_to_serve_them_whatever_is_on_disk(self):
         """The backstop for a build that predates the flag or gets configured around it."""
