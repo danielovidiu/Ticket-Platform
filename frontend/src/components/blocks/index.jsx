@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import DOMPurify from "dompurify";
+import { resolveEmbed } from "../../lib/embeds";
 import { http } from "../../api";
 import { toast } from "sonner";
 import { renderRich, renderInline } from "../../lib/richText";
@@ -266,22 +267,49 @@ function Newsletter({ props }) {
   );
 }
 
-function VideoEmbed({ props }) {
+function VideoEmbed({ props, preview }) {
   if (!props.url) return null;
-  const ytMatch = props.url.match(/(?:v=|youtu\.be\/)([\w-]+)/);
-  const vimeoMatch = props.url.match(/vimeo\.com\/(\d+)/);
-  let src = props.url;
-  if (ytMatch) src = `https://www.youtube.com/embed/${ytMatch[1]}`;
-  else if (vimeoMatch) src = `https://player.vimeo.com/video/${vimeoMatch[1]}`;
-  // SECURITY [M11 — see SECURITY_AUDIT.md]: anything that is neither YouTube nor Vimeo
-  // falls through to the raw author-supplied URL, rendered in an <iframe> with no
-  // `sandbox` and no origin allowlist. React 19 neutralizes javascript: URLs, so this is
-  // not script execution — but an *editor* (a lower-privileged role than admin) can frame
-  // any third-party page inside a real Supersanity URL, which is convincing credential
-  // phishing. Restrict to an embed-host allowlist and add a sandbox attribute.
+
+  // Audit M11. This used to fall through to the author's raw URL for anything that was
+  // neither YouTube nor Vimeo, framing any page on the internet inside a real Supersanity
+  // URL. `resolveEmbed` returns a canonical src from a fixed host list or nothing at all —
+  // there is no passthrough any more.
+  const embed = resolveEmbed(props.url);
+
+  if (!embed) {
+    // Silent on the public site: a visitor cannot act on this, and a broken-embed notice
+    // is worse than an absent block. Loud in the editor's preview, which is the one place
+    // the person who can fix it is looking. Without this the failure was an empty box.
+    if (!preview) return null;
+    return (
+      <section className="py-10"><Container>
+        <div className="border border-brand p-4 font-mono-x text-xs uppercase tracking-[0.2em] text-brand"
+             data-testid="video-unsupported">
+          Unsupported video URL — only YouTube and Vimeo can be embedded
+          <div className="mt-2 normal-case tracking-normal text-ink-3 break-all">{props.url}</div>
+        </div>
+      </Container></section>
+    );
+  }
+
   return (
     <section className="py-10"><Container>
-      <div className="aspect-video border border-ink/10"><iframe src={src} title={props.caption || "video"} className="w-full h-full" allowFullScreen /></div>
+      <div className="aspect-video border border-ink/10">
+        {/* `sandbox` is the half a CSP cannot do: frame-src says which origins may be
+            framed, this says what the frame may then do. allow-same-origin is required
+            or the player cannot reach its own APIs; allow-top-navigation is deliberately
+            absent, so an embed cannot redirect the page around the visitor. */}
+        <iframe
+          src={embed.src}
+          title={props.caption || "video"}
+          className="w-full h-full"
+          data-provider={embed.provider}
+          sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+          referrerPolicy="strict-origin-when-cross-origin"
+          allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
       {props.caption && <div className="mt-2 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-4">{props.caption}</div>}
     </Container></section>
   );
@@ -341,11 +369,13 @@ export const BLOCK_RENDERERS = {
   split: Split,
 };
 
-export function BlockRenderer({ block }) {
+/** `preview` marks the CMS editor's live preview, where an authoring mistake should be
+ *  shouted about. The public site passes nothing and stays quiet. */
+export function BlockRenderer({ block, preview = false }) {
   if (!block || block.enabled === false) return null;
   const R = BLOCK_RENDERERS[block.type];
   if (!R) return <div className="p-6 border border-dashed border-ink/10 text-ink-4 font-mono-x text-xs uppercase">Unknown block: {block.type}</div>;
-  return <R props={block.props || {}} />;
+  return <R props={block.props || {}} preview={preview} />;
 }
 
 // Silence linter about unused imports on QR (kept for future custom blocks).

@@ -88,6 +88,7 @@ and the perimeter.
 | M6 | `PATCH /admin/events/{id}` and `/admin/artists/{id}` took an untyped `dict` and `$set` it wholesale, so the caller chose the *key names* — and a dotted one like `waves.0.available` wrote straight into a wave, past the code that derives stock from what has sold | `EventPatchIn` / `ArtistPatchIn`; unknown keys are dropped, so `$set` only ever sees names the model declares. See **Admin patch bodies** below |
 | S1 | Cancelling a paid shop order released its stock and then wrote the status with an unconditional `$set` — six concurrent cancels all returned 200 and each credited the stock (verified: a variant went 5 → 17 where 7 was right) | The status write is conditional on the status the request read, 409 when it loses, and the release happens after the flip |
 | M10 | CMS custom HTML was cleaned only by DOMPurify at render time, so MongoDB held the raw string and every non-React consumer got it — and the pinned DOMPurify (3.4.12) had a published bypass | Cleaned server-side with `nh3` on save, publish and version-restore (`backend/sanitize.py`); DOMPurify upgraded to 3.4.13 and narrowed to match. See **CMS HTML** below |
+| M11 | The video block fell through to the author's raw URL for anything that was not YouTube/Vimeo, framing any page on the internet inside a real Supersanity URL — phishing with your domain in the address bar | `resolveEmbed` emits a canonical src from a fixed host list or nothing; the iframe is sandboxed; the CMS preview says why an embed was refused. See **Embeds** below |
 | — | `POST /auth/logout` read only the cookie, so a `Bearer` client got `200 {"ok":true}` while its session stayed valid (found while fixing M2) | Both call sites share `_presented_token`; logout revokes either form |
 
 **Still open:**
@@ -95,7 +96,7 @@ and the perimeter.
 | Id | Gap | Effect |
 |---|---|---|
 | H1 | `X-Forwarded-For` trusted with no proxy allowlist | Every rate limit bypassable; mail bombing; brute force |
-| M7–M9, M11, M12, L1–L4 | See the audit | M11 (editor `iframe`, no sandbox) is the last open item in the CMS HTML path |
+| M7–M9, M12, L1–L4 | See the audit | |
 
 H1 is pinned by an `xfail(strict=True)` test in `backend/tests/test_security_hardening.py`,
 so the suite goes red the moment it is fixed without removing the marker.
@@ -401,6 +402,46 @@ itself, on that dedicated embed block, is still open.
 `backend/tests/test_html_sanitization.py` asserts against **what is in MongoDB** rather
 than the response body: a test reading only the response would pass against a server that
 sanitized on read and still stored live payloads.
+
+## Embeds — what this site will put in an iframe
+
+The video block takes a URL from an editor. It used to rewrite recognised YouTube/Vimeo
+links and **fall through to the raw string** for everything else, which let a
+lower-privileged role frame any page on the internet under this domain.
+
+Two controls now, deliberately in different layers:
+
+| Layer | Control |
+|---|---|
+| `frontend/src/lib/embeds.js` | `resolveEmbed` emits a src on `EMBED_HOSTS` or returns `null` — there is no passthrough |
+| CSP `frame-src` | the browser refuses any other origin, on both deployments |
+| `sandbox` on the iframe | what an allowlisted frame may then *do* |
+
+The three are separate on purpose: the CSP catches a code path nobody thought about, and
+the code catches the case where a CSP is missing — which is every local dev server, since
+CRA sets no headers.
+
+**Input generous, output fixed.** Watch links, `youtu.be`, `shorts`, `m.`, `nocookie`,
+Vimeo channel links and unlisted hashes all resolve, because an editor who cannot embed a
+video will reach for the custom-HTML block instead. The emitted host is always
+`www.youtube.com` or `player.vimeo.com`. URLs are parsed with `new URL()`, not matched as
+substrings, so `https://youtube.com.evil.example/watch?v=x` is a different host and is
+refused.
+
+**`sandbox` is the half `frame-src` cannot do.** `frame-src` decides who may be framed;
+`sandbox` decides what they may do once framed. `allow-top-navigation` is absent, so an
+embed cannot move the visitor off the page; `allow-forms`, `allow-modals` and
+`allow-downloads` likewise.
+
+**Adding a provider means editing two things in one commit** — `EMBED_HOSTS` and the
+`frame-src` in `vercel.json` *and* `DEPLOY_VPS.md`. `test_embed_allowlist.py` fails in
+both directions if they drift: a host in the code but not the CSP is an embed that works
+locally and is blank in production; a host in the CSP but not the code is a permission
+granted for nothing, which is how a narrow policy quietly becomes a wide one.
+
+**An unresolvable URL is loud where it can be fixed.** Nothing renders on the public site;
+the CMS preview shows an explicit panel naming the rejected URL. It used to be an empty
+box for both.
 
 ## Payments & fulfillment
 

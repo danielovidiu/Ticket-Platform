@@ -15,7 +15,7 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 > (security headers), M2 (plaintext session tokens), M3 (CSRF on state-changing routes),
 > both oversell races — M4 (special-link capacity) and M5 (per-user cap) — M6
 > (mass assignment on the admin patch routes), and M10 (CMS HTML now sanitized
-> server-side, not only in the browser).
+> server-side, not only in the browser) and M11 (embed host allowlist).
 > **H1 (spoofable rate-limit key) is only half fixed and is still exploitable under
 > uvicorn** — see the checklist below.
 > **P1–P3 remain open.** Full detail in **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**.
@@ -207,7 +207,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**763 passed, 1 xfailed.** Point it at another environment with
+**770 passed, 1 xfailed.** Point it at another environment with
 `TICKET_PLATFORM_URL`; everything else (Mongo URL, database name) comes from
 `backend/.env`, the same file the server reads.
 
@@ -217,8 +217,8 @@ There is a frontend suite too, and it needs nothing running:
 cd frontend && CI=true yarn test --watchAll=false
 ```
 
-**25 passed** — the scanner's verdict overlay (`ScanResult`) and the admin list
-vocabularies.
+**60 passed** — the scanner's verdict overlay, the admin list vocabularies, and the
+embed allowlist that decides what may be framed.
 
 ### Two things the suite refuses to do quietly
 

@@ -669,7 +669,7 @@ const PreviewBlock = React.memo(function PreviewBlock({ block, selected, onSelec
       <div className={`absolute top-2 left-2 z-30 font-mono-x text-[9px] uppercase tracking-[0.2em] bg-page text-ink px-2 py-1 border border-ink/20 ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
         {BLOCK_LABELS[block.type]}
       </div>
-      <BlockRenderer block={block} />
+      <BlockRenderer block={block} preview />
     </div>
   );
 });

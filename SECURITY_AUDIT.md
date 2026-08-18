@@ -36,7 +36,7 @@ both are the kind of thing that gets exploited within days of a public launch.
 |---|---|---|
 | Critical | 1 | Payment bypass via default config — **fixed** |
 | High | 3 | Rate-limit bypass, memory DoS, admin bootstrap race — **1 of 3 fixed (H3)** |
-| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1–M6 and M10 fixed; M7–M9, M11, M12 open** |
+| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1–M6, M10 and M11 fixed; M7–M9, M12 open** |
 | Low | 4 | Info leaks, incomplete refund path |
 
 ### Remediation status
@@ -55,7 +55,8 @@ both are the kind of thing that gets exploited within days of a public launch.
 | H1 | **Open — half fixed** | App-side `TRUSTED_IP_HEADER` shipped; uvicorn's `proxy_headers` default still rewrites `request.client.host`, so the bypass survives. Pinned by an `xfail(strict=True)` regression test. Top priority |
 | S1 | **Fixed** | Second pass: concurrent order cancel credited stock 6× (verified 5 → 17); write is now conditional |
 | M10 | **Fixed** | HTML cleaned server-side with nh3 on save/publish/restore; DOMPurify upgraded past its own bypass |
-| M7–M9, M11, M12, L1–L4 | Open | See the remediation plan |
+| M11 | **Fixed** | Embed host allowlist + `sandbox`; CSP `frame-src` already blocked the payload, now matched by the code |
+| M7–M9, M12, L1–L4 | Open | See the remediation plan |
 | Stale deps | **Fixed** | 126 → 38 runtime packages; `starlette` past CVE-2024-47874 |
 | Test suite | **Fixed** | 240 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
 
@@ -540,14 +541,49 @@ No migration was needed: a survey of `cms_pages` found **zero** blocks carrying
 `props.html` across all 11 pages, drafts and published alike. The publish and restore
 gates cover anything authored between that survey and deployment.
 
-### M11 — Editor-controlled `iframe` with arbitrary origin and no sandbox
+### M11 — Editor-controlled `iframe` with arbitrary origin and no sandbox — **FIXED**
 
-`VideoEmbed` (`blocks/index.jsx:270`) rewrites recognised YouTube/Vimeo URLs, but falls
-through to `src = props.url` for anything else, rendering `<iframe src={...}>` with no
-`sandbox` and no origin allowlist. An editor — a lower-privileged role than admin — can
-embed any third-party page inside a Supersanity URL: convincing credential phishing under
-the real domain. React 19 neutralizes `javascript:` here, so this is framing abuse, not
-script execution.
+`VideoEmbed` rewrote recognised YouTube/Vimeo URLs, but fell through to `src = props.url`
+for anything else, rendering `<iframe src={...}>` with no `sandbox` and no origin
+allowlist. An editor — a lower-privileged role than admin — could embed any third-party
+page inside a Supersanity URL: convincing credential phishing under the real domain. React
+19 neutralizes `javascript:` here, so this was framing abuse, not script execution.
+
+**Already blunted before it was fixed, by accident.** The frontend CSP added for the
+clickjacking work carries `frame-src https://www.youtube.com https://player.vimeo.com`,
+and a browser enforces it — verified directly: framing `https://example.com` from a page
+under that policy is refused, while the YouTube frame loads. So the phishing outcome was
+blocked in production even with the passthrough still in the code. That is worth writing
+down precisely because it is the kind of mitigation nobody can see from the source, and
+the next person to debug a blank embed would have widened the CSP to fix it.
+
+**Fix (applied).** `frontend/src/lib/embeds.js` resolves an author-supplied URL to a
+canonical embed src or to **nothing**. There is no passthrough: `resolveEmbed` returns
+`null` for anything it does not recognise, and the component renders no iframe at all.
+
+The input side stays generous on purpose — watch links, `youtu.be`, `shorts`, `m.`,
+`nocookie`, Vimeo channel and unlisted-hash links all resolve — because an editor who
+cannot embed a video reaches for the custom-HTML block instead, and that is a worse place
+to be. What is constrained is the **output**: always `www.youtube.com` or
+`player.vimeo.com`, parsed with `new URL()` so `https://youtube.com.evil.example/…` is a
+different host rather than a substring match.
+
+The iframe now carries `sandbox="allow-scripts allow-same-origin allow-presentation
+allow-popups"`. That is the half a CSP cannot do — `frame-src` says who may be framed,
+`sandbox` says what they may then do. `allow-top-navigation` is absent, so an embed cannot
+move the visitor off the page; so are `allow-forms`, `allow-modals` and `allow-downloads`.
+
+**Failure is now visible to the person who can fix it.** An unresolvable URL renders
+nothing on the public site — a visitor can do nothing about it and a broken-embed notice
+is worse than an absent block — but the CMS preview shows an explicit "unsupported video
+URL" panel with the offending string. Previously both audiences got an empty box.
+
+Pinned from both sides: `embeds.test.js` and `VideoEmbed.test.jsx` (26 tests) assert the
+DOM, and `test_embed_allowlist.py` asserts that the code's emit-list and the `frame-src`
+in **both** deployed CSPs agree in both directions — a host in the code but not the CSP is
+an embed that breaks only in production, and a host in the CSP but not the code is a
+permission granted for nothing. Restoring the passthrough fails 4 frontend tests; widening
+either CSP fails 2 backend ones.
 
 ### M12 — Email inputs are not checked for CRLF
 
@@ -640,9 +676,8 @@ never credited against an order still marked paid. Pinned by
 ### Not re-reviewed
 
 `cms_routes.py` (+392) and `storage.py` (+130) were read for authz and for the M10/M11
-sanitisation findings only. M10 has since been fixed (above); **M11 — editor-controlled
-`iframe` with arbitrary origin and no sandbox — is still open**, and is now the last
-untreated item in the CMS HTML pipeline.
+sanitisation findings only. M10 and M11 have since been fixed (above); the CMS
+content pipeline no longer carries an open finding.
 
 ## False alarms (checked and cleared)
 
