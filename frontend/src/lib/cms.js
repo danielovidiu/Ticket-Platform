@@ -5,11 +5,17 @@
  */
 import { isCustomFamily } from "./fonts";
 
-/** Families the Google Fonts API does not serve. Asking for one gets a 404 (or, in a
- * combined request, a 400 that takes every other family down with it), so they are
- * skipped. Clash Display is the default display face and comes from Fontshare via the
- * @import at the top of index.css — it is already loaded before anything asks. */
-const NON_GOOGLE = new Set(["Clash Display"]);
+/** Families that must never be fetched from Google, for either of two reasons.
+ *
+ * Clash Display it does not serve at all: asking gets a 404, or in a combined request a
+ * 400 that takes every other family down with it. It comes from Fontshare via the
+ * @import at the top of index.css.
+ *
+ * Manrope and IBM Plex Mono it does serve — but index.css now self-hosts them from
+ * @fontsource, so a fetch here would pull a second copy of a face the page already has,
+ * from a third party, on the default theme. They are listed for the opposite reason to
+ * Clash Display and the set means "needs no fetch", not "not on Google". */
+const NON_GOOGLE = new Set(["Clash Display", "Manrope", "IBM Plex Mono"]);
 
 /**
  * The half of a palette that has to change when the page flips, per mode.
