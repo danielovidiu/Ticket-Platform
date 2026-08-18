@@ -5,9 +5,13 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#000000" />
         <meta name="description" content="Supersanity — Bucharest music &amp; performance collective. Events, tickets, artists." />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@600&display=swap" rel="stylesheet" />
+        <!-- No font is fetched here. The three the site actually renders with are
+             self-hosted in src/index.css; this used to also pull Inter 600 from Google
+             on every page load, which nothing on the page has ever rendered with — its
+             only appearance in the codebase is as one name in the CMS font picker's
+             suggestion list, which loads its own preview on demand. The two preconnect
+             hints went with it: they opened a TLS connection to Google for every public
+             visitor, to speed up an admin-only path. -->
         <!--
         manifest.json provides metadata used when your web app is installed on a
         user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
