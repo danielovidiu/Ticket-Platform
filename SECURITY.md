@@ -64,9 +64,17 @@ reach Vercel or a fresh clone — and nginx refuses `.map` outright as a backsto
 build that predates the change. `test_deploy_config.py` fails if either is undone.
 
 Verified by serving the production build behind the exact policy and walking eight routes:
-zero violations. That test is also what caught the mistake worth repeating — fonts are
-declared from `api.fontshare.com` but *served* from `cdn.fontshare.com`, so the first
-draft would have shipped a site with no custom fonts.
+zero violations. That test is also what caught the mistake worth repeating — Fontshare
+*declared* its fonts from `api.fontshare.com` but *served* them from `cdn.fontshare.com`,
+so the first draft would have shipped a site with no custom fonts. Both hosts have since
+left the policy: the baseline faces are vendored into the bundle, so nothing is fetched
+from Fontshare at all.
+
+`fonts.googleapis.com` and `fonts.gstatic.com` stay, and they are not the baseline faces
+either — those are self-hosted too. They are there for the CMS font picker, which loads
+whatever family an editor names (`ensureFontLoaded()` in `lib/cms.js`). That is a live
+feature, so narrowing these two further means restricting the picker to a curated set and
+the upload path, not editing the policy.
 
 > **`connect-src 'self'` assumes the API is same-origin.** It is, on both deployments —
 > Vercel rewrites `/api/*` to the backend service, and nginx proxies it — which is why
