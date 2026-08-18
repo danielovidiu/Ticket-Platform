@@ -19,7 +19,7 @@
 # resolver will happily pick that floor, so starlette is constrained explicitly here —
 # do not drop this line when bumping fastapi.
 fastapi>=0.115
-starlette>=0.40
+starlette>=1.6.0
 uvicorn[standard]>=0.30
 python-multipart>=0.0.18
 
