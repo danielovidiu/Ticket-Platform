@@ -32,17 +32,17 @@ reaching production. Second is that every rate limit in the application can be b
 with one spoofed HTTP header, which I verified. Neither is a subtle cryptographic flaw —
 both are the kind of thing that gets exploited within days of a public launch.
 
-> Both are now fixed, along with **every other Critical, High and Medium finding**. Only
-> the four Low items remain. The two headline issues turned out to have the same shape:
-> the defect was not a line of code but what happened when nobody stated a value, and both
-> now refuse to start rather than pick a default.
+> **Every finding in this audit is now fixed**, along with the two raised in later passes
+> (S1, S2). The two headline issues turned out to have the same shape: the defect was not
+> a line of code but what happened when nobody stated a value, and both now refuse to
+> start rather than pick a default.
 
 | Severity | Count | Theme |
 |---|---|---|
 | Critical | 1 | Payment bypass via default config — **fixed** |
 | High | 3 | Rate-limit bypass, memory DoS, admin bootstrap race — **all three fixed** |
 | Medium | 12 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **all fixed** |
-| Low | 4 | Info leaks, incomplete refund path |
+| Low | 4 | Info leaks, incomplete refund path — **all four fixed** |
 
 ### Remediation status
 
@@ -66,7 +66,7 @@ both are the kind of thing that gets exploited within days of a public launch.
 | M9 | **Fixed** | 88 unbounded string fields closed via `ApiModel`; free-form CMS payloads capped; uploads refused at 413 while streaming |
 | M12 | **Fixed** | Control characters refused at input and again at the mailer; the audit's "safe because Resend takes JSON" premise had expired |
 | M8 | **Fixed** | Bytes verified against the declared type and re-encoded; polyglot and EXIF stripping both verified |
-| L1–L4 | Open | Info leaks and an incomplete refund path — see the remediation plan |
+| L1–L4 | **Fixed** | Hash fragment out of the reset token; payment status narrowed; pre-event refunds return stock; the expiry sweep is global |
 | Stale deps | **Fixed** | 126 → 38 runtime packages; `starlette` past CVE-2024-47874 |
 | Test suite | **Fixed** | 240 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
 
@@ -700,17 +700,41 @@ raising deep inside a provider call.
 
 ## Low
 
-- **L1** — The password-reset token embeds the last 12 characters of the bcrypt hash
-  (`ph` claim) for single-use enforcement. JWT payloads are base64, not encrypted, so a
-  fragment of the hash is readable by anyone who sees the reset URL. Not practically
-  crackable without the salt, but a comparison hash of the *hash* would achieve the same
-  invalidation with no disclosure.
-- **L2** — `GET /api/payments/status/{session_id}` is unauthenticated and returns the
-  full transaction document (user_id, amount) to anyone holding the session id.
-- **L3** — `admin_refund` marks rows refunded but neither returns stock to the wave nor
-  calls Stripe. Refunded inventory is permanently lost from sale.
-- **L4** — `_cleanup_expired_reservations` only runs when someone reserves for that same
-  event, so expired holds on a quiet event never return stock.
+- **L1 — FIXED.** The password-reset token embedded the last 12 characters of the bcrypt
+  hash (`ph` claim) for single-use enforcement. JWT payloads are base64, not encrypted, so
+  a fragment of the stored hash was readable by anyone who saw the reset URL — a proxy
+  log, a browser history, a forwarded email. `_password_fingerprint` now puts a truncated
+  SHA-256 of the hash there instead: identical invalidation semantics, nothing disclosed
+  about the input. The comparison moved to `secrets.compare_digest` while it was being
+  touched.
+- **L2 — FIXED.** `GET /api/payments/status/{session_id}` returned the whole transaction
+  document — `user_id`, amount, `reservation_id` — to anyone holding a session id.
+  Unguessable is not the same as authorised. It stays unauthenticated, because the
+  post-Stripe success page has to poll it before its cookie is re-established, but it now
+  returns only `{payment_status, status}` plus `order_id` where there is one. Those are
+  the three fields the two success pages actually read; `order_id` is a pointer rather
+  than data, since `GET /shop/orders/{id}` is ownership-checked.
+- **L3 — FIXED.** `admin_refund` marked rows refunded and returned nothing to the wave, so
+  a customer refunded a week before the show left a seat nobody could ever buy.
+
+  **Stock now comes back only while it is still sellable** — before the event starts.
+  After that there is nothing to sell it into, and incrementing `available` on a finished
+  show would corrupt the numbers an admin reads afterwards. That is deliberate and matches
+  the door-denial rule: `admin_refund_ticket` never returns stock, because a denial
+  happens at the door and the door is always after the start.
+
+  The status flip is conditional, so a double-click cannot credit the stock twice. That is
+  the S1 lesson applied rather than re-learned, and the response says which of the two
+  happened (`stock_returned`).
+
+  Still does **not** call Stripe — refunds are settled by hand in the dashboard, which is
+  a deliberate product decision rather than an omission.
+- **L4 — FIXED.** `_cleanup_expired_reservations` filtered on `event_id`, and it only runs
+  when somebody reserves. An abandoned checkout on a quiet event therefore held its seats
+  until the next person tried to buy *for that same event* — which on a show that is not
+  selling may be never, so the stock was withheld exactly where it was least affordable.
+  The sweep is now global; the query was already indexed and bounded to 500, so the
+  reservation that triggers it pays the same round trip either way.
 - **L5 — FIXED. Logout silently no-opped for Bearer clients.** Found while fixing M2, not
   in the original review. `get_current_user` accepted the session token from either the
   cookie or `Authorization: Bearer`, but `POST /auth/logout` read only the cookie — so a

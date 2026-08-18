@@ -3,9 +3,9 @@
 How authentication, payments, and personal-data handling work in this platform, and
 what each piece guarantees. Env var reference lives in `backend/.env.example`.
 
-> This document describes the **design**. For what is actually wrong with the current
-> implementation — one critical and three high-severity findings, with reproductions —
-> read **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)** first. A short summary of the gaps is
+> This document describes the **design**. **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**
+> records what was wrong with the implementation and how each finding was closed — with
+> the reproductions, which are worth reading before changing any of this. A short summary of the gaps is
 > in [Known gaps](#known-gaps) below. Where the two documents disagree, the audit wins:
 > it was written against the running code.
 
@@ -105,13 +105,17 @@ and the perimeter.
 | M8 | Upload type came from the client's `Content-Type` and the original bytes were stored verbatim — a corrupt "PNG" in the test suite had been sailing through for months | Bytes are verified against the declared type and **re-encoded**, so a polyglot does not survive; EXIF (including GPS) is stripped as a side effect |
 | M9 (uploads) | The 25 MB cap was compared *after* the whole body was buffered | `_read_capped` refuses at 413 while reading, in 64 KB chunks |
 | S2 | `/auth/forgot-password` and `/newsletter` mail an address the caller names and were IP-keyed only — many hosts, one victim, all legitimate deliveries from our domain | Identity-keyed limits on both, keyed before the account lookup so they stay non-enumerating |
+| L1 | The reset token carried twelve characters of the stored bcrypt hash, readable in any log that saw the URL | A truncated SHA-256 of the hash — same invalidation, nothing disclosed |
+| L2 | `GET /payments/status/{id}` returned the whole transaction row to anyone holding a session id | Narrowed to the three fields the success pages read |
+| L3 | Refunds marked rows refunded and returned nothing to the wave, so refunded seats were lost from sale | Stock returns while the event is still sellable; deliberately not after it starts |
+| L4 | The expiry sweep filtered on one event, so abandoned holds on a quiet show never came back | The sweep is global |
 | — | `POST /auth/logout` read only the cookie, so a `Bearer` client got `200 {"ok":true}` while its session stayed valid (found while fixing M2) | Both call sites share `_presented_token`; logout revokes either form |
 
 **Still open:**
 
 | Id | Gap | Effect |
 |---|---|---|
-| L1–L4 | See the audit | Info leaks and an incomplete refund path — the last open findings |
+| *(none)* | — | Every finding in the audit is closed. New work should be re-reviewed against it |
 
 Every Critical and High finding is now closed. What remains is documented in the audit:
 M7 (client-supplied Stripe redirect URLs), M8/M9 (upload trust and late size checks), M12

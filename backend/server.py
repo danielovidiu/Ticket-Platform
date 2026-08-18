@@ -755,6 +755,22 @@ def _initial_role(email: str) -> str:
 _EMAIL_FORBIDDEN = frozenset(chr(c) for c in range(0x20)) | {"\x7f"}
 
 
+def _password_fingerprint(password_hash: str) -> str:
+    """A value that changes when the password does, and discloses nothing (audit L1).
+
+    The reset token carries this so it can be single-use: the token is bound to the
+    password it was issued against, and any change invalidates it without storing a list
+    of spent tokens.
+
+    It used to carry `password_hash[-12:]` — twelve characters of the bcrypt hash itself.
+    A JWT payload is base64, not encrypted, so anyone who saw the reset URL (a proxy log,
+    a browser history, a forwarded email) could read a fragment of the stored hash. Not
+    practically crackable without the salt, but there was never a reason to publish it: a
+    digest of the hash invalidates identically and reveals nothing about the input.
+    """
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:32]
+
+
 def _valid_email(email: str) -> bool:
     """Deliberately loose on shape, strict on control characters (audit M12).
 
@@ -1540,7 +1556,7 @@ async def forgot_password(body: ForgotPasswordIn):
     # Only send when a password account actually exists, but ALWAYS return ok
     # (no account enumeration).
     if u and u.get("password_hash"):
-        token = make_token("pwd-reset", u["user_id"], {"ph": u["password_hash"][-12:]})
+        token = make_token("pwd-reset", u["user_id"], {"ph": _password_fingerprint(u["password_hash"])})
         await send_mail("password_reset", email, {"reset_url": f"{PUBLIC_APP_URL}/reset-password?token={token}"})
     return {"ok": True}
 
@@ -1556,7 +1572,8 @@ async def reset_password(body: ResetPasswordIn, response: Response):
     u = await db.users.find_one({"user_id": claims["sub"]}, {"_id": 0})
     # Single-use: the token is bound to the password hash it was minted against, so
     # any password change (or reuse of a spent token) invalidates it.
-    if not u or not u.get("password_hash") or u["password_hash"][-12:] != claims.get("ph"):
+    if not u or not u.get("password_hash") or \
+            not secrets.compare_digest(_password_fingerprint(u["password_hash"]), claims.get("ph") or ""):
         raise HTTPException(400, "This reset link is invalid or has expired")
     await db.users.update_one(
         {"user_id": u["user_id"]},
@@ -2143,14 +2160,23 @@ async def _release_reservation_holds(r: dict):
         )
 
 
-async def _cleanup_expired_reservations(event_id: str):
-    """Return held stock from expired unpaid reservations."""
+async def _cleanup_expired_reservations(event_id: Optional[str] = None):
+    """Return held stock from expired unpaid reservations, across every event.
+
+    Audit L4: this used to filter on `event_id`, and it only runs when somebody reserves.
+    So an abandoned checkout on a quiet event held its seats until the next person tried
+    to buy for *that same event* — which, on a show that is not selling, may be never. The
+    stock was withheld precisely where it was least affordable.
+
+    Sweeping globally costs nothing extra: the query is already indexed on status and
+    bounded to 500, and the reservation that triggers it pays the same round trip either
+    way. `event_id` survives as an optional narrowing for callers that want it.
+    """
     now_iso = now_utc().isoformat()
-    expired = await db.reservations.find({
-        "event_id": event_id,
-        "status": "pending",
-        "expires_at": {"$lt": now_iso},
-    }).to_list(500)
+    query = {"status": "pending", "expires_at": {"$lt": now_iso}}
+    if event_id is not None:
+        query["event_id"] = event_id
+    expired = await db.reservations.find(query).to_list(500)
     for r in expired:
         # Flip the status first: the release is idempotent only as long as exactly one
         # sweep claims each reservation. A concurrent sweep that loses this race sees
@@ -2180,7 +2206,7 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     if not event or not event.get("is_published"):
         raise HTTPException(404, "Event not found")
 
-    await _cleanup_expired_reservations(body.event_id)
+    await _cleanup_expired_reservations()   # every event, not just this one (audit L4)
     event = await db.events.find_one({"event_id": body.event_id}, {"_id": 0})
 
     # Cheap rejection for the obvious case. Not the guarantee — _confirm_user_ticket_cap
@@ -2652,21 +2678,36 @@ async def _finalize_paid_reservation(reservation_id: str):
         logger.exception("ticket delivery email failed for reservation %s", reservation_id)
 
 
+def _public_payment_status(tx: dict) -> dict:
+    """The three fields the success pages read, and nothing else (audit L2)."""
+    out = {"payment_status": tx.get("payment_status"), "status": tx.get("status")}
+    if tx.get("order_id"):
+        out["order_id"] = tx["order_id"]
+    return out
+
+
 @api.get("/payments/status/{session_id}")
 async def payment_status(session_id: str, request: Request):
-    # SECURITY [C1 fixed / L2 open]: deliberately unauthenticated so the post-Stripe
-    # success page can poll before its session cookie is re-established.
-    #   * The fake branch below MARKS THE ORDER PAID and issues real tickets. That is now
-    #     reachable only under an explicit LOCAL_FAKE_PAYMENTS=1, which the startup guard
-    #     refuses under APP_ENV=production — so it cannot exist on a production host.
-    #   * STILL OPEN (L2): this returns the full transaction doc (user_id, amount) to
-    #     anyone holding the session id. Unguessable, but an unauthenticated read of
-    #     order data. Narrow the response to {payment_status, status}.
+    """Poll a Checkout Session's outcome. Deliberately unauthenticated (audit L2).
+
+    The post-Stripe success page has to poll this before its session cookie is
+    re-established, so requiring auth would break the one flow it exists for.
+
+    What it *returns* is now narrow. It used to hand back the whole transaction row —
+    `user_id`, the amount, everything — to anyone holding a session id. Unguessable is not
+    the same as authorised, and the page only ever read three fields. `order_id` is a
+    pointer rather than data: `GET /shop/orders/{id}` is ownership-checked, so knowing the
+    id buys nothing on its own.
+
+    The fake branch below MARKS THE ORDER PAID and issues real tickets. That is reachable
+    only under an explicit LOCAL_FAKE_PAYMENTS=1, which the startup guard refuses under
+    APP_ENV=production, so it cannot exist on a production host (audit C1).
+    """
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
     if not tx:
         raise HTTPException(404, "Transaction not found")
     if tx["payment_status"] == "paid":
-        return tx
+        return _public_payment_status(tx)
 
     if PAYMENTS_MODE == "fake":
         # Simulated success: mark paid and run the real finalize path.
@@ -2682,7 +2723,8 @@ async def payment_status(session_id: str, request: Request):
     )
     if new_status == "paid":
         await _finalize_transaction(tx)
-    return await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    fresh = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    return _public_payment_status(fresh)
 
 
 async def _finalize_transaction(tx: dict):
@@ -3296,10 +3338,45 @@ async def admin_orders(user=Depends(require_admin)):
 
 @api.post("/admin/orders/{reservation_id}/refund")
 async def admin_refund(reservation_id: str, user=Depends(require_admin)):
-    await db.reservations.update_one({"reservation_id": reservation_id}, {"$set": {"status": "refunded"}})
+    """Refund a whole reservation, and put its seats back on sale if they can still sell.
+
+    Audit L3: this marked rows refunded and returned nothing to the wave, so refunded
+    inventory was permanently lost — a customer refunded a week before the show left a
+    seat nobody could ever buy.
+
+    **Stock comes back only while it is still sellable.** Before the doors, a returned
+    seat is a seat someone else can have. After the event has started there is nothing to
+    sell it into, and incrementing `available` on a finished show would only corrupt the
+    numbers an admin reads afterwards. That is the same rule the door-denial refund
+    follows, and it is why `admin_refund_ticket` never returns stock at all: a denial
+    happens at the door, which is always after the start.
+
+    The status flip is conditional, so a double-click cannot credit the stock twice —
+    the S1 lesson, applied here rather than re-learned.
+    """
+    reservation = await db.reservations.find_one({"reservation_id": reservation_id}, {"_id": 0})
+    if not reservation:
+        raise HTTPException(404, "Reservation not found")
+
+    claimed = await db.reservations.update_one(
+        {"reservation_id": reservation_id, "status": {"$ne": "refunded"}},
+        {"$set": {"status": "refunded"}},
+    )
+    if claimed.modified_count != 1:
+        return {"ok": True, "already_refunded": True, "stock_returned": False}
+
     await db.tickets.update_many({"reservation_id": reservation_id}, {"$set": {"status": "refunded"}})
-    await _audit(user["user_id"], "order_refund", "reservation", reservation_id, None)
-    return {"ok": True}
+
+    returned = False
+    event = await db.events.find_one({"event_id": reservation.get("event_id")},
+                                     {"_id": 0, "starts_at": 1})
+    if event and parse_dt(event["starts_at"]) > now_utc():
+        await _release_reservation_holds(reservation)
+        returned = True
+
+    await _audit(user["user_id"], "order_refund", "reservation", reservation_id,
+                 {"stock_returned": returned})
+    return {"ok": True, "stock_returned": returned}
 
 
 # Every status a ticket can hold, and who writes it:

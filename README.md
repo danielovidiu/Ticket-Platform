@@ -9,7 +9,7 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 - **Frontend**: React 19 (CRA/craco), `frontend/`.
 - **Deploying**: one Vercel project, two services — see **[DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md)**.
 
-> **Status: audit findings closed down to Low.**
+> **Status: every audit finding closed.**
 > A security audit found one critical and three high-severity issues, plus twelve medium.
 > **All of them are now closed** — payment bypass, the spoofable rate-limit key, the admin
 > bootstrap race, the limiter memory DoS, both oversell races, CSRF, mass assignment,
@@ -17,7 +17,9 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 > upload trust, input bounds and CRLF in email inputs. Two findings raised after the audit
 > (a concurrent-cancel stock race and mail amplification) are closed too.
 >
-> The four **Low** items remain: info leaks and an incomplete refund path. Full detail,
+> The four **Low** items are closed too — the reset token no longer carries a fragment of
+> the password hash, the payment-status endpoint no longer hands out order data, refunds
+> put sellable seats back, and abandoned holds on a quiet event are swept. Full detail,
 > including what was reproduced and how, in **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)**.
 
 ## Run it locally

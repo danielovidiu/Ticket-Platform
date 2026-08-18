@@ -98,9 +98,14 @@ def _stored_hash(user_id: str) -> str:
 
 
 def _mint_reset_token(user_id: str) -> str:
-    """Exactly what `forgot_password` mints: the token carries the tail of the password
-    hash it was issued against, which is the whole single-use mechanism."""
-    return server.make_token("pwd-reset", user_id, {"ph": _stored_hash(user_id)[-12:]})
+    """Exactly what `forgot_password` mints: the token is bound to a fingerprint of the
+    password hash it was issued against, which is the whole single-use mechanism.
+
+    It used to carry twelve characters of the bcrypt hash itself, readable by anyone who
+    saw the URL — audit L1. Calling `server._password_fingerprint` rather than
+    reimplementing it means this test cannot drift from the thing it is testing."""
+    return server.make_token("pwd-reset", user_id,
+                             {"ph": server._password_fingerprint(_stored_hash(user_id))})
 
 
 async def _reset(handler, token: str, new_password: str):
@@ -167,8 +172,10 @@ class TestForgotPasswordDoesNotEnumerate:
         claims = _jwt.decode(token, options={"verify_signature": False, "verify_aud": False})
         assert claims["aud"] == "ss:pwd-reset"
         assert claims["sub"] == password_user["user_id"]
-        assert claims["ph"] == _stored_hash(password_user["user_id"])[-12:], \
+        assert claims["ph"] == server._password_fingerprint(_stored_hash(password_user["user_id"])), \
             "the token is not bound to the current password hash — single use is broken"
+        assert _stored_hash(password_user["user_id"])[-12:] not in token, \
+            "the token still leaks a fragment of the stored password hash (audit L1)"
 
 
 # --- POST /auth/reset-password -------------------------------------------------------
