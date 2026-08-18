@@ -465,8 +465,17 @@ startup fails unless `FORWARDED_ALLOW_IPS` is set:
 
 Development gets a warning rather than a refusal, so the quickstart still works. Serverless
 is exempt: uvicorn is not the server on Vercel, where `TRUSTED_IP_HEADER=x-vercel-forwarded-for`
-is the control that applies. uvicorn reads the same variable the app validates, so the two
-cannot drift.
+is the control that applies. `--no-proxy-headers` also answers the question: with the
+middleware off, nothing rewrites `request.client.host` whatever the trust list says.
+
+**The variable is the single source of truth only because the flag is now refused.** That
+was stated here as a property of uvicorn and it is not one: uvicorn takes
+`--forwarded-allow-ips` ahead of `$FORWARDED_ALLOW_IPS`, and click has consumed the flag
+before the app is imported, so the startup check could be validating an empty variable
+while the server ran on `*`. It cannot be read back, so it is refused instead — the app
+declines to start when the two are set and disagree (everywhere, including development,
+since nothing makes that deliberate), and when the flag is used alone on a public
+deployment. Both cases are asserted in `test_payment_mode_guard.py`.
 
 **The third setting is the one that hides.** Trusting `127.0.0.1` is safe *only* because
 the nginx block does `proxy_set_header X-Forwarded-For $remote_addr` — it replaces the

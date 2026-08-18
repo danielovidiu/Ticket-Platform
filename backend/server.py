@@ -5,6 +5,7 @@ FastAPI + MongoDB, first-party auth (password + Google/Apple OAuth) + Stripe Che
 import io
 import os
 import re
+import sys
 import csv
 import json
 import uuid
@@ -247,10 +248,76 @@ def _is_public_deployment() -> bool:
 #
 # An unset value is refused on a public deployment rather than defaulted, because the
 # default is the unsafe one and "we happened to be behind a proxy that overwrites" is not
-# a control. Read here only to validate: uvicorn reads the same variable itself.
+# a control. Read here only to validate: uvicorn reads the same variable itself — as long
+# as nothing passes the flag that outranks it, which is what the block below enforces.
 FORWARDED_ALLOW_IPS = os.environ.get("FORWARDED_ALLOW_IPS")
 
-if FORWARDED_ALLOW_IPS is None and not SERVERLESS and _is_public_deployment():
+
+def _forwarded_allow_ips_flag(argv):
+    """The value given to `--forwarded-allow-ips` on the command line, or None."""
+    for i, arg in enumerate(argv):
+        if arg == "--forwarded-allow-ips":
+            return argv[i + 1] if i + 1 < len(argv) else ""
+        if arg.startswith("--forwarded-allow-ips="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _same_trust_list(a, b):
+    """uvicorn splits the value on commas, so spacing and order are not differences."""
+    def parts(value):
+        return {p.strip() for p in value.split(",") if p.strip()}
+    return parts(a) == parts(b)
+
+
+# SECURITY [H1, second half]: the flag outranks the variable, and the check below cannot
+# see the flag. uvicorn resolves in this order (config.py, 0.52): `--forwarded-allow-ips`
+# if given, else `$FORWARDED_ALLOW_IPS`, else `127.0.0.1`. So this start
+#
+#     FORWARDED_ALLOW_IPS="" uvicorn server:app --forwarded-allow-ips "*"
+#
+# satisfies the check below with "" and then trusts every caller — H1 reopened, with the
+# guard reporting green. The comment above used to claim the two could not disagree. They
+# can: click consumed the flag long before this module was imported, and nothing of it
+# reaches the environment.
+#
+# What cannot be read can still be refused. Where the two spellings might not agree, the
+# app declines to start rather than validate a value it has no reason to believe — which
+# is what makes "uvicorn reads the same variable" true by construction instead of by
+# convention. `sys.argv` is exact here because the flag can only arrive on a command line;
+# a programmatic `uvicorn.run()` or a gunicorn worker passes it out of band and is as out
+# of scope as serverless (see DEPLOY_VPS.md).
+_PROXY_HEADERS_DISABLED = "--no-proxy-headers" in sys.argv
+_FORWARDED_ALLOW_IPS_FLAG = (
+    None if _PROXY_HEADERS_DISABLED else _forwarded_allow_ips_flag(sys.argv)
+)
+
+if _FORWARDED_ALLOW_IPS_FLAG is not None and FORWARDED_ALLOW_IPS is not None \
+        and not _same_trust_list(_FORWARDED_ALLOW_IPS_FLAG, FORWARDED_ALLOW_IPS):
+    # Never deliberate, and the flag is the half that wins, so the half being checked is
+    # the wrong one. Refused everywhere, including a laptop: there is no reading of this
+    # under which the operator got what they asked for.
+    raise RuntimeError(
+        "FORWARDED_ALLOW_IPS and --forwarded-allow-ips disagree (audit H1): the "
+        f"environment says {FORWARDED_ALLOW_IPS!r} and the command line says "
+        f"{_FORWARDED_ALLOW_IPS_FLAG!r}. uvicorn obeys the flag; this app can only "
+        "validate the variable. State it once, in the variable, and drop the flag."
+    )
+
+if _FORWARDED_ALLOW_IPS_FLAG is not None and FORWARDED_ALLOW_IPS is None \
+        and not SERVERLESS and _is_public_deployment():
+    # Probably correct — but "probably" is the state this guard exists to refuse, and it
+    # is one edit away from the disagreement above.
+    raise RuntimeError(
+        "--forwarded-allow-ips was passed but FORWARDED_ALLOW_IPS is unset (audit H1). "
+        "uvicorn takes the flag and this app cannot see it, so the startup check would "
+        "be validating the default rather than what the server is actually running. Set "
+        "the environment variable instead — uvicorn reads it when the flag is absent, "
+        "and reads it as `is None`, so \"\" still means trust nobody."
+    )
+
+if FORWARDED_ALLOW_IPS is None and not SERVERLESS and _is_public_deployment() \
+        and not _PROXY_HEADERS_DISABLED:
     raise RuntimeError(
         "FORWARDED_ALLOW_IPS must be set explicitly on a public deployment (audit H1). "
         "uvicorn otherwise trusts X-Forwarded-For from 127.0.0.1 and rewrites "
@@ -258,7 +325,8 @@ if FORWARDED_ALLOW_IPS is None and not SERVERLESS and _is_public_deployment():
         "on this host can reach the app. Set it to \"\" when nothing fronts the app, or to "
         "the proxy's address (e.g. 127.0.0.1 for nginx on the same host) when something "
         "does — and make sure that proxy OVERWRITES X-Forwarded-For rather than appending "
-        "to it."
+        "to it. Starting with --no-proxy-headers also answers it: uvicorn then never "
+        "rewrites request.client.host at all."
     )
 
 # Feature flag for the mandatory phone number. OFF by default: an account needs a first
@@ -277,11 +345,19 @@ logger = logging.getLogger("supersanity")
 # this covers a laptop, where the same bypass is real but the fix is a flag nobody knows
 # to pass. Lives here rather than beside its constant only because `logger` is defined
 # between the two.
-if FORWARDED_ALLOW_IPS is None:
+if FORWARDED_ALLOW_IPS is None and _FORWARDED_ALLOW_IPS_FLAG is not None:
+    # The flag is doing the job correctly; this app simply cannot see it. Say that,
+    # rather than the old text, which advised passing a flag that had just been passed.
+    logger.warning(
+        "--forwarded-allow-ips was passed but FORWARDED_ALLOW_IPS is unset — uvicorn is "
+        "configured, this app is not checking it (audit H1). Set the variable instead; "
+        "uvicorn reads it when the flag is absent. Refused rather than warned in public."
+    )
+elif FORWARDED_ALLOW_IPS is None and not _PROXY_HEADERS_DISABLED:
     logger.warning(
         "FORWARDED_ALLOW_IPS not set — uvicorn trusts X-Forwarded-For from 127.0.0.1, so "
         "rate limits are bypassable from this host (audit H1). Start with "
-        '--forwarded-allow-ips "" unless something fronts the app.'
+        'FORWARDED_ALLOW_IPS="" unless something fronts the app.'
     )
 
 # ---------- Payment mode (fails closed) ----------

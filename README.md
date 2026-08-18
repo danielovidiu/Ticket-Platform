@@ -29,7 +29,7 @@ and a self-owned, GDPR/CAN-SPAM-aware user-management stack.
 cd backend
 python -m venv venv && venv/bin/pip install -r requirements.txt
 cp .env.example .env
-venv/bin/uvicorn server:app --port 8000 --reload --forwarded-allow-ips ""
+FORWARDED_ALLOW_IPS="" venv/bin/uvicorn server:app --port 8000 --reload
 
 # frontend
 cd frontend
@@ -202,7 +202,7 @@ The suite is **integration-style**: it drives a live server over HTTP and reads 
 directly for role fixtures. Start the backend first.
 
 ```bash
-cd backend && venv/bin/uvicorn server:app --port 8000 --forwarded-allow-ips ""
+cd backend && FORWARDED_ALLOW_IPS="" venv/bin/uvicorn server:app --port 8000
 ```
 
 ```bash

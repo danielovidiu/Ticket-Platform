@@ -177,6 +177,9 @@ WorkingDirectory=/home/deploy/ticket-platform/backend
 EnvironmentFile=/home/deploy/ticket-platform/backend/.env
 # FORWARDED_ALLOW_IPS comes from the EnvironmentFile above and is read by uvicorn
 # itself, so the app's startup guard and uvicorn's proxy handling cannot disagree.
+# Do NOT add --forwarded-allow-ips to ExecStart: the flag outranks the variable and the
+# app cannot see it, so the guard would be checking something the server is not using.
+# It refuses to start rather than allow that.
 # Set it to 127.0.0.1 here: nginx is on this host, and the nginx block OVERWRITES
 # X-Forwarded-For rather than appending, which is what makes trusting it safe.
 ExecStart=/home/deploy/ticket-platform/backend/venv/bin/uvicorn server:app \

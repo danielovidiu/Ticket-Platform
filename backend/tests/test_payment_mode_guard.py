@@ -30,8 +30,12 @@ PROBE = (
 )
 
 
-def run_import(**env):
-    """Import server.py with `env` applied over a minimal, known-clean baseline."""
+def run_import(_argv=(), **env):
+    """Import server.py with `env` applied over a minimal, known-clean baseline.
+
+    `_argv` is appended to the probe's command line, so the guards that read `sys.argv`
+    (the uvicorn flags — see H1's second half) see exactly what a real start would.
+    """
     base = dict(os.environ)
     # Wipe everything the guards read, so the host's own .env cannot decide the outcome.
     for k in ("APP_ENV", "VERCEL", "PUBLIC_APP_URL", "STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET",
@@ -49,7 +53,7 @@ def run_import(**env):
     # server.py load_dotenv()s backend/.env; run from a directory where that is absent so
     # the file cannot reintroduce a key the case under test is meant to be missing.
     return subprocess.run(
-        [sys.executable, "-c", PROBE],
+        [sys.executable, "-c", PROBE, *_argv],
         cwd=BACKEND.parent, env={**base, "PYTHONPATH": str(BACKEND)},
         capture_output=True, text=True, timeout=90,
     )
@@ -94,6 +98,75 @@ class TestForwardedAllowIpsIsRequiredInPublic:
     def test_local_development_is_exempt(self):
         """A laptop gets a warning, not a refusal — the README quickstart must still work."""
         res = run_import(FORWARDED_ALLOW_IPS=None, SESSION_SECRET="x" * 64)
+        assert res.returncode == 0, res.stderr[-300:]
+
+
+class TestTheProxyFlagCannotOutrankTheCheck:
+    """Audit H1, second half. `uvicorn` resolves the trust list from the flag first, the
+    variable second, the default last — but the startup check can only read the variable.
+    So the flag silently outranks the thing being validated, and a server can pass the
+    check on `""` while running on whatever the flag said.
+
+    The flag cannot be read back out of click, so what is refused is every configuration
+    where the two might not agree.
+    """
+
+    CONFIGURED = dict(PUBLIC_APP_URL="https://tickets.example", SESSION_SECRET="x" * 64,
+                      CORS_ORIGINS="https://tickets.example",
+                      STRIPE_API_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_x")
+
+    def test_the_bypass_it_closes(self):
+        """Before this guard: the check saw "" and passed, uvicorn trusted everyone."""
+        res = run_import(_argv=["--forwarded-allow-ips", "*"],
+                         FORWARDED_ALLOW_IPS="", **self.CONFIGURED)
+        assert res.returncode != 0, (
+            "booted trusting every proxy while the startup check validated an empty "
+            f"variable — H1 is open again: {res.stdout}"
+        )
+        assert "disagree" in res.stderr, res.stderr[-400:]
+
+    def test_a_disagreement_is_refused_on_a_laptop_too(self):
+        """No topology makes this deliberate, so dev gets no pass on it."""
+        res = run_import(_argv=["--forwarded-allow-ips", "127.0.0.1"],
+                         FORWARDED_ALLOW_IPS="", SESSION_SECRET="x" * 64)
+        assert res.returncode != 0, res.stdout
+        assert "disagree" in res.stderr, res.stderr[-400:]
+
+    def test_the_equals_spelling_is_read_too(self):
+        res = run_import(_argv=["--forwarded-allow-ips=*"],
+                         FORWARDED_ALLOW_IPS="", **self.CONFIGURED)
+        assert res.returncode != 0, res.stdout
+
+    def test_agreeing_is_not_a_disagreement(self):
+        """Belt and braces is allowed; uvicorn splits on commas, so spacing is not a
+        difference and neither is order."""
+        for flag, env in (("", ""), ("127.0.0.1", "127.0.0.1"),
+                          ("127.0.0.1, ::1", "::1,127.0.0.1")):
+            res = run_import(_argv=["--forwarded-allow-ips", flag],
+                             FORWARDED_ALLOW_IPS=env, **self.CONFIGURED)
+            assert res.returncode == 0, f"{flag!r} vs {env!r} refused: {res.stderr[-300:]}"
+
+    def test_public_refuses_the_flag_alone(self):
+        """Probably correct, but unverifiable from in here — and one edit from the case
+        above."""
+        res = run_import(_argv=["--forwarded-allow-ips", ""],
+                         FORWARDED_ALLOW_IPS=None, **self.CONFIGURED)
+        assert res.returncode != 0, res.stdout
+        assert "FORWARDED_ALLOW_IPS is unset" in res.stderr, res.stderr[-400:]
+
+    def test_development_warns_about_the_flag_instead_of_refusing(self):
+        """The README quickstart passed the flag for months; a laptop keeps working and
+        is told why the app cannot see it."""
+        res = run_import(_argv=["--forwarded-allow-ips", ""],
+                         FORWARDED_ALLOW_IPS=None, SESSION_SECRET="x" * 64)
+        assert res.returncode == 0, res.stderr[-300:]
+        assert "--forwarded-allow-ips was passed" in res.stderr, res.stderr[-400:]
+
+    def test_no_proxy_headers_answers_the_question_by_itself(self):
+        """With the middleware off, nothing rewrites request.client.host whatever the
+        trust list says — so there is nothing left for the variable to decide."""
+        res = run_import(_argv=["--no-proxy-headers"],
+                         FORWARDED_ALLOW_IPS=None, **self.CONFIGURED)
         assert res.returncode == 0, res.stderr[-300:]
 
 
