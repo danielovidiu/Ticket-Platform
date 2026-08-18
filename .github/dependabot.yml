@@ -5,17 +5,24 @@
 # single `dangerouslySetInnerHTML` in the app. Nothing was watching for that, and
 # typosquats and hijacked-maintainer releases are caught by noticing quickly or not at all.
 #
-# `security-updates-only` on the npm side is deliberate. react-scripts (CRA) is
-# unmaintained and pins a large, permanently-outdated transitive tree, so an open-ended
-# version bump would raise a PR a day that nobody merges — which trains everyone to ignore
-# the ones that matter. Security advisories are the signal worth interrupting for.
+# Security-updates-only on the npm side is deliberate: an open-ended version bump on a
+# tree this size raises PRs nobody merges, which trains everyone to ignore the ones that
+# matter. Security advisories are the signal worth interrupting for.
+#
+# `open-pull-requests-limit: 0` is how that is said. It is a switch, not a cap: zero
+# disables *version* updates outright and leaves security updates flowing, which is the
+# only way Dependabot offers to express "advisories only". This read 10 for a while,
+# while the comment above claimed the opposite — ten routine bumps duly arrived and sat
+# there unmerged, which is the outcome the comment had predicted. The `groups` block
+# below restricts nothing either: `applies-to: security-updates` only decides how
+# security updates are bundled once they already qualify.
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 0
     # Grouped so a security bump and its transitive peers arrive as one reviewable PR.
     groups:
       npm-security:
