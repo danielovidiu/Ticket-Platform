@@ -282,6 +282,44 @@ worker, and why moving the limiter to Redis is a prerequisite for ever running m
 one. And IP keying is only as honest as `TRUSTED_IP_HEADER` plus a proxy that overwrites
 rather than appends: that is H1, still open.
 
+## Roles — enforced server-side, and checked exhaustively
+
+Four roles: `user`, `door`, `editor`, `admin`. The React app hides what a role cannot use,
+which is a courtesy, not a control — every route carries its own dependency, and calling
+the endpoint directly gets 401 or 403 regardless of what the UI showed.
+
+| Guard | Routes | Reachable by |
+|---|---|---|
+| `require_admin` | 47 | admin |
+| `require_admin_or_editor` | 20 | admin, editor |
+| `require_admin_or_door` | 2 | admin, door |
+| `get_current_user` | 23 | any signed-in user |
+| *(none)* | 37 | public |
+
+`test_rbac.py` used to check a hand-written list of **8 routes out of 66** under `/admin`.
+The rule held, but nothing verified it, so "we wrote them all correctly" and "they are all
+enforced" were the same sentence. It now **derives the route table from the application
+object** and sweeps every guarded route with every wrong identity — 321 assertions. A new
+endpoint is covered the moment it exists.
+
+**Two things that derivation alone cannot do**, both learned by breaking them on purpose:
+
+1. A route that *loses* its guard drops out of the derived table, so the HTTP tests
+   silently stop covering it. A structural test walks the app and fails on any `/admin`
+   path with no auth dependency.
+2. A route that is *widened* — `require_admin` to `require_admin_or_editor` — is simply
+   re-filed, and "editors are refused here" stops being generated for it. **That mutation
+   passed** before it was addressed. So the access model is pinned in
+   `tests/rbac_inventory.txt`: 92 lines of who-may-reach-what, asserted against the live
+   table. Changing who can reach a route now requires editing a checked-in file in the
+   same commit, which is a diff a reviewer sees.
+
+The negative sweep is exhaustive because a rejected request never reaches the handler —
+authorization resolves before body validation, so even `POST` with no body returns 401/403
+rather than 422, and sweeping every route with the wrong identity has no side effects. The
+positive direction is asserted on `GET` routes only: proving the guards let the right role
+through must not mean seeding databases, sending mail and deleting records on every run.
+
 ## Admin patch bodies — never take a bare `dict`
 
 A route that accepts `body: dict` and hands it to `$set` gives the caller two things, and

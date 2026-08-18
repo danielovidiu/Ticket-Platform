@@ -207,7 +207,7 @@ cd backend && venv/bin/uvicorn server:app --port 8000
 cd backend && venv/bin/python -m pytest
 ```
 
-**479 passed, 1 xfailed, 0 skipped.** Point it at another environment with
+**763 passed, 1 xfailed.** Point it at another environment with
 `TICKET_PLATFORM_URL`; everything else (Mongo URL, database name) comes from
 `backend/.env`, the same file the server reads.
 

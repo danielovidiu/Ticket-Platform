@@ -1,0 +1,112 @@
+# Access model inventory — GENERATED, but checked in on purpose.
+#
+# One line per guarded route: the role class required to reach it. test_rbac.py derives
+# the same table from the app at run time and asserts the two match exactly.
+#
+# WHY THIS FILE EXISTS. The derived table alone cannot catch a change to the access model,
+# because the model IS what it derives. Widening a route from `require_admin` to
+# `require_admin_or_editor` simply re-files it, and the "editors are refused here" test
+# stops being generated for it — silently, with the suite still green. Verified: that
+# mutation passed before this file existed.
+#
+# So the categorisation is pinned here instead. Any diff to this file is a deliberate
+# change to who can reach what, and has to be made in the same commit as the code.
+#
+# Regenerate (and READ the diff — that is the point):
+#   venv/bin/python -c "import sys;sys.path.insert(0,'tests');import test_rbac as t;\
+#     print('\n'.join(f'{c:6} {m:6} {p}' for m,p,c in t.GUARDED))" >> tests/rbac_inventory.txt
+#
+# admin  = require_admin            editor = require_admin_or_editor
+# door   = require_admin_or_door    authed = any signed-in user
+admin  GET    /api/admin/artists
+admin  POST   /api/admin/artists
+admin  DELETE /api/admin/artists/{artist_id}
+admin  PATCH  /api/admin/artists/{artist_id}
+admin  GET    /api/admin/audit
+editor GET    /api/admin/cms/fonts
+editor POST   /api/admin/cms/fonts
+editor DELETE /api/admin/cms/fonts/{font_id}
+editor GET    /api/admin/cms/pages
+editor POST   /api/admin/cms/pages
+editor POST   /api/admin/cms/pages/reorder
+editor DELETE /api/admin/cms/pages/{page_id}
+editor GET    /api/admin/cms/pages/{page_id}
+editor PATCH  /api/admin/cms/pages/{page_id}
+editor POST   /api/admin/cms/pages/{page_id}/home
+editor POST   /api/admin/cms/pages/{page_id}/publish
+editor POST   /api/admin/cms/pages/{page_id}/revert/{version_id}
+editor POST   /api/admin/cms/seed-legal
+editor GET    /api/admin/cms/theme
+editor PATCH  /api/admin/cms/theme
+editor POST   /api/admin/cms/theme/publish
+editor POST   /api/admin/cms/theme/revert/{version_id}
+admin  GET    /api/admin/discounts
+admin  POST   /api/admin/discounts
+admin  DELETE /api/admin/discounts/{discount_id}
+admin  GET    /api/admin/events
+admin  POST   /api/admin/events
+admin  DELETE /api/admin/events/{event_id}
+admin  PATCH  /api/admin/events/{event_id}
+admin  POST   /api/admin/events/{event_id}/cancel
+admin  GET    /api/admin/events/{event_id}/notice-preview
+admin  GET    /api/admin/events/{event_id}/notices
+admin  POST   /api/admin/events/{event_id}/notify
+admin  GET    /api/admin/gallery
+admin  POST   /api/admin/gallery
+admin  PATCH  /api/admin/gallery/reorder
+admin  GET    /api/admin/gallery/settings
+admin  PATCH  /api/admin/gallery/settings
+admin  DELETE /api/admin/gallery/{gallery_id}
+admin  PATCH  /api/admin/gallery/{gallery_id}
+editor GET    /api/admin/newsletter
+editor GET    /api/admin/newsletter.csv
+authed DELETE /api/admin/newsletter/{sub_id}
+admin  GET    /api/admin/orders
+admin  POST   /api/admin/orders/{reservation_id}/refund
+admin  GET    /api/admin/projects
+admin  POST   /api/admin/projects
+admin  DELETE /api/admin/projects/{project_id}
+admin  GET    /api/admin/shop/orders
+admin  PATCH  /api/admin/shop/orders/{order_id}
+admin  GET    /api/admin/shop/products
+admin  POST   /api/admin/shop/products
+admin  DELETE /api/admin/shop/products/{product_id}
+admin  PATCH  /api/admin/shop/products/{product_id}
+admin  POST   /api/admin/shop/seed
+admin  GET    /api/admin/shop/settings
+admin  PATCH  /api/admin/shop/settings
+admin  GET    /api/admin/special-links
+admin  POST   /api/admin/special-links
+admin  DELETE /api/admin/special-links/{link_id}
+admin  GET    /api/admin/stats
+admin  GET    /api/admin/tickets
+admin  POST   /api/admin/tickets/{ticket_id}/refund
+editor POST   /api/admin/uploads
+admin  GET    /api/admin/users
+admin  PATCH  /api/admin/users/{user_id}/role
+authed DELETE /api/auth/account
+authed POST   /api/auth/consents
+authed GET    /api/auth/export
+authed GET    /api/auth/me
+authed PATCH  /api/auth/profile
+authed POST   /api/auth/request-verify
+authed POST   /api/checkout
+admin  POST   /api/cms/seed
+authed GET    /api/invoices/mine
+authed GET    /api/invoices/{invoice_id}/pdf
+authed GET    /api/my/reservations
+authed GET    /api/my/tickets
+authed POST   /api/reservations
+authed GET    /api/reservations/{reservation_id}
+door   POST   /api/scan
+door   POST   /api/scan/deny
+admin  POST   /api/seed
+authed DELETE /api/shop/cart
+authed GET    /api/shop/cart
+authed POST   /api/shop/cart/items
+authed DELETE /api/shop/cart/items/{variant_id}
+authed PATCH  /api/shop/cart/items/{variant_id}
+authed POST   /api/shop/checkout
+authed GET    /api/shop/orders
+authed GET    /api/shop/orders/{order_id}
+authed GET    /api/tickets/{qr_code}/qr.png
