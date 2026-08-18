@@ -15,7 +15,10 @@ import re
 import pytest
 
 
-pytestmark = pytest.mark.critical  # config-only; needs no server
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.critical, pytest.mark.xdist_group("test_deploy_config")]  # config-only; needs no server
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CRACO = ROOT / "frontend" / "craco.config.js"

@@ -18,6 +18,11 @@ import requests
 
 from support import API, db, mint_user, patient, TIMEOUT
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("test_shop")
+
 RO_ADDRESS = {"full_name": "Ana Popescu", "phone": "+40721234567", "line1": "Str. Lipscani 12",
               "city": "Bucuresti", "county": "Bucuresti", "postal_code": "030033", "country": "RO"}
 

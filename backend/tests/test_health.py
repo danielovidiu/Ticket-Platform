@@ -10,7 +10,13 @@ Run: venv/bin/python -m pytest tests/test_health.py -q
 """
 import requests
 
+import pytest
 import support
+
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("test_health")
 
 TIMEOUT = 15
 

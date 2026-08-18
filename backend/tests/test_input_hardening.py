@@ -15,7 +15,10 @@ import server
 from models_base import DEFAULT_STR_MAX, LONG_TEXT, MAX_JSON_DOC_BYTES
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.critical]  # pins M7, M9, M12
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.critical, pytest.mark.xdist_group("test_input_hardening")]  # pins M7, M9, M12
 
 
 # --- M12: control characters in an address -------------------------------------------

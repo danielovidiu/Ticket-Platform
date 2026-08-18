@@ -19,7 +19,10 @@ from PIL import Image
 from support import API, TIMEOUT, db
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.critical]  # pins M8 + M9
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.critical, pytest.mark.xdist_group("test_upload_hardening")]  # pins M8 + M9
 
 
 def _png(size=(8, 8), colour=(255, 0, 0)):

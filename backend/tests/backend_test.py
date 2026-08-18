@@ -24,6 +24,11 @@ import requests
 
 from support import API, BASE_URL, BACKEND_DIR, DB_NAME, bearer as _bearer, mint_user, patient
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("reservations_budget")
+
 # Was: sys.path.insert(0, "/app/backend") plus UMB_*_TOKEN env vars injected by the
 # Emergent runner. conftest.py now puts the real backend directory on sys.path, and the
 # admin/door/user/user2 fixtures below come from conftest.

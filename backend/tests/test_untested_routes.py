@@ -35,7 +35,10 @@ from support import (API, TIMEOUT, MONGO_URL, DB_NAME, db, mint_user,
 import server
 
 
-pytestmark = pytest.mark.integration
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("test_untested_routes")]
 
 
 @pytest.fixture(scope="module")

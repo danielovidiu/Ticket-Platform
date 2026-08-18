@@ -27,7 +27,10 @@ from support import API, TIMEOUT, TEST_EMAIL_DOMAIN
 # `critical`: the only guard on the event-loop fix, and it depends on an unspent login
 # budget, so it is one of the tests most likely to vanish quietly. conftest reports a
 # skip here loudly and fails the run under strict env.
-pytestmark = [pytest.mark.integration, pytest.mark.critical]
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.critical, pytest.mark.xdist_group("test_async_bcrypt")]
 
 # Comfortably below any real bcrypt cost, comfortably above local HTTP overhead. A probe
 # slower than this fraction of a login means it waited for the hash.

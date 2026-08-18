@@ -20,6 +20,11 @@ import requests
 
 from support import API, bearer, mint_user
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("test_cms_fonts")
+
 # Signature + filler. Every branch of sniff_font_format(), one fixture each.
 WOFF2 = b"wOF2" + b"\x00" * 256
 WOFF = b"wOFF" + b"\x00" * 256

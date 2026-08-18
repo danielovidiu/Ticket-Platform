@@ -18,7 +18,10 @@ import support
 from support import API, TIMEOUT
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.critical]  # pins audit M3
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.critical, pytest.mark.xdist_group("test_csrf_origin")]  # pins audit M3
 
 # Always allowed: the middleware unions PUBLIC_APP_URL into the allowlist regardless of
 # CORS_ORIGINS, because a single-origin deployment has no reason to list itself there.

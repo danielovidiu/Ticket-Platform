@@ -20,7 +20,10 @@ import requests
 from support import API, TIMEOUT, db
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.critical]  # pins audit M10
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.critical, pytest.mark.xdist_group("test_html_sanitization")]  # pins audit M10
 
 
 PAYLOADS = [

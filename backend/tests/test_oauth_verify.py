@@ -17,6 +17,11 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("test_oauth_verify")
+
 os_env = {
     "MONGO_URL": "mongodb://localhost:27017",
     "DB_NAME": "ticket_platform_test",

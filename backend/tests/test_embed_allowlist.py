@@ -22,7 +22,10 @@ import re
 import pytest
 
 
-pytestmark = pytest.mark.critical  # no server needed; pins audit M11
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.critical, pytest.mark.xdist_group("test_embed_allowlist")]  # no server needed; pins audit M11
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 EMBEDS_JS = ROOT / "frontend" / "src" / "lib" / "embeds.js"

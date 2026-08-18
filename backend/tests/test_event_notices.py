@@ -19,7 +19,10 @@ import support
 from support import API, TIMEOUT, db, mint_user
 
 
-pytestmark = pytest.mark.integration
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("test_event_notices")]
 
 
 # --- fixtures ----------------------------------------------------------------------

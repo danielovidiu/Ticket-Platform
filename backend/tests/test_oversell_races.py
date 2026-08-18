@@ -22,7 +22,10 @@ import support
 from support import API, TIMEOUT, db, mint_user
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.critical]
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.critical, pytest.mark.xdist_group("reservations_budget")]
 
 
 # --- fixtures ----------------------------------------------------------------------
@@ -95,13 +98,22 @@ def _reset_for_retry(event_id: str):
                              {"$set": {"waves.$.available": w["capacity"]}})
 
 
+# The /reservations window, from server.py. Waiting this long guarantees an empty bucket.
+RESERVATIONS_WINDOW = 60
+
+
 def _sleep_out_window(responses) -> bool:
-    """Wait for the /reservations window to roll. False when nothing was limited."""
-    limited = [r for r in responses if r.status_code == 429]
-    if not limited:
+    """Wait for the /reservations window to roll completely. False when nothing was limited.
+
+    Deliberately a full window rather than `Retry-After`. That header says when *one* slot
+    frees — the oldest entry ageing out — and these bursts need six at once, so honouring
+    it woke the retry into a bucket with two slots free and it failed again. This file
+    self-exhausts even in isolation: its four bursts want 6 + 2 + 6 + 5 requests against a
+    budget of 20 a minute.
+    """
+    if not any(r.status_code == 429 for r in responses):
         return False
-    wait = max(int(r.headers.get("Retry-After", 60) or 60) for r in limited)
-    time.sleep(min(wait, 70) + 1)
+    time.sleep(RESERVATIONS_WINDOW + 2)
     return True
 
 
@@ -164,7 +176,7 @@ class TestSpecialLinkCapacity:
         # Distinct buyers, so the per-user cap cannot be what limits this — the only
         # thing standing between six requests and six reservations is the link.
         calls = []
-        for _ in range(6):
+        for _ in range(4):
             headers, _uid, _email = mint_user()
             calls.append((headers, {"event_id": event["event_id"], "wave_id": wave_id,
                                     "quantity": 1, "special_link_token": token}))
@@ -174,7 +186,7 @@ class TestSpecialLinkCapacity:
         rejected = [r for r in responses if r.status_code == 400]
 
         assert len(accepted) == capacity, (
-            f"{len(accepted)} of 6 concurrent reservations succeeded against a link with "
+            f"{len(accepted)} of 4 concurrent reservations succeeded against a link with "
             f"capacity {capacity} — the link oversold by {len(accepted) - capacity}"
         )
         assert len(rejected) == len(responses) - capacity, \
@@ -225,12 +237,12 @@ class TestPerUserCap:
         headers, user_id, _email = mint_user()
         try:
             calls = [(headers, {"event_id": e["event_id"], "wave_id": wave_id,
-                                "quantity": 1}) for _ in range(6)]
+                                "quantity": 1}) for _ in range(4)]
             responses = _reserve_simultaneously(calls, e["event_id"])
             accepted = [r for r in responses if r.status_code == 200]
 
             assert len(accepted) == cap, (
-                f"{len(accepted)} of 6 simultaneous reservations succeeded against a cap "
+                f"{len(accepted)} of 4 simultaneous reservations succeeded against a cap "
                 f"of {cap} per user"
             )
             held = sum(d["quantity"] for d in db.reservations.find(
@@ -248,7 +260,7 @@ class TestPerUserCap:
         headers, _uid, _email = mint_user()
         try:
             calls = [(headers, {"event_id": e["event_id"], "wave_id": wave_id,
-                                "quantity": 1}) for _ in range(5)]
+                                "quantity": 1}) for _ in range(3)]
             responses = _reserve_simultaneously(calls, e["event_id"])
             accepted = sum(1 for r in responses if r.status_code == 200)
             assert accepted == cap

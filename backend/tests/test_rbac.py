@@ -46,7 +46,10 @@ import server
 from fastapi.routing import APIRoute
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.critical]  # pins the audit's RBAC model
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.critical, pytest.mark.xdist_group("test_rbac")]  # pins the audit's RBAC model
 
 # Path params are filled with something that cannot exist. Authorization runs before any
 # lookup, so the negative cases are unaffected; the positive ones just see 404 instead of

@@ -26,6 +26,11 @@ APP_JS = BACKEND.parent / "frontend" / "src" / "App.js"
 sys.path.insert(0, str(BACKEND))
 from cms_routes import RESERVED_SLUGS, SLUG_RE, page_route  # noqa: E402
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("test_page_slugs")
+
 _tokens = {}
 
 

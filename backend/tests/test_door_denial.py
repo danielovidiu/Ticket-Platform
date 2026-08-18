@@ -18,7 +18,10 @@ from support import API, TIMEOUT, db, mint_user
 from server import TICKET_STATUSES  # the authoritative vocabulary, not a copy of it
 
 
-pytestmark = pytest.mark.integration
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("test_door_denial")]
 
 
 def _iso(**delta):

@@ -24,6 +24,11 @@ import requests
 from support import (BASE_URL, API, db, mint_user, register_user, registered_user_doc,
                      hash_token, skip_if_rate_limited, TEST_EMAIL_DOMAIN)
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("test_security_hardening")
+
 
 def _mint_session(role: str):
     """(token, user_id) for a throwaway account with the given role."""
@@ -380,24 +385,22 @@ class TestRateLimitAuthLogin:
         assert codes[-1] == 429, f"11th auth/login should be 429: {codes}"
 
 
+# Overrides this module's own group: it must share a worker with the oversell races,
+# which need a clean /reservations bucket that this class deliberately empties.
+@pytest.mark.xdist_group("reservations_budget")
 class TestRateLimitReservations:
     """Limit is 20/min per IP. 21st must return 429 even with a valid user.
 
-    This test empties a bucket that other files need — `test_oversell_races.py` fires
-    six simultaneous reservations to prove M4 and M5 stay fixed, and it cannot do that
-    against a spent budget. It retries and waits, but it was still losing: this class runs
-    on the other xdist worker and refills the bucket to the brim while the burst is
-    waiting for it to drain.
+    This empties a bucket another file needs: `test_oversell_races.py` fires six
+    simultaneous reservations to prove M4 and M5 stay fixed, and cannot do that against a
+    spent budget. It kept losing — this class ran on the *other* worker and refilled the
+    bucket while the burst was waiting for it to drain.
 
-    So the budget is given back. A test that deliberately exhausts a shared resource owns
-    the job of restoring it, rather than leaving every other file to cope — which is the
-    pattern this suite kept re-learning the expensive way.
+    The first fix was a 61-second teardown sleep here: correct, and it cost a minute of
+    every run. Sharing a worker is the better answer — the two can no longer overlap, so
+    neither has to wait. That is the whole reason `pytest.ini` uses `--dist loadgroup`
+    rather than `loadscope`, which cannot express "these two files, one worker".
     """
-
-    @pytest.fixture(autouse=True)
-    def _restore_the_window(self):
-        yield
-        time.sleep(61)  # the /reservations window is 60s
 
     def test_reservations_21st_returns_429(self, user_session):
         tok, _ = user_session

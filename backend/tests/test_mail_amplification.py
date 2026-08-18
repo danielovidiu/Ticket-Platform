@@ -30,7 +30,10 @@ import server
 import mailer
 
 
-pytestmark = pytest.mark.critical  # pins the mail-amplification limits
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.critical, pytest.mark.xdist_group("test_mail_amplification")]  # pins the mail-amplification limits
 
 
 @pytest.fixture(scope="module")

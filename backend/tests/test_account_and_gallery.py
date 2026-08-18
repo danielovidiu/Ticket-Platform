@@ -27,6 +27,11 @@ import requests
 from support import (API, db, mint_user, patient, TEST_EMAIL_DOMAIN, TIMEOUT,
                      registered_user_doc, skip_if_rate_limited, _created_user_ids)
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("reservations_budget")
+
 PASSWORD = "pytest-passw0rd"
 
 

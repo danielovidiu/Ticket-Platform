@@ -15,6 +15,11 @@ import requests
 
 from support import API, bearer, mint_user
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("test_cms")
+
 # These used to be UMB_*_TOKEN environment variables injected by the Emergent runner, and
 # `_mint` used to shell out to mongosh with the database name hardcoded as
 # 'test_database'. Both are gone.

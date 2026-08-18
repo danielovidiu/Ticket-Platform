@@ -21,6 +21,11 @@ import requests
 
 from support import API, bearer as _bearer, mint_user, temp_discount, patient
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("reservations_budget")
+
 # `admin_headers` now comes from conftest.py (a real registered+promoted account) rather
 # than a UMB_ADMIN_TOKEN environment variable the Emergent runner used to inject.
 

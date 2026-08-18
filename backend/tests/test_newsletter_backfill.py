@@ -19,6 +19,11 @@ import pytest
 
 import support
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("test_newsletter_backfill")
+
 
 @pytest.fixture(scope="module")
 def srv():

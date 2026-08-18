@@ -29,7 +29,10 @@ import server
 from models_base import DEFAULT_STR_MAX, LONG_TEXT
 
 
-pytestmark = pytest.mark.critical  # config-only; needs no server
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = [pytest.mark.critical, pytest.mark.xdist_group("test_input_bounds")]  # config-only; needs no server
 
 
 def _unwrap(annotation):

@@ -15,6 +15,11 @@ from pathlib import Path
 
 import pytest
 
+# Runs on one worker, in order: the module's own xdist group. This is what
+# `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
+# see pytest.ini.
+pytestmark = pytest.mark.xdist_group("test_payment_mode_guard")
+
 BACKEND = Path(__file__).resolve().parent.parent
 
 # Report the decision, or the refusal, without starting a server.
