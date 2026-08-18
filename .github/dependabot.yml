@@ -1,0 +1,38 @@
+# Dependency monitoring.
+#
+# The reason this exists: a manual `yarn audit` found dompurify sitting on a published
+# XSS bypass, and dompurify is the only thing standing between CMS-authored HTML and the
+# single `dangerouslySetInnerHTML` in the app. Nothing was watching for that, and
+# typosquats and hijacked-maintainer releases are caught by noticing quickly or not at all.
+#
+# `security-updates-only` on the npm side is deliberate. react-scripts (CRA) is
+# unmaintained and pins a large, permanently-outdated transitive tree, so an open-ended
+# version bump would raise a PR a day that nobody merges — which trains everyone to ignore
+# the ones that matter. Security advisories are the signal worth interrupting for.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    # Grouped so a security bump and its transitive peers arrive as one reviewable PR.
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      pip-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

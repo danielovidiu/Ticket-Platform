@@ -288,21 +288,18 @@ function VideoEmbed({ props }) {
 }
 
 function CustomHTML({ props }) {
-  // XSS guard: sanitize any HTML entered via the CMS. Strips <script>,
-  // event handlers, and javascript: URIs. Runs on both editors' preview
-  // and public visitors.
+  // Second of two sanitization passes, not the only one. The server now cleans this
+  // HTML on write with nh3 (backend/sanitize.py, audit M10) so the database never holds
+  // a live payload and every consumer — email, API read, a future SSR pass — gets clean
+  // markup. This pass stays as defence in depth, and because content stored before that
+  // fix has never been through the server-side one.
   //
-  // SECURITY [M10 — see SECURITY_AUDIT.md]: this is the ONLY sanitization step — the raw
-  // HTML is stored server-side untouched, so any consumer that is not this component (an
-  // email, a future SSR pass, a direct API read) gets the unsanitized string. Sanitize on
-  // write too. Also note `svg: true` widens the mXSS surface for no benefit visible in
-  // the block set, and the explicit FORBID_* lists below are redundant with DOMPurify's
-  // defaults — they read as the protection but are not doing the work.
-  const safe = DOMPurify.sanitize(props.html || "", {
-    USE_PROFILES: { html: true, svg: true },
-    FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
-    FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover", "onfocus", "onblur", "formaction"],
-  });
+  // `svg: true` was removed: it widened the mXSS surface for a capability no block in
+  // the set uses, and it made the two passes disagree about what is allowed. The
+  // FORBID_TAGS/FORBID_ATTR lists went with it — they were redundant with DOMPurify's
+  // defaults, so they read as the protection while doing none of the work, which is
+  // worse than not being there.
+  const safe = DOMPurify.sanitize(props.html || "", { USE_PROFILES: { html: true } });
   return <section className="py-4"><Container><div dangerouslySetInnerHTML={{ __html: safe }} /></Container></section>;
 }
 

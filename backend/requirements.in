@@ -40,6 +40,12 @@ bcrypt>=4.1.3
 stripe>=14.4.1
 httpx>=0.27
 
+# --- Content safety ---
+# Server-side HTML sanitization for CMS-authored blocks (audit M10). Rust `ammonia`
+# bindings: allowlist-based, and parses with html5ever — the same engine class a browser
+# uses, which is where mXSS bugs hide. `bleach` is archived and parses with html5lib.
+nh3>=0.2
+
 # --- Media & documents ---
 pillow>=11
 qrcode>=8

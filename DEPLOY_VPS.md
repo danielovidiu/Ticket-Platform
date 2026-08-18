@@ -224,6 +224,27 @@ server {
 
     client_max_body_size 25M;          # media uploads go through here
 
+    # Security headers for the DOCUMENT. The FastAPI middleware sets its own on /api
+    # responses, but the page a browser could frame is this static build, served by
+    # nginx — the app never sees that request, so without these the SPA ships with no
+    # clickjacking, sniffing or referrer protection at all. On Vercel the equivalent
+    # lives in vercel.json; keep the two in step.
+    #
+    # `always` so they survive error responses (a 404 page is still framable).
+    add_header X-Content-Type-Options  "nosniff" always;
+    add_header X-Frame-Options         "DENY" always;
+    add_header Referrer-Policy         "no-referrer" always;
+    # camera=(self), not camera=(): an empty allowlist denies the camera to THIS origin
+    # too, which silently breaks the door scanner with no permission prompt.
+    add_header Permissions-Policy      "camera=(self), microphone=(), geolocation=()" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    # No 'unsafe-inline' in script-src: the CRA build emits no inline scripts, so the
+    # strict form works as-is. Verify with `grep -c "<script>" frontend/build/index.html`
+    # after a build — if that ever stops being 0, fix the build, don't relax this.
+    # style-src does need it: React renders style={{...}} as inline attributes.
+    set $csp "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.fontshare.com; font-src 'self' data: https://fonts.gstatic.com https://api.fontshare.com https://cdn.fontshare.com; img-src 'self' data: blob: https://images.unsplash.com; media-src 'self' blob:; frame-src https://www.youtube.com https://player.vimeo.com; connect-src 'self'";
+    add_header Content-Security-Policy $csp always;
+
     # Static build. try_files falls back to index.html so React Router owns the routes.
     root /home/deploy/ticket-platform/frontend/build;
     location / {
@@ -231,10 +252,24 @@ server {
     }
 
     # Uploaded media, served by nginx rather than through StaticFiles in the app.
+    #
+    # This location bypasses FastAPI entirely, so the sandboxed CSP that server.py
+    # applies to /uploads never runs here — it has to be restated. Uploaded bytes are
+    # stored verbatim (audit M8), which is precisely why this must not inherit the
+    # document policy above.
+    #
+    # nginx gotcha, and the reason every header is repeated: `add_header` in a location
+    # block REPLACES the inherited set rather than adding to it. Declaring one here and
+    # not the others would silently drop nosniff and X-Frame-Options for this path.
     location /uploads/ {
         alias /home/deploy/ticket-platform/backend/uploads/;
         access_log off;
         expires 30d;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options        "DENY" always;
+        add_header Referrer-Policy        "no-referrer" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Content-Security-Policy "default-src 'none'; img-src 'self'; media-src 'self'; frame-ancestors 'none'; sandbox" always;
     }
 
     location /api/ {

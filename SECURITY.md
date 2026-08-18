@@ -30,6 +30,40 @@ permits the Swagger CDN, everything else gets the strict default.
 Moving verification and reset tokens out of URL query strings entirely is still
 outstanding (audit P1.6); `Referrer-Policy` is the cheaper half of that fix.
 
+### The document needs its own copy — the middleware cannot cover it
+
+That middleware protects **API responses**. The page an attacker would actually frame is
+the React build, served by Vercel or by nginx, and those requests never reach FastAPI. So
+the same headers are declared twice more, and the three copies have to be kept in step:
+
+| Where | Covers |
+|---|---|
+| `server.py: security_headers` | `/api`, `/uploads` and `/docs` responses |
+| `vercel.json` → `services.frontend.headers` | the SPA on Vercel |
+| `DEPLOY_VPS.md` → nginx `server` block | the SPA on the VPS |
+
+The VPS copy carries a **second** policy inside `location /uploads/`, because nginx serves
+uploaded media directly and the app's sandboxed CSP never runs for it. Two nginx traps
+worth knowing: `add_header` inside a `location` *replaces* the inherited set rather than
+adding to it (so every header is repeated there), and without `always` the headers are
+dropped on error responses — a framed 404 is still a framed page.
+
+**The frontend CSP.** `script-src 'self'` with no `'unsafe-inline'`, which works because
+the CRA build emits no inline scripts — check with
+`grep -c '<script>' frontend/build/index.html` after a build, and if that stops being `0`,
+fix the build rather than relaxing the policy. `style-src` does need `'unsafe-inline'`:
+React renders `style={{…}}` as inline attributes.
+
+Verified by serving the production build behind the exact policy and walking eight routes:
+zero violations. That test is also what caught the mistake worth repeating — fonts are
+declared from `api.fontshare.com` but *served* from `cdn.fontshare.com`, so the first
+draft would have shipped a site with no custom fonts.
+
+> **`connect-src 'self'` assumes the API is same-origin.** It is, on both deployments —
+> Vercel rewrites `/api/*` to the backend service, and nginx proxies it — which is why
+> `REACT_APP_BACKEND_URL` is built empty. Split the two onto different hosts and every
+> API call fails silently until the API origin is added here.
+
 ## Reporting a vulnerability
 
 Email the maintainer rather than opening a public issue, and allow a reasonable window
@@ -53,6 +87,7 @@ and the perimeter.
 | M3 | `SameSite=None` plus no CSRF defence left `multipart/form-data` writes reachable cross-site — JSON was safe only by accident, via the preflight the allowlist rejects | Cookie defaults to `SameSite=Lax`, and an `Origin` guard refuses cross-origin writes ahead of authentication. See **CSRF** below |
 | M6 | `PATCH /admin/events/{id}` and `/admin/artists/{id}` took an untyped `dict` and `$set` it wholesale, so the caller chose the *key names* — and a dotted one like `waves.0.available` wrote straight into a wave, past the code that derives stock from what has sold | `EventPatchIn` / `ArtistPatchIn`; unknown keys are dropped, so `$set` only ever sees names the model declares. See **Admin patch bodies** below |
 | S1 | Cancelling a paid shop order released its stock and then wrote the status with an unconditional `$set` — six concurrent cancels all returned 200 and each credited the stock (verified: a variant went 5 → 17 where 7 was right) | The status write is conditional on the status the request read, 409 when it loses, and the release happens after the flip |
+| M10 | CMS custom HTML was cleaned only by DOMPurify at render time, so MongoDB held the raw string and every non-React consumer got it — and the pinned DOMPurify (3.4.12) had a published bypass | Cleaned server-side with `nh3` on save, publish and version-restore (`backend/sanitize.py`); DOMPurify upgraded to 3.4.13 and narrowed to match. See **CMS HTML** below |
 | — | `POST /auth/logout` read only the cookie, so a `Bearer` client got `200 {"ok":true}` while its session stayed valid (found while fixing M2) | Both call sites share `_presented_token`; logout revokes either form |
 
 **Still open:**
@@ -60,7 +95,7 @@ and the perimeter.
 | Id | Gap | Effect |
 |---|---|---|
 | H1 | `X-Forwarded-For` trusted with no proxy allowlist | Every rate limit bypassable; mail bombing; brute force |
-| M7–M12, L1–L4 | See the audit | |
+| M7–M9, M11, M12, L1–L4 | See the audit | M11 (editor `iframe`, no sandbox) is the last open item in the CMS HTML path |
 
 H1 is pinned by an `xfail(strict=True)` test in `backend/tests/test_security_hardening.py`,
 so the suite goes red the moment it is fixed without removing the marker.
@@ -291,6 +326,43 @@ grep for the bug; neither is one.
 
 `backend/tests/test_mass_assignment.py` pins the contract from the outside — dotted paths,
 unknown keys, wave stock, and that a full round-trip from the UI still saves.
+
+## CMS HTML — two passes, and the server one is the guarantee
+
+The custom-HTML block is the only place in the frontend that calls
+`dangerouslySetInnerHTML`. It is cleaned twice:
+
+| Where | What |
+|---|---|
+| `backend/sanitize.py`, on write | `nh3` (Rust `ammonia`), at save, publish and version-restore |
+| `blocks/index.jsx`, on render | `DOMPurify`, `USE_PROFILES: { html: true }` |
+
+**The server pass is the one that counts.** Client-side-only sanitization meant MongoDB
+stored the raw string, so every consumer that is not that one React component — an email,
+`GET /api/cms/pages`, an export, a future SSR pass — received the attacker's markup, and
+the entire guarantee depended on the DOMPurify build in the visitor's browser. That
+dependency bit: the pinned version was 3.4.12, which has a published bypass.
+
+**Allowlist.** nh3's default tag set, verified to contain no `script`, `iframe`, `object`,
+`embed`, `form`, `style`, `svg` or `math`. URL schemes are limited to `http`, `https`,
+`mailto`, `tel` — `data:` is excluded because it inlines a whole document into an `href`.
+
+**Sanitization keys on the prop name, not the block type.** Any block with a `props.html`
+is cleaned, so a new HTML-rendering block is covered the day it is added rather than the
+day someone remembers to extend a list.
+
+**Adding a block that renders HTML?** Name the prop `html` and both passes cover it for
+free. If you need a different name, extend `sanitize_blocks` in the same change — not
+afterwards.
+
+`svg` is deliberately absent from both passes: it widened the mXSS surface for a
+capability no block uses. `iframe` is absent too — video embeds are their own block type
+with a URL prop, and allowing raw iframes here would reintroduce audit M11 sideways. M11
+itself, on that dedicated embed block, is still open.
+
+`backend/tests/test_html_sanitization.py` asserts against **what is in MongoDB** rather
+than the response body: a test reading only the response would pass against a server that
+sanitized on read and still stored live payloads.
 
 ## Payments & fulfillment
 

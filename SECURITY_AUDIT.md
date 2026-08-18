@@ -36,7 +36,7 @@ both are the kind of thing that gets exploited within days of a public launch.
 |---|---|---|
 | Critical | 1 | Payment bypass via default config — **fixed** |
 | High | 3 | Rate-limit bypass, memory DoS, admin bootstrap race — **1 of 3 fixed (H3)** |
-| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1–M6 fixed; M7–M12 open** |
+| Medium | 11 | Headers, CSRF, session storage, TOCTOU oversell, upload trust — **M1–M6 and M10 fixed; M7–M9, M11, M12 open** |
 | Low | 4 | Info leaks, incomplete refund path |
 
 ### Remediation status
@@ -54,7 +54,8 @@ both are the kind of thing that gets exploited within days of a public launch.
 | L5 | **Fixed** | Bearer clients could not actually log out (found while fixing M2) |
 | H1 | **Open — half fixed** | App-side `TRUSTED_IP_HEADER` shipped; uvicorn's `proxy_headers` default still rewrites `request.client.host`, so the bypass survives. Pinned by an `xfail(strict=True)` regression test. Top priority |
 | S1 | **Fixed** | Second pass: concurrent order cancel credited stock 6× (verified 5 → 17); write is now conditional |
-| M7–M12, L1–L4 | Open | See the remediation plan |
+| M10 | **Fixed** | HTML cleaned server-side with nh3 on save/publish/restore; DOMPurify upgraded past its own bypass |
+| M7–M9, M11, M12, L1–L4 | Open | See the remediation plan |
 | Stale deps | **Fixed** | 126 → 38 runtime packages; `starlette` past CVE-2024-47874 |
 | Test suite | **Fixed** | 240 passed / 1 xfailed, from 12 failed / 29 errors / 7 passed |
 
@@ -495,16 +496,49 @@ Relatedly, no Pydantic model in the codebase sets `max_length`. `ContactMsg.mess
 event descriptions, and CMS block payloads are unbounded, so a single request can store
 an arbitrarily large document.
 
-### M10 — CMS HTML is sanitized only in the browser
+### M10 — CMS HTML is sanitized only in the browser — **FIXED**
 
-`CustomHTML` runs `DOMPurify.sanitize` at render time; the raw HTML is stored server-side
+`CustomHTML` ran `DOMPurify.sanitize` at render time; the raw HTML was stored server-side
 unsanitized. Any consumer that is not this React component — an email, a future SSR pass,
-a mobile client, a direct API read — receives the unsanitized string. Sanitize on write
-as well as on render.
+a mobile client, a direct API read — received the unsanitized string.
 
-The config also enables `USE_PROFILES: { svg: true }`, which widens the mXSS surface for
-no benefit visible in the block set. The explicit `FORBID_TAGS`/`FORBID_ATTR` lists are
-redundant with DOMPurify's defaults and give a false impression of being the protection.
+The config also enabled `USE_PROFILES: { svg: true }`, which widened the mXSS surface for
+no benefit visible in the block set. The explicit `FORBID_TAGS`/`FORBID_ATTR` lists were
+redundant with DOMPurify's defaults and gave a false impression of being the protection.
+
+**Why this was worse than "defence in depth in the wrong place".** The whole guarantee
+rested on the DOMPurify build in whichever browser loaded the page. That is not a
+hypothetical dependency: the version pinned here was **3.4.12, which has a published
+bypass** (patched in 3.4.13, upgraded in the same change). A stored payload plus a
+bypassable renderer is a stored XSS with an expiry date on the mitigation.
+
+**Fix (applied).** `backend/sanitize.py` cleans HTML with **nh3** (Rust `ammonia`) at
+three chokepoints: the editor's save, publish, and version-restore. `bleach` was not used
+— it is archived, and its `html5lib` parser diverges from browser parsing, which is
+exactly where mXSS lives; nh3 parses with html5ever.
+
+The allowlist is nh3's default tag set, which was *verified* to contain no `script`,
+`iframe`, `object`, `embed`, `form`, `style`, `svg` or `math` rather than assumed. URL
+schemes are restricted to `http`, `https`, `mailto`, `tel` — `data:` is excluded, since it
+lets an attacker inline a whole document into an `href`.
+
+Sanitization keys on the **prop name** (`props.html`), not the block `type`, so a new
+HTML-rendering block is covered the day it is added rather than the day someone remembers
+to extend a list.
+
+The client-side pass stays, as genuine defence in depth and because content stored before
+this fix never went through the server. It was narrowed to `USE_PROFILES: { html: true }`
+so the two passes agree on what is allowed, and the misleading `FORBID_*` lists were
+deleted rather than left to read as protection they were not providing.
+
+`test_html_sanitization.py` (17 tests) asserts against **what is in MongoDB**, not the
+response body — a test reading only the response would pass against a server that
+sanitized on read and still stored live payloads. 11 of the 17 fail with the server-side
+call removed.
+
+No migration was needed: a survey of `cms_pages` found **zero** blocks carrying
+`props.html` across all 11 pages, drafts and published alike. The publish and restore
+gates cover anything authored between that survey and deployment.
 
 ### M11 — Editor-controlled `iframe` with arbitrary origin and no sandbox
 
@@ -606,8 +640,9 @@ never credited against an order still marked paid. Pinned by
 ### Not re-reviewed
 
 `cms_routes.py` (+392) and `storage.py` (+130) were read for authz and for the M10/M11
-sanitisation findings only. The CMS HTML pipeline is still carrying M10 and M11 as
-originally written.
+sanitisation findings only. M10 has since been fixed (above); **M11 — editor-controlled
+`iframe` with arbitrary origin and no sandbox — is still open**, and is now the last
+untreated item in the CMS HTML pipeline.
 
 ## False alarms (checked and cleared)
 

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 import storage
+from sanitize import sanitize_draft, sanitize_blocks
 
 
 # The built-in sections. These are React routes, not CMS pages — there are no blocks to
@@ -359,6 +360,11 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
     @api.patch("/admin/cms/pages/{page_id}")
     async def admin_update_page(page_id: str, body: PagePatch, user=Depends(require_admin_or_editor)):
         upd = {k: v for k, v in body.model_dump().items() if v is not None}
+        # Clean HTML on the way in, not only on the way out (audit M10). The React
+        # renderer still runs DOMPurify, but this is what keeps live payloads out of the
+        # database and out of every consumer that is not that one component.
+        if "draft" in upd:
+            upd["draft"] = sanitize_draft(upd["draft"])
         upd["updated_at"] = now_iso()
         r = await db.cms_pages.update_one({"page_id": page_id}, {"$set": upd})
         if r.matched_count == 0:
@@ -384,7 +390,10 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         await db.cms_pages.update_one(
             {"page_id": page_id},
             {"$set": {
-                "published": {"blocks": draft.get("blocks", [])},
+                # The last gate before content is public. Drafts are cleaned on save, so
+                # this is redundant for anything written since — and is exactly what
+                # catches a draft that predates the fix.
+                "published": {"blocks": sanitize_blocks(draft.get("blocks", []))},
                 "published_at": now_iso(),
                 "published_by": user["user_id"],
                 "versions": versions,
@@ -404,7 +413,10 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         # Load the version into the draft — editor can then publish or edit further.
         await db.cms_pages.update_one(
             {"page_id": page_id},
-            {"$set": {"draft": {"blocks": version["blocks"]}, "updated_at": now_iso()}},
+            # Sanitized on the way back too: a snapshot taken before M10 was fixed holds
+            # whatever was stored then, and restoring it must not reintroduce it.
+            {"$set": {"draft": {"blocks": sanitize_blocks(version["blocks"])},
+                      "updated_at": now_iso()}},
         )
         return await db.cms_pages.find_one({"page_id": page_id}, {"_id": 0})
 
