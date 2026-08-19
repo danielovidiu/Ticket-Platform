@@ -99,3 +99,9 @@ graphify-out/
 # which is this project's configuration documentation and is meant to be committed.
 .env*
 !.env.example
+
+# Impeccable design-skill state. The live-mode config is shared project setup and is
+# committed; the session journals and resolved-root manifest under it are per-machine
+# working state that would only ever conflict.
+.impeccable/live/sessions/
+.impeccable/live/roots.json
