@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import { http, API } from "../api";
 import { useAuth, startLogin } from "../auth";
