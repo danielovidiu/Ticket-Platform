@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 const KEY = "ss_consent";
@@ -29,6 +29,10 @@ export default function CookieConsent() {
       /* ignore */
     }
     setShow(false);
+    /* The bottom of the viewport is shared: EventDetail's mobile buy bar stands down
+       while this notice is up, and there is no storage event for a write this tab made
+       itself. */
+    window.dispatchEvent(new Event("ss:consent"));
   };
 
   if (!show) return null;

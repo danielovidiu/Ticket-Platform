@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
 import { useAuth, startLogin } from "../auth";
@@ -7,6 +7,7 @@ import { Play } from "lucide-react";
 import { renderRich } from "../lib/richText";
 import { mediaUrl } from "../lib/media";
 import { Lightbox } from "../components/ui/lightbox";
+import { getConsent } from "../components/CookieConsent";
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }).toUpperCase();
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -57,6 +58,52 @@ function Collapsible({ lines = 10, testId, children }) {
           {expanded ? "Show less" : "Show more"}
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * The phone's box office.
+ *
+ * On a 375px screen the card's own buy button lands roughly two screens down — past the
+ * 4:3 hero, the text-5xl title, the tier list and the totals — so the one thing the
+ * visitor came for is the last thing they can reach. The card's `sticky top-24` does not
+ * help: its containing block wraps only the card, so there is nothing for it to travel
+ * in until the md grid gives it two rows. This keeps price and action in view instead.
+ *
+ * It stands down while the consent notice is showing. Both are fixed to the bottom, and
+ * two stacked bars eat a third of a short viewport; the notice is a single tap, and the
+ * card's own button is still there in the meantime.
+ */
+function MobileBuyBar({ waveName, total, busy, onBuy }) {
+  const [consented, setConsented] = useState(() => !!getConsent());
+  useEffect(() => {
+    const sync = () => setConsented(!!getConsent());
+    window.addEventListener("ss:consent", sync);
+    return () => window.removeEventListener("ss:consent", sync);
+  }, []);
+  if (!consented) return null;
+
+  return (
+    <div data-testid="mobile-buy-bar"
+         className="md:hidden fixed bottom-0 inset-x-0 z-[60] border-t border-ink/15 bg-page"
+         /* The home indicator overlaps anything pinned to bottom-0 on a notched iPhone,
+            and this bar's whole job is being tappable. */
+         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div className="flex items-stretch gap-3 px-4 py-3">
+        <div className="flex flex-col justify-center min-w-0">
+          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 truncate">
+            {waveName || "Tickets"}
+          </div>
+          <div className="font-display text-2xl font-bold leading-none mt-1 tabular-nums">
+            {total.toFixed(2)} RON
+          </div>
+        </div>
+        <button onClick={onBuy} disabled={busy} data-testid="mobile-reserve-btn"
+                className="btn-accent flex-1 whitespace-nowrap">
+          {busy ? "HOLDING…" : "HOLD · 10 MIN"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -120,7 +167,7 @@ export default function EventDetail() {
         discount_code: code || null,
         special_link_token: specialToken,
       });
-      navigate(`/checkout/${data.reservation_id}`);
+      navigate(`/checkout/${data.reservation_id}`, { state: { eventSlug: slug } });
     } catch (e) {
       // The account gates answer with an object, not a string: a session that predates
       // the mandatory-profile rule can reach this button with no phone number on file.
@@ -153,7 +200,7 @@ export default function EventDetail() {
        On md the box office spans both rows of the left stack, which is what gives the
        sticky card a tall enough containing block to travel in, exactly as the two-column
        version did. */
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10 items-start">
+    <div className={`max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10 items-start ${soldOut ? "" : "pb-32 md:pb-12"}`}>
       <div className="md:col-span-7">
         <div className="aspect-[4/3] overflow-hidden border border-ink/10">
           <img src={mediaUrl(event.image_url)} alt={event.title} className="w-full h-full object-cover" />
@@ -285,6 +332,11 @@ export default function EventDetail() {
           </div>
         )}
       </div>
+
+      {!soldOut && (
+        <MobileBuyBar waveName={special ? special.label : selectedWave?.name}
+                      total={total} busy={busy} onBuy={reserve} />
+      )}
 
       {lbIndex !== null && (
         <Lightbox
