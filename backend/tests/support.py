@@ -69,6 +69,11 @@ db = _client[DB_NAME]
 TEST_EMAIL_DOMAIN = "pytest.invalid"
 _created_user_ids: list = []
 
+# Events this process created through the API. Same contract as _created_user_ids:
+# tracked at creation, removed at session end. A fixture that builds an event and then
+# fails an assertion still gets it cleaned, which a trailing `requests.delete` does not.
+_created_event_ids: list = []
+
 
 def server_is_up() -> tuple:
     """(reachable, reason). The suite is integration-style and needs a live server."""
@@ -188,6 +193,31 @@ def registered_user_doc(email: str) -> dict:
     return db.users.find_one({"email": email.strip().lower()}, {"_id": 0}) or {}
 
 
+def track_event(event_id: str):
+    """Register an event for removal at the end of this session.
+
+    `scannable_event` created one per run and never deleted it: 77 SCAN TEST EVENTs had
+    accumulated in the development database over about a fortnight, against two real
+    ones. A session-scoped fixture that `return`s has no teardown at all, and the sweep
+    below only ever knew about users.
+    """
+    if event_id:
+        _created_event_ids.append(event_id)
+
+
+def cleanup_test_events():
+    """Remove only the events THIS process created, mirroring cleanup_test_users."""
+    ids = list(_created_event_ids)
+    if not ids:
+        return
+    reservations = list(db.reservations.find({"event_id": {"$in": ids}}, {"_id": 0, "reservation_id": 1}))
+    if reservations:
+        db.tickets.delete_many({"reservation_id": {"$in": [r["reservation_id"] for r in reservations]}})
+        db.reservations.delete_many({"event_id": {"$in": ids}})
+    db.events.delete_many({"event_id": {"$in": ids}})
+    _created_event_ids.clear()
+
+
 def cleanup_test_users():
     """Remove only the identities THIS process created.
 
@@ -258,6 +288,33 @@ def release_reservation_holds(match: dict):
                     ]},
                 }}}}],
             )
+
+
+# Slug prefixes the suite's own event fixtures use. Anchored, and specific enough that
+# no CMS-authored or seeded event can match one: `scan-test-` and `test-low-` are written
+# by backend_test.py and test_low_findings.py respectively.
+_TEST_EVENT_SLUG_RE = r"^(scan-test|test-low|test-tmp)-"
+
+
+def sweep_stale_test_events(older_than_hours: int = 1):
+    """Remove event fixtures left behind by an interrupted run.
+
+    The companion to sweep_stale_test_users, and added for the same reason it exists:
+    77 SCAN TEST EVENTs had built up against two real events, because the fixture that
+    makes them had no teardown and nothing swept for them afterwards. Age-gated on the
+    same rule, so a concurrently running worker's event is never pulled out from under it.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+    stale = [e["event_id"] for e in db.events.find(
+        {"slug": {"$regex": _TEST_EVENT_SLUG_RE}, "created_at": {"$lt": cutoff}},
+        {"event_id": 1})]
+    if not stale:
+        return
+    orphaned = list(db.reservations.find({"event_id": {"$in": stale}}, {"_id": 0, "reservation_id": 1}))
+    if orphaned:
+        db.tickets.delete_many({"reservation_id": {"$in": [r["reservation_id"] for r in orphaned]}})
+        db.reservations.delete_many({"event_id": {"$in": stale}})
+    db.events.delete_many({"event_id": {"$in": stale}})
 
 
 def sweep_stale_test_users(older_than_hours: int = 1):

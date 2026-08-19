@@ -22,7 +22,8 @@ import subprocess
 import pytest
 import requests
 
-from support import API, BASE_URL, BACKEND_DIR, DB_NAME, bearer as _bearer, mint_user, patient
+from support import (API, BASE_URL, BACKEND_DIR, DB_NAME, bearer as _bearer, mint_user,
+                     patient, track_event)
 
 # Runs on one worker, in order: the module's own xdist group. This is what
 # `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
@@ -345,6 +346,11 @@ def scannable_event(admin_headers):
     r = requests.post(f"{API}/admin/events", json=payload, headers=admin_headers, timeout=15)
     assert r.status_code == 200, r.text
     ev = r.json()
+    # Registered before the assertions below, not after: this fixture is session-scoped
+    # and used to `return`, so it had no teardown at all and left one SCAN TEST EVENT in
+    # the database per run. Tracking it here means an assertion failure further down
+    # still gets it cleaned up.
+    track_event(ev.get("event_id"))
     assert ev["event_id"]
     assert len(ev["waves"]) == 1
     wave = ev["waves"][0]

@@ -128,15 +128,20 @@ def pytest_sessionfinish(session, exitstatus):
 
 @pytest.fixture(scope="session", autouse=True)
 def _cleanup_created_users():
-    """Clear old leftovers up front; remove this worker's own accounts at the end."""
+    """Clear old leftovers up front; remove this worker's own records at the end."""
     try:
         support.sweep_stale_test_users()
+        support.sweep_stale_test_events()
     except Exception:
         pass
     yield
     try:
         support.cleanup_test_users()
     except Exception:  # teardown must never fail the run
+        pass
+    try:
+        support.cleanup_test_events()
+    except Exception:
         pass
 
 
