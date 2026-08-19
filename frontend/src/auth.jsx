@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { http } from "./api";
 
 const AuthCtx = createContext({ user: null, loading: true, refresh: () => {}, logout: () => {} });

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { http } from "../api";
 
@@ -19,7 +19,7 @@ export default function CheckoutSuccess() {
         if (n >= 15) { setStatus("timeout"); return; }
         setAttempts(n);
         timer.current = setTimeout(() => poll(n + 1), 2000);
-      } catch (e) {
+      } catch {
         if (n >= 15) { setStatus("error"); return; }
         timer.current = setTimeout(() => poll(n + 1), 2000);
       }
