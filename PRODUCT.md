@@ -101,6 +101,14 @@ Durable constraints:
   `BLOB_READ_WRITE_TOKEN` is set. Ephemeral filesystems lose local uploads.
 - **MongoDB is a replica set**, not a standalone server, because transactions depend on
   it.
+- **A refund is recorded, not executed.** `admin_refund` marks the reservation and its
+  tickets refunded and returns still-sellable stock to the wave, but never calls Stripe's
+  refund API — the Stripe SDK is used only for customers, checkout sessions and webhook
+  verification. The money is moved by hand in the Stripe dashboard, so "refunded" in this
+  system means "we owe them" until someone does that.
+- **Invoices are the platform's own.** Sequential VAT PDFs are generated in-process with
+  reportlab. There is no integration with a Romanian e-invoicing provider (SmartBill,
+  Oblio, e-Factura), so the numbers are issued by this system rather than by one.
 - **Containerization and CI/CD are agreed, not built.** The decision to do both has been
   made; no Dockerfile or workflow exists yet, and `.github/` still contains only
   Dependabot config. Per-customer deployment is the reason it matters — repeatable
