@@ -1017,8 +1017,11 @@ operator must supply a private key that does nothing.
 
 ### Stale artifacts — FIXED
 
-- `test_reports/*.json` — six tracked "iteration" QA reports describing the pre-rewrite
-  codebase. **Deleted.**
+- `test_reports/pytest/*.xml` — six tracked "iteration" QA reports describing the
+  pre-rewrite codebase, plus a `pytest_results.xml`. **Deleted.** This entry previously
+  read `test_reports/*.json` and claimed the deletion had already happened; neither was
+  true. The files were XML, and they were still tracked — the removal only landed with
+  `test_result.md` and the empty root `tests/` package, in the Emergent-artifact sweep.
 - `graphify-out/` — 3.4 MB of generated knowledge graph. **Added to `.gitignore`.**
 - `/api/seed` docstring read "Public for MVP convenience" while the route is
   `Depends(require_admin)`. **Corrected** — it read like a vulnerability to anyone

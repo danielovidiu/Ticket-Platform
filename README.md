@@ -269,7 +269,6 @@ teardown, and swept on start if a previous run was interrupted.
 | `SECURITY_AUDIT.md` | Full audit: findings, attack paths, remediation plan |
 | `auth_testing.md` | Manual auth test flows |
 | `CMS_GUIDE.md` | CMS usage |
-| `test_reports/`, `test_result.md` | **Stale.** Pre-rewrite QA artifacts; safe to delete |
 
 ## Is it deployed?
 
