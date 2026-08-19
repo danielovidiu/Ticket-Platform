@@ -7,7 +7,6 @@
  * irreversible from the door's side, so which verdicts offer it, and what happens between
  * pressing it and the denial landing, are worth pinning.
  */
-import React from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 

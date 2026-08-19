@@ -21,7 +21,28 @@ import requests
 from support import API, bearer, mint_user
 
 BACKEND = Path(__file__).resolve().parent.parent
-APP_JS = BACKEND.parent / "frontend" / "src" / "App.js"
+
+
+def _app_router_file():
+    """The router module, whatever extension it currently carries.
+
+    This was pinned to `App.js` and went stale when the Vite migration renamed it to
+    `App.jsx` (c41371b), so the guard below silently stopped guarding. Resolving the
+    name — and failing loudly when neither exists — is what keeps a future rename from
+    doing the same thing again.
+    """
+    src_dir = BACKEND.parent / "frontend" / "src"
+    for name in ("App.jsx", "App.js"):
+        candidate = src_dir / name
+        if candidate.exists():
+            return candidate
+    raise AssertionError(
+        f"no App.jsx or App.js under {src_dir} — this guard reads the real router, "
+        "so it cannot run without it"
+    )
+
+
+APP_JS = _app_router_file()
 
 sys.path.insert(0, str(BACKEND))
 from cms_routes import RESERVED_SLUGS, SLUG_RE, page_route  # noqa: E402
@@ -52,7 +73,7 @@ def _create(slug, headers=None):
 # ---------- The list cannot drift from the router ----------
 
 def router_paths():
-    """Top-level static path segments declared in App.js.
+    """Top-level static path segments declared in the App router.
 
     Deliberately reads the real file rather than restating the routes: a copy would drift
     exactly as silently as the thing it is meant to catch.
@@ -72,7 +93,7 @@ def router_paths():
 def test_every_router_path_is_reserved():
     missing = router_paths() - set(RESERVED_SLUGS)
     assert not missing, (
-        f"App.js declares {sorted(missing)} but RESERVED_SLUGS does not list them. A CMS "
+        f"{APP_JS.name} declares {sorted(missing)} but RESERVED_SLUGS does not list them. A CMS "
         f"page on one of those slugs would be created and then never open. Add them to "
         f"RESERVED_SLUGS in cms_routes.py."
     )

@@ -196,6 +196,142 @@ class TestRefundReturnsSellableStock:
             db.tickets.delete_many({"ticket_id": tkt})
 
 
+class TestRefundOnlyGivesBackWhatWasHeld:
+    """`available` above `capacity` is inventory that was never sold.
+
+    The refund route used to claim any row that was not already `refunded`. A reservation
+    only holds stock while it is `pending`, and the expiry sweep hands that stock back
+    when it flips the row to `expired` — so refunding anything unpaid credited the wave a
+    second time, and the surplus then survived every admin edit (see
+    TestAnOverCountDoesNotSurviveAnEdit).
+    """
+
+    def _wave_at(self, capacity, available, starts_in_days=7):
+        event_id = f"evt_low_{uuid.uuid4().hex[:10]}"
+        wave_id = f"wave_low_{uuid.uuid4().hex[:10]}"
+        db.events.insert_one({
+            "event_id": event_id, "title": f"TEST_low {uuid.uuid4().hex[:6]}",
+            "slug": f"test-low-{uuid.uuid4().hex[:8]}", "description": "", "venue": "", "city": "",
+            "starts_at": _iso(days=starts_in_days), "ends_at": None, "doors_open_at": None,
+            "image_url": "", "artist_ids": [], "max_tickets_per_user": 4,
+            "is_published": True, "sold_out_message": "", "created_at": _iso(),
+            "waves": [{"wave_id": wave_id, "name": "GENERAL", "price_ron": 100.0,
+                       "capacity": capacity, "available": available,
+                       "starts_at": _iso(days=-1), "ends_at": _iso(days=30),
+                       "tier": "general", "access_from": None}],
+        })
+        return event_id, wave_id
+
+    @pytest.mark.parametrize("status", ["expired", "pending"])
+    def test_an_unpaid_reservation_cannot_credit_the_wave(self, admin_headers, status):
+        """Capacity 10 with all 10 on sale: whatever this row once held is already back."""
+        event_id, wave_id = self._wave_at(capacity=10, available=10)
+        _h, uid, _e = mint_user()
+        rid = _reservation(event_id, wave_id, uid, status=status, quantity=2)
+        try:
+            r = requests.post(f"{API}/admin/orders/{rid}/refund",
+                              headers=admin_headers, timeout=TIMEOUT)
+            assert r.status_code == 200, r.text
+            assert r.json()["stock_returned"] is False
+            assert r.json()["not_paid"] is True
+            assert _available(event_id) == 10, (
+                f"a {status} reservation was refunded and invented seats"
+            )
+            assert db.reservations.find_one(
+                {"reservation_id": rid})["status"] == status, "status changed on a no-op refund"
+        finally:
+            db.events.delete_many({"event_id": event_id})
+            db.reservations.delete_many({"reservation_id": rid})
+
+    def test_the_reported_case_capacity_100_one_sold_then_refunded(self, admin_headers):
+        """The path that always worked, pinned so it keeps working: 100 capacity, one
+        seat sold, refunded before the show, back to 100."""
+        event_id, wave_id = self._wave_at(capacity=100, available=99)
+        _h, uid, _e = mint_user()
+        rid = _reservation(event_id, wave_id, uid, quantity=1)
+        try:
+            r = requests.post(f"{API}/admin/orders/{rid}/refund",
+                              headers=admin_headers, timeout=TIMEOUT)
+            assert r.status_code == 200, r.text
+            assert r.json()["stock_returned"] is True
+            assert _available(event_id) == 100
+        finally:
+            db.events.delete_many({"event_id": event_id})
+            db.reservations.delete_many({"reservation_id": rid})
+
+    def test_a_release_can_never_push_availability_past_capacity(self, admin_headers):
+        """The backstop, independent of who calls it: even a paid row whose seats were
+        somehow already back cannot lift `available` above the ceiling."""
+        event_id, wave_id = self._wave_at(capacity=10, available=10)
+        _h, uid, _e = mint_user()
+        rid = _reservation(event_id, wave_id, uid, quantity=2)  # status="paid"
+        try:
+            requests.post(f"{API}/admin/orders/{rid}/refund",
+                          headers=admin_headers, timeout=TIMEOUT)
+            assert _available(event_id) == 10, "the ceiling did not hold"
+        finally:
+            db.events.delete_many({"event_id": event_id})
+            db.reservations.delete_many({"reservation_id": rid})
+
+
+class TestAnOverCountDoesNotSurviveAnEdit:
+    """`sold` is derived as capacity - available. On a wave already over its ceiling that
+    is negative, and the reconciliation added it back rather than clamping — so a 250-seat
+    wave showing 251 stayed at 251 through every save, and shrinking it to 200 gave 201."""
+
+    def _over_counted(self, capacity=250, available=251):
+        event_id = f"evt_low_{uuid.uuid4().hex[:10]}"
+        wave_id = f"wave_low_{uuid.uuid4().hex[:10]}"
+        db.events.insert_one({
+            "event_id": event_id, "title": f"TEST_low {uuid.uuid4().hex[:6]}",
+            "slug": f"test-low-{uuid.uuid4().hex[:8]}", "description": "", "venue": "", "city": "",
+            "starts_at": _iso(days=7), "ends_at": None, "doors_open_at": None,
+            "image_url": "", "artist_ids": [], "max_tickets_per_user": 4,
+            "is_published": True, "sold_out_message": "", "created_at": _iso(),
+            "waves": [{"wave_id": wave_id, "name": "GENERAL", "price_ron": 100.0,
+                       "capacity": capacity, "available": available,
+                       "starts_at": _iso(days=-1), "ends_at": _iso(days=30),
+                       "tier": "general", "access_from": None}],
+        })
+        return event_id, wave_id
+
+    def _patch(self, admin_headers, event_id, wave_id, capacity):
+        return requests.patch(
+            f"{API}/admin/events/{event_id}",
+            json={"waves": [{"wave_id": wave_id, "name": "GENERAL", "price_ron": 100.0,
+                             "capacity": capacity, "starts_at": _iso(days=-1),
+                             "ends_at": _iso(days=30), "tier": "general"}]},
+            headers=admin_headers, timeout=TIMEOUT)
+
+    def test_re_saving_the_lineup_heals_it(self, admin_headers):
+        event_id, wave_id = self._over_counted()
+        try:
+            r = self._patch(admin_headers, event_id, wave_id, capacity=250)
+            assert r.status_code == 200, r.text
+            assert _available(event_id) == 250, "the surplus survived the edit"
+        finally:
+            db.events.delete_many({"event_id": event_id})
+
+    def test_shrinking_the_capacity_heals_it_too(self, admin_headers):
+        event_id, wave_id = self._over_counted()
+        try:
+            r = self._patch(admin_headers, event_id, wave_id, capacity=200)
+            assert r.status_code == 200, r.text
+            assert _available(event_id) == 200, "the surplus was carried down with capacity"
+        finally:
+            db.events.delete_many({"event_id": event_id})
+
+    def test_a_healthy_wave_still_keeps_its_sold_count(self, admin_headers):
+        """The clamp must not erase real sales: 10 capacity with 2 sold stays 2 sold."""
+        event_id, wave_id = self._over_counted(capacity=10, available=8)
+        try:
+            r = self._patch(admin_headers, event_id, wave_id, capacity=20)
+            assert r.status_code == 200, r.text
+            assert _available(event_id) == 18, "the two sold seats were forgotten"
+        finally:
+            db.events.delete_many({"event_id": event_id})
+
+
 # --- L4 -------------------------------------------------------------------------------
 
 class TestExpiredHoldsComeBackOnQuietEvents:

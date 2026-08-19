@@ -2226,13 +2226,33 @@ async def _release_reservation_holds(r: dict):
     create_reservation. Special-link reservations hold link capacity; every other one
     holds wave stock. Keeping both in one place is what stops the two from drifting."""
     if r.get("special_link_token"):
+        # Floored at zero. A bare $inc credits the link whether or not this reservation
+        # was still holding anything, and a link whose `used` goes negative hands out
+        # invite capacity that was never bought back.
         await db.special_links.update_one(
-            {"token": r["special_link_token"]}, {"$inc": {"used": -r["quantity"]}}
+            {"token": r["special_link_token"]},
+            [{"$set": {"used": {"$max": [0, {"$subtract": ["$used", r["quantity"]]}]}}}],
         )
     else:
+        # Capped at the wave's own capacity, for the mirror reason: `available` above
+        # `capacity` is inventory that was never sold and cannot be honoured at the door.
+        # A pipeline update rather than $inc because the ceiling is another field's value,
+        # which a plain update expression cannot read. $map rebuilds the array because the
+        # positional operator is not available inside a pipeline.
         await db.events.update_one(
             {"event_id": r["event_id"], "waves.wave_id": r["wave_id"]},
-            {"$inc": {"waves.$.available": r["quantity"]}},
+            [{"$set": {"waves": {"$map": {
+                "input": "$waves",
+                "as": "w",
+                "in": {"$cond": [
+                    {"$eq": ["$$w.wave_id", r["wave_id"]]},
+                    {"$mergeObjects": ["$$w", {"available": {"$min": [
+                        {"$add": [{"$ifNull": ["$$w.available", "$$w.capacity"]}, r["quantity"]]},
+                        "$$w.capacity",
+                    ]}}]},
+                    "$$w",
+                ]},
+            }}}}],
         )
 
 
@@ -3176,7 +3196,12 @@ async def admin_update_event(event_id: str, body: EventPatchIn, user=Depends(req
         for w in (wave.model_dump() for wave in body.waves):
             if w.get("wave_id") and w["wave_id"] in by_id:
                 prev = by_id[w["wave_id"]]
-                sold = prev["capacity"] - prev.get("available", prev["capacity"])
+                # Floored at zero. A wave already carrying more `available` than
+                # `capacity` yields a NEGATIVE `sold`, which the line below would then
+                # add back on — so the surplus survived every edit, and shrinking the
+                # capacity carried it down with it (250/251 became 200/201). Clamping
+                # `sold` is what lets an edit heal the row instead of preserving it.
+                sold = max(0, prev["capacity"] - prev.get("available", prev["capacity"]))
                 w["available"] = max(0, w["capacity"] - sold)
             else:
                 w["wave_id"] = new_id("wave")
@@ -3434,12 +3459,20 @@ async def admin_refund(reservation_id: str, user=Depends(require_admin)):
     if not reservation:
         raise HTTPException(404, "Reservation not found")
 
+    # `paid`, not "anything but refunded". A reservation only ever holds stock while it is
+    # `pending`, and the expiry sweep already gave that stock back when it flipped the row
+    # to `expired` — so refunding a row in any other state credited the wave for seats it
+    # was not holding, and `available` climbed past `capacity`. The statuses are exactly
+    # pending -> expired and pending -> paid -> refunded; only the last of those is money
+    # that can come back.
     claimed = await db.reservations.update_one(
-        {"reservation_id": reservation_id, "status": {"$ne": "refunded"}},
+        {"reservation_id": reservation_id, "status": "paid"},
         {"$set": {"status": "refunded"}},
     )
     if claimed.modified_count != 1:
-        return {"ok": True, "already_refunded": True, "stock_returned": False}
+        already = reservation.get("status") == "refunded"
+        return {"ok": True, "already_refunded": already, "not_paid": not already,
+                "status": reservation.get("status"), "stock_returned": False}
 
     await db.tickets.update_many({"reservation_id": reservation_id}, {"$set": {"status": "refunded"}})
 

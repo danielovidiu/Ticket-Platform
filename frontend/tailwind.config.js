@@ -3,7 +3,11 @@ module.exports = {
     darkMode: ["class"],
     content: [
     "./src/**/*.{js,jsx,ts,tsx}",
-    "./public/index.html"
+    // Vite reads index.html from the project root and transforms it as a real document;
+    // there is no public/ directory any more. This still said ./public/index.html after
+    // the migration, so any Tailwind class written into the shell -- a splash, a loading
+    // state, a class on <html> -- was silently dropped from the build.
+    "./index.html"
   ],
   theme: {
     extend: {
