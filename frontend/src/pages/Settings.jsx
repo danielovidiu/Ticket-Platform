@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { http, API } from "../api";
 import { useAuth, startLogin } from "../auth";
 import { toast } from "sonner";
 
 export default function Settings() {
-  const { user, loading, refresh, setUser } = useAuth();
+  const { user, loading, setUser } = useAuth();
   const navigate = useNavigate();
   const [profile, setProfile] = useState({ first_name: "", last_name: "", phone: "" });
   const [consents, setConsents] = useState({ email_opt_in: false, news_opt_in: false, promo_opt_in: false });
@@ -48,7 +48,7 @@ export default function Settings() {
     const next = { ...consents, [key]: !consents[key] };
     setConsents(next);
     try { const { data } = await http.post("/auth/consents", { [key]: next[key] }); setUser(data); }
-    catch (e) { toast.error("Failed to update"); setConsents(consents); }
+    catch { toast.error("Failed to update"); setConsents(consents); }
   };
 
   const resendVerify = async () => {

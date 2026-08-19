@@ -57,9 +57,21 @@ module.exports = [
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
       // JS
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      // `ignoreRestSiblings` covers `const { file, ...rest } = entry` — the standard way
+      // to drop a property, where naming the discarded key IS the point.
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_",
+                                   ignoreRestSiblings: true }],
       "no-empty": ["warn", { allowEmptyCatch: false }],
       "no-console": "off",
+    },
+  },
+  {
+    // vite.config.mjs sets `test.globals: true`, so describe/it/expect/vi are real at
+    // runtime and every test file was reporting a wall of no-undef errors that meant
+    // nothing. `globals` already ships the list, so this needs no new dependency.
+    files: ["src/**/*.{test,spec}.{js,jsx}"],
+    languageOptions: {
+      globals: { ...globals.vitest },
     },
   },
 ];

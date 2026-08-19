@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { http } from "../api";
 import { useAuth, startLogin } from "../auth";
 import { Check, X, Ban, Camera, Zap, ZapOff } from "lucide-react";

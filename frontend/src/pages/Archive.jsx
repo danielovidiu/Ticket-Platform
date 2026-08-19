@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
 import { renderInline } from "../lib/richText";

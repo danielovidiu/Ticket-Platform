@@ -9,7 +9,6 @@
  * here. Same for the API client and the toast library, which this block imports for its
  * *other* renderers.
  */
-import React from "react";
 import { render, screen } from "@testing-library/react";
 
 vi.mock("react-router-dom", () => ({ Link: ({ children }) => <a href="/">{children}</a> }));

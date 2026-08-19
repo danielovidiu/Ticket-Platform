@@ -221,21 +221,42 @@ def release_reservation_holds(match: dict):
     against it, and every test needing a real reservation started failing with "Not
     enough tickets available". Mirrors server._release_reservation_holds.
 
-    Everything except `expired` is returned, not just `pending`. A paid reservation has
-    also consumed its stock — it became tickets — and teardown deletes those tickets in
-    the same breath, so the stock has to come back with them. Only `expired` is skipped,
-    because the server's own sweep has already returned it.
+    `pending` and `paid` are returned. A paid reservation has also consumed its stock — it
+    became tickets — and teardown deletes those tickets in the same breath, so the stock
+    has to come back with them.
+
+    `expired` and `refunded` are skipped, because both have already been given back:
+    `expired` by the server's own sweep, `refunded` by admin_refund. This used to read
+    `$ne: "expired"`, which returned refunded rows a second time and pushed the seeded
+    GENERAL wave to 251 of 250 — one run of test_order_refund, one phantom seat. Same
+    shape as the production bug it mirrors: release what is actually held, not everything
+    that is not one known-safe state.
     """
-    for r in db.reservations.find({**match, "status": {"$ne": "expired"}},
+    for r in db.reservations.find({**match, "status": {"$nin": ["expired", "refunded"]}},
                                   {"_id": 0, "event_id": 1, "wave_id": 1,
                                    "quantity": 1, "special_link_token": 1}):
         if r.get("special_link_token"):
-            db.special_links.update_one({"token": r["special_link_token"]},
-                                        {"$inc": {"used": -r["quantity"]}})
+            db.special_links.update_one(
+                {"token": r["special_link_token"]},
+                [{"$set": {"used": {"$max": [0, {"$subtract": ["$used", r["quantity"]]}]}}}],
+            )
         else:
+            # Capped at capacity, mirroring the server helper, so a teardown can never be
+            # the thing that manufactures an impossible wave.
             db.events.update_one(
                 {"event_id": r["event_id"], "waves.wave_id": r["wave_id"]},
-                {"$inc": {"waves.$.available": r["quantity"]}},
+                [{"$set": {"waves": {"$map": {
+                    "input": "$waves",
+                    "as": "w",
+                    "in": {"$cond": [
+                        {"$eq": ["$$w.wave_id", r["wave_id"]]},
+                        {"$mergeObjects": ["$$w", {"available": {"$min": [
+                            {"$add": [{"$ifNull": ["$$w.available", "$$w.capacity"]}, r["quantity"]]},
+                            "$$w.capacity",
+                        ]}}]},
+                        "$$w",
+                    ]},
+                }}}}],
             )
 
 

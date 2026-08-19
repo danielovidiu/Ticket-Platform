@@ -1,4 +1,3 @@
-import React from "react";
 
 /**
  * Shared markdown-ish subset used everywhere free text is entered: event
