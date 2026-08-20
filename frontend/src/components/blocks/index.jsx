@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import DOMPurify from "dompurify";
-import { resolveEmbed } from "../../lib/embeds";
+import { resolveEmbed, withPlayback } from "../../lib/embeds";
 import { http } from "../../api";
 import { toast } from "sonner";
 import { renderRich, renderInline } from "../../lib/richText";
@@ -270,13 +270,50 @@ function Newsletter({ props }) {
 }
 
 function VideoEmbed({ props, preview }) {
+  // Browsers refuse to start an unmuted video on their own, so autoplay forces muted
+  // rather than offering a combination that would silently never play.
+  const autoplay = !!props.autoplay;
+  const loop = !!props.loop;
+  const muted = autoplay || !!props.muted;
+  const controls = props.controls !== false;
+  const aspect = aspectClass(props.aspect, "aspect-video");
+  const caption = props.caption
+    ? <div className="mt-2 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-4">{props.caption}</div>
+    : null;
+
+  // An uploaded file wins over a pasted embed URL when both are set: it is the more
+  // specific of the two, and the only one that autoplays without a third-party player's
+  // chrome over it. CSP `media-src` covers 'self' and the blob store, so a file that came
+  // from /admin/uploads plays and an arbitrary pasted host is refused by the browser.
+  if (props.file_url) {
+    return (
+      <section className="py-10"><Container>
+        <div className={`${aspect} border border-ink/10 bg-scrim overflow-hidden`}>
+          <video
+            src={mediaUrl(props.file_url)}
+            poster={props.poster_url ? mediaUrl(props.poster_url) : undefined}
+            className="w-full h-full object-cover"
+            autoPlay={autoplay}
+            muted={muted}
+            loop={loop}
+            controls={controls}
+            playsInline
+            preload={autoplay ? "auto" : "metadata"}
+            data-testid="video-file"
+          />
+        </div>
+        {caption}
+      </Container></section>
+    );
+  }
+
   if (!props.url) return null;
 
   // Audit M11. This used to fall through to the author's raw URL for anything that was
   // neither YouTube nor Vimeo, framing any page on the internet inside a real Supersanity
   // URL. `resolveEmbed` returns a canonical src from a fixed host list or nothing at all —
   // there is no passthrough any more.
-  const embed = resolveEmbed(props.url);
+  const embed = withPlayback(resolveEmbed(props.url), { autoplay, loop });
 
   if (!embed) {
     // Silent on the public site: a visitor cannot act on this, and a broken-embed notice
@@ -296,7 +333,7 @@ function VideoEmbed({ props, preview }) {
 
   return (
     <section className="py-10"><Container>
-      <div className="aspect-video border border-ink/10">
+      <div className={`${aspect} border border-ink/10`}>
         {/* `sandbox` is the half a CSP cannot do: frame-src says which origins may be
             framed, this says what the frame may then do. allow-same-origin is required
             or the player cannot reach its own APIs; allow-top-navigation is deliberately
@@ -308,11 +345,11 @@ function VideoEmbed({ props, preview }) {
           data-provider={embed.provider}
           sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
           referrerPolicy="strict-origin-when-cross-origin"
-          allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allow={`accelerometer; ${autoplay ? "autoplay; " : ""}clipboard-write; encrypted-media; gyroscope; picture-in-picture`}
           allowFullScreen
         />
       </div>
-      {props.caption && <div className="mt-2 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-4">{props.caption}</div>}
+      {caption}
     </Container></section>
   );
 }

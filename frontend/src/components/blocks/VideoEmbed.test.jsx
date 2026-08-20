@@ -78,3 +78,57 @@ describe("an allowlisted embed", () => {
     expect(prev.innerHTML).toBe("");
   });
 });
+
+describe("autoplay", () => {
+  const block = (props) => ({ block_id: "b1", type: "video", props });
+
+  test("an embed with autoplay off keeps a bare canonical src", () => {
+    const { container } = render(
+      <BlockRenderer block={block({ url: "https://youtu.be/dQw4w9WgXcQ" })} />);
+    expect(iframeIn(container)).toHaveAttribute("src", "https://www.youtube.com/embed/dQw4w9WgXcQ");
+  });
+
+  test("an embed with autoplay on asks for it in the src and in allow=", () => {
+    const { container } = render(
+      <BlockRenderer block={block({ url: "https://youtu.be/dQw4w9WgXcQ", autoplay: true })} />);
+    const frame = iframeIn(container);
+    expect(new URL(frame.getAttribute("src")).searchParams.get("autoplay")).toBe("1");
+    // The src alone is not enough: without `autoplay` in the iframe's permissions policy
+    // the player is not allowed to start itself.
+    expect(frame.getAttribute("allow")).toContain("autoplay");
+  });
+
+  test("an uploaded file renders a <video>, not a frame", () => {
+    const { container } = render(
+      <BlockRenderer block={block({ file_url: "/uploads/a.mp4", autoplay: true, loop: true })} />);
+    expect(iframeIn(container)).toBeNull();
+    const video = container.querySelector("video");
+    expect(video).toBeTruthy();
+    expect(video.autoplay).toBe(true);
+    expect(video.loop).toBe(true);
+    // Autoplay is only ever granted to a muted element, so the block does not offer the
+    // combination that would silently never play.
+    expect(video.muted).toBe(true);
+  });
+
+  test("an uploaded file wins over an embed URL when an author has set both", () => {
+    const { container } = render(
+      <BlockRenderer block={block({ url: "https://youtu.be/dQw4w9WgXcQ", file_url: "/uploads/a.mp4" })} />);
+    expect(iframeIn(container)).toBeNull();
+    expect(container.querySelector("video")).toBeTruthy();
+  });
+
+  test("a file without autoplay is not muted by force and keeps its controls", () => {
+    const { container } = render(
+      <BlockRenderer block={block({ file_url: "/uploads/a.mp4", muted: false })} />);
+    const video = container.querySelector("video");
+    expect(video.muted).toBe(false);
+    expect(video.controls).toBe(true);
+  });
+
+  test("a hostile file_url is still just a media load, never a frame", () => {
+    const { container } = render(
+      <BlockRenderer block={block({ file_url: "https://evil.example/login" })} />);
+    expect(iframeIn(container)).toBeNull();
+  });
+});

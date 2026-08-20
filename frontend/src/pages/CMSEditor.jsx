@@ -8,6 +8,7 @@ import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme, MODE
 import { applyCustomFonts } from "../lib/fonts";
 import { FormatToolbar } from "../lib/richText";
 import ImageField from "../components/ImageField";
+import VideoField from "../components/VideoField";
 import FontPicker from "../components/FontPicker";
 import FontManager from "../components/FontManager";
 import { navChanged } from "../lib/nav";
@@ -850,6 +851,12 @@ const FIELDS = {
   ],
   video: [
     { k: "url", label: "YouTube / Vimeo URL" },
+    { k: "file_url", label: "Or upload a video file", type: "video" },
+    { k: "autoplay", label: "Autoplay (always muted — browsers require it)", type: "checkbox" },
+    { k: "loop", label: "Loop", type: "checkbox" },
+    { k: "muted", label: "Start muted", type: "checkbox" },
+    { k: "controls", label: "Show player controls (uploaded files)", type: "checkbox" },
+    { k: "aspect", label: "Aspect ratio", type: "select", options: ["16:9", "21:9", "4:3", "1:1", "3:4", "16:10", "3:2"] },
     { k: "caption", label: "Caption" },
   ],
   custom_html: [{ k: "html", label: "HTML", type: "textarea", rows: 10 }],
@@ -907,6 +914,12 @@ function PropsEditor({ block, onChange }) {
         // which would fire the wrong one.
         if (f.type === "image") {
           return <ImageField key={key} label={f.label} value={v[f.k] || ""} onChange={commitField(f.k)} testId={testId} />;
+        }
+        // Same reason as the image field, plus one more: an upload fills the file and its
+        // poster together, so this one commits a patch rather than a single value.
+        if (f.type === "video") {
+          return <VideoField key={key} label={f.label} value={v.file_url || ""} posterValue={v.poster_url || ""}
+                             onPatch={(patch) => onChange(blockId, patch, `${blockId}:${f.k}`)} testId={testId} />;
         }
         return (
           <label key={key} className="block">
