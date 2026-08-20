@@ -6,7 +6,7 @@
  * for anything it did not recognise, which is how an editor could frame a phishing page
  * under the real domain.
  */
-import { resolveEmbed, EMBED_HOSTS } from "./embeds";
+import { resolveEmbed, withPlayback, EMBED_HOSTS } from "./embeds";
 
 describe("URLs that must never be framed", () => {
   const hostile = [
@@ -101,5 +101,51 @@ describe("the emitted host set", () => {
     // Pinned so a change here is deliberate; the backend asserts it against the
     // deployed CSP in vercel.json and DEPLOY_VPS.md.
     expect([...EMBED_HOSTS].sort()).toEqual(["player.vimeo.com", "www.youtube.com"]);
+  });
+});
+
+describe("playback flags", () => {
+  const yt = () => resolveEmbed("https://youtu.be/dQw4w9WgXcQ");
+  const vim = () => resolveEmbed("https://vimeo.com/123456789");
+  const params = (embed) => new URL(embed.src).searchParams;
+
+  test("no flags leaves the canonical src untouched", () => {
+    expect(withPlayback(yt(), {}).src).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ");
+    expect(withPlayback(yt()).src).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ");
+  });
+
+  test("autoplay always carries mute — an unmuted autoplay is one a browser refuses", () => {
+    expect(params(withPlayback(yt(), { autoplay: true })).get("mute")).toBe("1");
+    expect(params(withPlayback(vim(), { autoplay: true })).get("muted")).toBe("1");
+  });
+
+  test("youtube loop names the video as its own playlist, or it plays once", () => {
+    const p = params(withPlayback(yt(), { loop: true }));
+    expect(p.get("loop")).toBe("1");
+    expect(p.get("playlist")).toBe("dQw4w9WgXcQ");
+  });
+
+  test("vimeo loop needs no playlist", () => {
+    const p = params(withPlayback(vim(), { loop: true }));
+    expect(p.get("loop")).toBe("1");
+    expect(p.get("playlist")).toBeNull();
+  });
+
+  test("an unlisted vimeo hash survives the added params", () => {
+    const embed = resolveEmbed("https://vimeo.com/123456789/abc123");
+    const p = params(withPlayback(embed, { autoplay: true }));
+    expect(p.get("h")).toBe("abc123");
+    expect(p.get("autoplay")).toBe("1");
+  });
+
+  test("the host is still one this site will frame, flags or not", () => {
+    for (const embed of [yt(), vim()]) {
+      const out = withPlayback(embed, { autoplay: true, loop: true });
+      expect(EMBED_HOSTS).toContain(new URL(out.src).hostname);
+    }
+  });
+
+  test("null in, null out — flags cannot resurrect a refused URL", () => {
+    expect(withPlayback(resolveEmbed("https://evil.example/login"), { autoplay: true })).toBeNull();
   });
 });

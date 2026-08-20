@@ -128,12 +128,23 @@ export function applyTheme(theme) {
 
 /** Default block props factory keyed by block type. */
 export const BLOCK_DEFAULTS = {
+  // `text_case: "as-typed"` and an explicit `heading_size` are deliberate on NEW blocks:
+  // absent means "legacy", and the renderer keeps the old behaviour for blocks that
+  // predate these fields so no published page changes appearance. See Hero in
+  // components/blocks.
   hero: () => ({
-    eyebrow: "SECTION",
-    heading: "New Hero",
+    eyebrow: "Section",
+    heading: "New hero",
     body: "Short paragraph describing the section.",
     image_url: "",
-    cta_label: "Buy Tickets",
+    full_frame: true,
+    overlay: "solid",
+    overlay_color: "#050505",
+    overlay_opacity: 45,
+    heading_size_desktop: 72,
+    heading_size_mobile: 48,
+    text_case: "as-typed",
+    cta_label: "Buy tickets",
     cta_href: "/events",
     cta_style: "accent",
     second_cta_label: "",
@@ -147,10 +158,13 @@ export const BLOCK_DEFAULTS = {
   events_grid: () => ({ heading: "Events", eyebrow: "Programme", limit: 4, layout: "grid-2", card_aspect: "16:10" }),
   artists_grid: () => ({ heading: "Artists", eyebrow: "Roster", limit: 6, layout: "grid-3", card_aspect: "1:1" }),
   marquee: () => ({ items: ["ITEM ONE", "ITEM TWO", "ITEM THREE"] }),
-  cta_banner: () => ({ heading: "Big statement here.", body: "Supporting line.", cta_label: "Do it", cta_href: "#" }),
+  cta_banner: () => ({
+    eyebrow: "CTA", image_url: "", heading: "Big statement here.", body: "Supporting line.",
+    cta_label: "Do it", cta_href: "#", cta_style: "outline", text_case: "as-typed",
+  }),
   contact_form: () => ({ heading: "Say hello", success_message: "Sent." }),
   newsletter: () => ({ heading: "Subscribe", body: "Occasional emails.", cta_label: "Subscribe" }),
-  video: () => ({ url: "", caption: "" }),
+  video: () => ({ url: "", file_url: "", poster_url: "", caption: "", autoplay: false, loop: false, muted: true, controls: true, aspect: "16:9" }),
   custom_html: () => ({ html: "<div class=\"p-8 text-center font-mono-x uppercase\">Custom HTML</div>" }),
   spacer: () => ({ height: "4rem" }),
   split: () => ({ direction: "image-left", image_url: "", eyebrow: "", heading: "", body: "", cta_label: "", cta_href: "", aspect: "1:1" }),
@@ -167,7 +181,7 @@ export const BLOCK_LABELS = {
   cta_banner: "CTA banner",
   contact_form: "Contact form",
   newsletter: "Newsletter",
-  video: "Video embed",
+  video: "Video",
   custom_html: "Custom HTML",
   spacer: "Spacer",
   split: "Split (image + text)",

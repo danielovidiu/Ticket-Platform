@@ -39,6 +39,39 @@ function segments(pathname) {
 }
 
 /**
+ * Playback options onto a src this module itself produced.
+ *
+ * Deliberately separate from `resolveEmbed`: the allowlist property is that the host
+ * comes from `EMBED_HOSTS` and never from the author. Parsing our own output and only
+ * touching its query string keeps that true — nothing an author types can reach the
+ * origin, only the boolean flags below.
+ *
+ * `autoplay` implies muted, because every current browser refuses to start an unmuted
+ * video on its own. Sending autoplay=1 without mute=1 produces a player that silently
+ * does nothing, which reads as a broken block rather than as a browser policy.
+ */
+export function withPlayback(embed, { autoplay = false, loop = false } = {}) {
+  if (!embed) return embed;
+  if (!autoplay && !loop) return embed;
+
+  const url = new URL(embed.src);
+  const id = url.pathname.split("/").filter(Boolean).pop();
+
+  if (embed.provider === "youtube") {
+    if (autoplay) { url.searchParams.set("autoplay", "1"); url.searchParams.set("mute", "1"); }
+    // YouTube ignores loop=1 on a single video unless that video is also named as a
+    // one-item playlist. Without this the video plays once and stops.
+    if (loop) { url.searchParams.set("loop", "1"); url.searchParams.set("playlist", id); }
+    url.searchParams.set("playsinline", "1");
+  } else {
+    if (autoplay) { url.searchParams.set("autoplay", "1"); url.searchParams.set("muted", "1"); }
+    if (loop) url.searchParams.set("loop", "1");
+  }
+
+  return { ...embed, src: url.toString() };
+}
+
+/**
  * Resolve an author-supplied URL to a canonical embed source.
  * Returns `{ src, provider }`, or `null` when it is not an embed this site will frame.
  */

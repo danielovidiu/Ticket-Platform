@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import DOMPurify from "dompurify";
-import { resolveEmbed } from "../../lib/embeds";
+import { resolveEmbed, withPlayback } from "../../lib/embeds";
 import { http } from "../../api";
 import { toast } from "sonner";
-import { renderRich, renderInline } from "../../lib/richText";
+import { renderRich } from "../../lib/richText";
 import { mediaUrl } from "../../lib/media";
 import { Lightbox } from "../ui/lightbox";
 import { Camera } from "lucide-react";
@@ -30,28 +30,144 @@ function Container({ children, className = "" }) {
 
 // ---------------- Blocks ----------------
 
+/**
+ * Hero heading sizes.
+ *
+ * These are FIXED steps, not `vw`. The heading used to be `text-[10vw] md:text-[7vw]`,
+ * which ties type size to the browser window and makes it unstable by construction: the
+ * same heading is a different size in the editor than on the site, and in the CMS
+ * preview it is sized from the whole window while being drawn into a pane half that
+ * wide — measured at 71px inside a 501px pane, and the same 71px inside the 418px
+ * "mobile" preview, where a real phone would render 42px.
+ *
+ * A step ladder is stable, previews honestly, and is the thing the editor asked for:
+ * typography that only changes when someone changes it.
+ */
+/**
+ * Hero heading size, in plain pixels, one value per breakpoint.
+ *
+ * Not `vw`: that tied type size to the browser window, so the same heading was a
+ * different size in the editor than on the site — measured at 71px inside a 501px
+ * preview pane, and the same 71px inside the 418px "mobile" preview where a phone
+ * renders 42px. Not a four-step ladder either: four steps is a choice between four
+ * headings, and a hero heading is the one piece of type on a page that is worth setting
+ * exactly.
+ *
+ * The two values are separate because they have to be. A 96px heading is right on a
+ * laptop and unreadable on a 375px phone, and there is no single number that is both.
+ */
+export const HERO_SIZE_LIMITS = {
+  mobile: { min: 16, max: 120, fallback: 48 },
+  desktop: { min: 16, max: 240, fallback: 72 },
+};
+
+/** The named steps this replaced, in the pixel sizes those Tailwind classes emitted.
+ * Blocks saved with one keep rendering at exactly the size they were published at. */
+const LEGACY_STEPS = {
+  s: { mobile: 30, desktop: 36 },
+  m: { mobile: 36, desktop: 60 },
+  l: { mobile: 48, desktop: 72 },
+  xl: { mobile: 60, desktop: 96 },
+};
+
+const clampPx = (value, { min, max }) => Math.min(max, Math.max(min, Math.round(Number(value))));
+
+/**
+ * The size a hero heading actually renders at, from whichever of the three shapes the
+ * block was saved in: explicit pixels, a legacy named step, or nothing at all.
+ */
+export function heroHeadingSize(props) {
+  const legacy = LEGACY_STEPS[props.heading_size] || LEGACY_STEPS.l;
+  const pick = (key) => {
+    const raw = props[`heading_size_${key}`];
+    if (raw === undefined || raw === null || raw === "" || Number.isNaN(Number(raw))) return legacy[key];
+    return clampPx(raw, HERO_SIZE_LIMITS[key]);
+  };
+  return { mobile: pick("mobile"), desktop: pick("desktop") };
+}
+
+/**
+ * Blocks authored before `text_case` existed rendered their heading through CSS
+ * `uppercase`, so honouring the author's casing by default would silently restyle every
+ * published page. Absent therefore means "legacy, keep shouting"; an explicit value
+ * means the editor has chosen, and new blocks are created with "as-typed".
+ */
+const casing = (props) => (props.text_case === undefined ? "uppercase" : props.text_case === "uppercase" ? "uppercase" : "normal-case");
+
+/**
+ * How the hero darkens its image. Three named modes rather than a boolean, because the
+ * treatment that shipped first — a theme-wide opacity plus a bottom gradient — is not
+ * expressible as "a colour at an opacity", and dropping it would restyle every hero
+ * already published. Absent means that original mode.
+ *
+ * A boolean was tried and was worse than useless: the panel showed "Overlay: on" from a
+ * fallback while the prop stayed absent, so the colour and opacity controls sat there
+ * looking editable and changed nothing.
+ */
+const overlayMode = (props) => (props.overlay === undefined ? "gradient" : props.overlay === true ? "solid" : props.overlay || "none");
+
 function Hero({ props }) {
   const h = props.height === "short" ? "min-h-[50vh]" : props.height === "medium" ? "min-h-[70vh]" : "min-h-[85vh]";
   const align = props.align === "center" ? "text-center items-center" : props.align === "right" ? "text-right items-end" : "text-left items-start";
-  return (
-    <section className={`relative overflow-hidden ${h} flex flex-col justify-end`}>
-      {props.image_url && (
-        <div className="absolute inset-0">
-          <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover opacity-[var(--hero-image-opacity)]" />
+  const size = heroHeadingSize(props);
+  const upper = casing(props);
+  // Absent means legacy, where the hero was always edge to edge.
+  const fullFrame = props.full_frame !== false;
+
+  const media = props.image_url && (
+    <div className="absolute inset-0">
+      <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" />
+      {overlayMode(props) === "gradient" ? (
+        // The original treatment: a theme-wide image opacity plus a bottom gradient,
+        // neither of which an editor could see or change. It stays as a NAMED option
+        // rather than as the behaviour of an absent field, so blocks that predate the
+        // overlay controls look identical AND their panel says what they are doing.
+        <div data-testid="hero-overlay" data-mode="gradient">
+          <div className="absolute inset-0 bg-[color:var(--bg,#050505)] opacity-[calc(1-var(--hero-image-opacity))]" />
           <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[color:var(--bg,#050505)]" />
         </div>
-      )}
-      <Container className="relative pb-16 md:pb-24 pt-24">
-        <div className={`flex flex-col ${align}`}>
-          {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-3 mb-6">{props.eyebrow}</div>}
-          {props.heading && <h1 className="font-display text-[10vw] md:text-[7vw] leading-[0.85] uppercase tracking-tighter font-black max-w-6xl">{props.heading}</h1>}
-          {props.body && <p className="mt-8 max-w-xl text-ink-2 leading-relaxed text-lg">{renderInline(props.body)}</p>}
-          <div className="mt-8 flex flex-wrap gap-3">
-            {props.cta_label && <Link to={props.cta_href || "#"} className={props.cta_style === "accent" ? "btn-accent" : "btn-primary"}>{props.cta_label}</Link>}
-            {props.second_cta_label && <Link to={props.second_cta_href || "#"} className="btn-primary">{props.second_cta_label}</Link>}
-          </div>
+      ) : overlayMode(props) === "solid" ? (
+        <div className="absolute inset-0"
+             style={{
+               backgroundColor: props.overlay_color || "#050505",
+               opacity: Math.min(100, Math.max(0, Number(props.overlay_opacity ?? 45))) / 100,
+             }}
+             data-testid="hero-overlay" data-mode="solid" />
+      ) : null}
+    </div>
+  );
+
+  const body = (
+    <Container className="relative pb-16 md:pb-24 pt-24">
+      <div className={`flex flex-col ${align}`}>
+        {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-3 mb-6`}>{props.eyebrow}</div>}
+        {props.heading && (
+          <h1 className={`font-display hero-heading ${upper} tracking-tighter font-black max-w-6xl whitespace-pre-wrap`}
+              style={{ "--hero-heading-mobile": `${size.mobile}px`, "--hero-heading-desktop": `${size.desktop}px` }}
+              data-testid="hero-heading">
+            {props.heading}
+          </h1>
+        )}
+        {props.body && <div className="mt-8 max-w-xl">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed text-lg" })}</div>}
+        <div className="mt-8 flex flex-wrap gap-3">
+          {props.cta_label && <Link to={props.cta_href || "#"} className={props.cta_style === "accent" ? "btn-accent" : "btn-primary"}>{props.cta_label}</Link>}
+          {props.second_cta_label && <Link to={props.second_cta_href || "#"} className="btn-primary">{props.second_cta_label}</Link>}
         </div>
-      </Container>
+      </div>
+    </Container>
+  );
+
+  // Full frame spans the viewport, as the hero always has. Turned off, the whole block —
+  // image included — is held inside the same 1400px frame the Image block's "Full width"
+  // toggles against, so the two controls mean the same thing in both places.
+  if (fullFrame) {
+    return <section className={`relative overflow-hidden ${h} flex flex-col justify-end`} data-testid="hero">{media}{body}</section>;
+  }
+  return (
+    <section className="py-10" data-testid="hero">
+      <div className={`max-w-[1400px] mx-auto relative overflow-hidden ${h} flex flex-col justify-end border border-ink/10`}>
+        {media}{body}
+      </div>
     </section>
   );
 }
@@ -116,7 +232,9 @@ function EventsGrid({ props }) {
       <div className={`grid grid-cols-1 ${cols} gap-6 items-stretch`}>
         {events.map((e) => {
           const hasAlbum = e.gallery && e.gallery.length > 0;
-          const cover = hasAlbum ? e.gallery[0] : null;
+          // The first album's chosen cover, not just the first photo the event owns —
+          // an album carries an explicit cover now, and this card is a tile for it.
+          const cover = hasAlbum ? (e.albums?.[0]?.cover || e.gallery[0]) : null;
           return (
             <div key={e.event_id} className="group flex flex-col h-full border border-ink/10 bg-surface hover:border-ink transition-colors">
               {hasAlbum ? (
@@ -202,15 +320,34 @@ function Marquee({ props }) {
   );
 }
 
+/** Every part of this is authored now. The left column used to be the literal string
+ * "CTA" in the markup, and there was no image at all — so the one block whose whole job
+ * is to convert was the least configurable one in the CMS. */
 function CTABanner({ props }) {
+  const upper = casing(props);
   return (
     <section className="py-24"><Container>
       <div className="grid md:grid-cols-2 gap-10 items-start">
-        <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">CTA</div>
+        {props.image_url ? (
+          <img src={mediaUrl(props.image_url)} alt={props.heading || ""}
+               className="w-full object-cover border border-ink/10" data-testid="cta-image" />
+        ) : (
+          <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4`}>{props.eyebrow ?? "CTA"}</div>
+        )}
         <div>
-          {props.heading && <p className="font-display text-3xl md:text-5xl uppercase tracking-tighter leading-tight">{props.heading}</p>}
-          {props.body && <p className="mt-4 text-ink-3 max-w-lg">{renderInline(props.body)}</p>}
-          {props.cta_label && <Link to={props.cta_href || "#"} className="mt-8 inline-block btn-primary">{props.cta_label}</Link>}
+          {props.image_url && props.eyebrow && (
+            <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4 mb-4`}>{props.eyebrow}</div>
+          )}
+          {props.heading && (
+            <p className={`font-display text-3xl md:text-5xl ${upper} tracking-tighter leading-tight whitespace-pre-wrap`}
+               data-testid="cta-heading">{props.heading}</p>
+          )}
+          {props.body && <div className="mt-4 max-w-lg">{renderRich(props.body, { paraClassName: "text-ink-3" })}</div>}
+          {props.cta_label && (
+            <Link to={props.cta_href || "#"}
+                  className={`mt-8 inline-block ${props.cta_style === "accent" ? "btn-accent" : "btn-primary"}`}
+                  data-testid="cta-button">{props.cta_label}</Link>
+          )}
         </div>
       </div>
     </Container></section>
@@ -258,7 +395,9 @@ function Newsletter({ props }) {
   return (
     <section className="py-16 hairline"><Container className="max-w-[900px]">
       {props.heading && <h2 className="font-display text-3xl md:text-4xl uppercase font-bold tracking-tighter">{props.heading}</h2>}
-      {props.body && <p className="text-ink-3 mt-3">{renderInline(props.body)}</p>}
+      {/* Rich text, like every other multi-line body field — this one rendered inline,
+          so an author's line breaks were dropped in this block and kept in the next. */}
+      {props.body && <div className="mt-3">{renderRich(props.body, { paraClassName: "text-ink-3" })}</div>}
       <form onSubmit={submit} className="mt-6 flex gap-3 flex-wrap">
         <input required type="email" placeholder="you@domain.com" value={email} onChange={(e) => setEmail(e.target.value)} className="input-x flex-1 min-w-[240px]" data-testid="newsletter-email" />
         <button disabled={busy} className="btn-accent" data-testid="newsletter-submit">{busy ? "…" : (props.cta_label || "Subscribe")}</button>
@@ -268,13 +407,50 @@ function Newsletter({ props }) {
 }
 
 function VideoEmbed({ props, preview }) {
+  // Browsers refuse to start an unmuted video on their own, so autoplay forces muted
+  // rather than offering a combination that would silently never play.
+  const autoplay = !!props.autoplay;
+  const loop = !!props.loop;
+  const muted = autoplay || !!props.muted;
+  const controls = props.controls !== false;
+  const aspect = aspectClass(props.aspect, "aspect-video");
+  const caption = props.caption
+    ? <div className="mt-2 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-4">{props.caption}</div>
+    : null;
+
+  // An uploaded file wins over a pasted embed URL when both are set: it is the more
+  // specific of the two, and the only one that autoplays without a third-party player's
+  // chrome over it. CSP `media-src` covers 'self' and the blob store, so a file that came
+  // from /admin/uploads plays and an arbitrary pasted host is refused by the browser.
+  if (props.file_url) {
+    return (
+      <section className="py-10"><Container>
+        <div className={`${aspect} border border-ink/10 bg-scrim overflow-hidden`}>
+          <video
+            src={mediaUrl(props.file_url)}
+            poster={props.poster_url ? mediaUrl(props.poster_url) : undefined}
+            className="w-full h-full object-cover"
+            autoPlay={autoplay}
+            muted={muted}
+            loop={loop}
+            controls={controls}
+            playsInline
+            preload={autoplay ? "auto" : "metadata"}
+            data-testid="video-file"
+          />
+        </div>
+        {caption}
+      </Container></section>
+    );
+  }
+
   if (!props.url) return null;
 
   // Audit M11. This used to fall through to the author's raw URL for anything that was
   // neither YouTube nor Vimeo, framing any page on the internet inside a real Supersanity
   // URL. `resolveEmbed` returns a canonical src from a fixed host list or nothing at all —
   // there is no passthrough any more.
-  const embed = resolveEmbed(props.url);
+  const embed = withPlayback(resolveEmbed(props.url), { autoplay, loop });
 
   if (!embed) {
     // Silent on the public site: a visitor cannot act on this, and a broken-embed notice
@@ -294,7 +470,7 @@ function VideoEmbed({ props, preview }) {
 
   return (
     <section className="py-10"><Container>
-      <div className="aspect-video border border-ink/10">
+      <div className={`${aspect} border border-ink/10`}>
         {/* `sandbox` is the half a CSP cannot do: frame-src says which origins may be
             framed, this says what the frame may then do. allow-same-origin is required
             or the player cannot reach its own APIs; allow-top-navigation is deliberately
@@ -306,11 +482,11 @@ function VideoEmbed({ props, preview }) {
           data-provider={embed.provider}
           sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
           referrerPolicy="strict-origin-when-cross-origin"
-          allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allow={`accelerometer; ${autoplay ? "autoplay; " : ""}clipboard-write; encrypted-media; gyroscope; picture-in-picture`}
           allowFullScreen
         />
       </div>
-      {props.caption && <div className="mt-2 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-4">{props.caption}</div>}
+      {caption}
     </Container></section>
   );
 }
@@ -344,7 +520,7 @@ function Split({ props }) {
         <div>
           {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
           {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
-          {props.body && <p className="mt-4 text-ink-2 leading-relaxed">{renderInline(props.body)}</p>}
+          {props.body && <div className="mt-4">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed" })}</div>}
           {props.cta_label && <Link to={props.cta_href || "#"} className="mt-6 inline-block btn-primary">{props.cta_label}</Link>}
         </div>
       </div>

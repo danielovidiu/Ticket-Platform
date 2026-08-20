@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { http, API } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
@@ -380,11 +380,11 @@ function EventForm({ form, setForm, onSave, onClose }) {
           ))}
           <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_from: "" }]})} className="btn-primary">+ Add tier</button>
         </div>
-        <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Album</div>
+        <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Albums</div>
         <div className="mt-3">
           {form.event_id
-            ? <EventAlbum eventId={form.event_id} />
-            : <div className="text-xs text-ink-4 font-mono-x uppercase tracking-[0.2em]">Save the event once first to upload its album.</div>}
+            ? <EventAlbums eventId={form.event_id} />
+            : <div className="text-xs text-ink-4 font-mono-x uppercase tracking-[0.2em]">Save the event once first, then link or create its albums.</div>}
         </div>
         </div>
       </div>
@@ -392,10 +392,99 @@ function EventForm({ form, setForm, onSave, onClose }) {
   );
 }
 
-// The event form and the Gallery tab now drive the same album manager, so
-// ordering, cover choice and multi-upload behave identically in both places.
-function EventAlbum({ eventId }) {
-  return <AlbumManager eventId={eventId} emptyHint="No photos or videos in this event album yet." />;
+/**
+ * The albums attached to one event — several are allowed — with the same manager the
+ * Gallery tab uses, so ordering, cover choice and multi-upload behave identically in
+ * both places.
+ *
+ * Linking is the point of this panel. An album is an independent record, so this both
+ * attaches existing unlinked albums and creates new ones already attached; either can be
+ * detached again without touching the media.
+ */
+function EventAlbums({ eventId }) {
+  const [albums, setAlbums] = useState([]);
+  const [openId, setOpenId] = useState(null);
+  const [toLink, setToLink] = useState("");
+
+  const load = useCallback(async () => {
+    const { data } = await http.get("/admin/albums");
+    setAlbums(data);
+    return data;
+  }, []);
+
+  useEffect(() => { load().catch(() => setAlbums([])); }, [load]);
+
+  const linked = albums.filter((a) => a.event_id === eventId);
+  const available = albums.filter((a) => !a.event_id);
+
+  const setLink = async (albumId, event_id) => {
+    try {
+      await http.patch(`/admin/albums/${albumId}`, { event_id });
+      await load();
+      toast.success(event_id ? "Album linked" : "Album unlinked");
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Could not change the link");
+    }
+  };
+
+  return (
+    <div>
+      {linked.length === 0 && (
+        <div className="text-xs text-ink-4 font-mono-x uppercase tracking-[0.2em] mb-3" data-testid="event-albums-empty">
+          No albums linked to this event yet.
+        </div>
+      )}
+
+      {linked.map((a) => (
+        <div key={a.album_id} className="border border-ink/10 mb-3" data-testid={`event-album-row-${a.album_id}`}>
+          <div className="flex flex-wrap items-center gap-3 p-3">
+            <button onClick={() => setOpenId(openId === a.album_id ? null : a.album_id)}
+                    className="font-mono-x text-[11px] uppercase tracking-[0.2em] text-ink hover:underline"
+                    data-testid={`event-album-toggle-${a.album_id}`}>
+              {openId === a.album_id ? "▾" : "▸"} {a.title}
+            </button>
+            <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{a.count} item{a.count === 1 ? "" : "s"}</span>
+            <Link to={`/gallery/${a.slug}`} className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 hover:text-ink">
+              /gallery/{a.slug} ↗
+            </Link>
+            {/* Unlinking leaves the album and its media exactly where they are; it just
+                stops being this event's. */}
+            <button onClick={() => setLink(a.album_id, null)}
+                    className="ml-auto font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 hover:text-ink"
+                    data-testid={`event-album-unlink-${a.album_id}`}>
+              Unlink
+            </button>
+          </div>
+          {openId === a.album_id && (
+            <div className="p-3 pt-0">
+              <AlbumManager key={a.album_id} albumId={a.album_id} emptyHint="No photos or videos in this album yet." />
+            </div>
+          )}
+        </div>
+      ))}
+
+      <div className="border border-ink/10 bg-surface p-3 mt-3">
+        <Field label="Link an existing album">
+          <div className="flex flex-wrap gap-2">
+            <select value={toLink} onChange={(e) => setToLink(e.target.value)}
+                    className="input-x flex-1 min-w-[12rem] !text-xs" data-testid="event-album-link-select">
+              <option value="">{available.length ? "Choose an unlinked album…" : "No unlinked albums"}</option>
+              {available.map((a) => <option key={a.album_id} value={a.album_id}>{a.title} ({a.count})</option>)}
+            </select>
+            <button onClick={() => { setLink(toLink, eventId); setToLink(""); }} disabled={!toLink}
+                    className="btn-primary shrink-0 text-xs disabled:opacity-40" data-testid="event-album-link">
+              Link
+            </button>
+          </div>
+        </Field>
+        <Field label="…or create one for this event" className="mt-3">
+          <NewAlbum eventId={eventId} label="New album title"
+                    onCreated={(a) => { load(); setOpenId(a.album_id); }} />
+        </Field>
+      </div>
+    </div>
+  );
 }
 
 // Two things live under Orders: the purchases (reservations) and the tickets those
@@ -734,34 +823,34 @@ function Users() {
 // rather than accepting something the API then quietly rewrites.
 const slugify = (v) => (v || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-/** Title and slug for the sitewide gallery. The slug is the URL it lives at, so it is
- * shown as one — an editor should be able to see what they are changing. */
-function GallerySettings() {
-  const [settings, setSettings] = useState(null);
+/** Title, slug, intro and event link for one album. The slug is the URL the album lives
+ * at, so it is shown as one — an editor should be able to see what they are changing.
+ *
+ * These fields used to belong to a single sitewide gallery stored as one settings
+ * document, which is why every other album had to borrow its identity from an event. */
+function AlbumDetails({ album, events, onSaved, onDeleted }) {
+  const [draft, setDraft] = useState(album);
   const [busy, setBusy] = useState(false);
   // Left alone once the editor starts typing a slug of their own; until then it tracks
   // the title, which is what people expect from a slug field.
   const [slugTouched, setSlugTouched] = useState(false);
 
-  useEffect(() => {
-    http.get("/admin/gallery/settings").then((r) => setSettings(r.data)).catch(() => setSettings(null));
-  }, []);
+  useEffect(() => { setDraft(album); setSlugTouched(false); }, [album]);
 
-  if (!settings) return null;
-
-  const set = (k, v) => setSettings((s) => ({ ...s, [k]: v }));
+  const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
 
   const save = async () => {
     setBusy(true);
     try {
-      const { data } = await http.patch("/admin/gallery/settings", {
-        title: settings.title,
-        slug: settings.slug,
-        description: settings.description || "",
+      const { data } = await http.patch(`/admin/albums/${album.album_id}`, {
+        title: draft.title,
+        slug: draft.slug,
+        description: draft.description || "",
+        event_id: draft.event_id || null,
       });
-      setSettings(data);
       setSlugTouched(false);
-      toast.success("Gallery details saved");
+      onSaved(data);
+      toast.success("Album saved");
     } catch (e) {
       const d = e.response?.data?.detail;
       toast.error(typeof d === "string" ? d : "Could not save");
@@ -770,81 +859,187 @@ function GallerySettings() {
     }
   };
 
+  const remove = async () => {
+    const n = album.count || 0;
+    const warning = n
+      ? `Delete "${album.title}" and its ${n} item${n === 1 ? "" : "s"}? The files are removed from storage too.`
+      : `Delete "${album.title}"?`;
+    if (!window.confirm(warning)) return;
+    setBusy(true);
+    try {
+      await http.delete(`/admin/albums/${album.album_id}?delete_items=true`);
+      onDeleted(album.album_id);
+      toast.success("Album deleted");
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Could not delete");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <div className="border border-ink/10 bg-surface p-4 mb-4" data-testid="gallery-settings">
+    <div className="border border-ink/10 bg-surface p-4 mb-4" data-testid="album-details">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <Field label="Gallery title">
+        <Field label="Album title">
           <input
-            value={settings.title}
+            value={draft.title}
             onChange={(e) => {
               set("title", e.target.value);
               if (!slugTouched) set("slug", slugify(e.target.value));
             }}
             className="input-x w-full"
-            data-testid="gallery-title"
+            data-testid="album-title"
           />
         </Field>
         <Field label="Slug">
           <input
-            value={settings.slug}
+            value={draft.slug}
             onChange={(e) => { setSlugTouched(true); set("slug", slugify(e.target.value)); }}
             placeholder="live-documentation"
             className="input-x w-full font-mono-x"
-            data-testid="gallery-slug"
+            data-testid="album-slug"
           />
         </Field>
       </div>
       <Field label="Intro (optional)" className="mt-3">
-        <input value={settings.description || ""} onChange={(e) => set("description", e.target.value)}
-               className="input-x w-full" data-testid="gallery-description" />
+        <input value={draft.description || ""} onChange={(e) => set("description", e.target.value)}
+               className="input-x w-full" data-testid="album-description" />
+      </Field>
+      {/* An album needs no event. Linking one makes it show on that event's page as
+          well as keeping its own tile on the Gallery page. */}
+      <Field label="Linked event (optional)" className="mt-3">
+        <select value={draft.event_id || ""} onChange={(e) => set("event_id", e.target.value || null)}
+                className="input-x w-full" data-testid="album-event">
+          <option value="">Not linked to an event</option>
+          {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
+        </select>
       </Field>
       <div className="flex flex-wrap items-center gap-3 mt-3">
-        <button onClick={save} disabled={busy} className="btn-accent disabled:opacity-40" data-testid="gallery-settings-save">
+        <button onClick={save} disabled={busy} className="btn-accent disabled:opacity-40" data-testid="album-save">
           {busy ? "…" : "SAVE DETAILS"}
         </button>
-        <Link to={`/gallery/${settings.slug}`} className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 hover:text-ink break-all">
-          /gallery/{settings.slug} ↗
+        <Link to={`/gallery/${album.slug}`} className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 hover:text-ink break-all">
+          /gallery/{album.slug} ↗
         </Link>
+        <button onClick={remove} disabled={busy} className="ml-auto font-mono-x text-[10px] uppercase tracking-[0.2em] text-danger hover:underline disabled:opacity-40"
+                data-testid="album-delete">
+          Delete album
+        </button>
       </div>
     </div>
   );
 }
 
+/** Create an album. Deliberately asks for nothing but a title: an album exists on its
+ * own, and the event link (if there ever is one) is set afterwards. */
+function NewAlbum({ eventId = null, onCreated, label = "New album" }) {
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const create = async () => {
+    const t = title.trim();
+    if (!t) return;
+    setBusy(true);
+    try {
+      const { data } = await http.post("/admin/albums", { title: t, event_id: eventId });
+      setTitle("");
+      onCreated(data);
+      toast.success(`"${data.title}" created`);
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Could not create the album");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      <input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); create(); } }}
+        placeholder={label}
+        className="input-x flex-1 min-w-[12rem] !text-xs"
+        data-testid="new-album-title"
+      />
+      <button onClick={create} disabled={busy || !title.trim()}
+              className="btn-primary shrink-0 text-xs disabled:opacity-40" data-testid="new-album-create">
+        + Create
+      </button>
+    </div>
+  );
+}
+
+/** The Gallery tab: every album, linked to an event or not, plus the contents of
+ * whichever one is selected. The picker used to list EVENTS — an album could not be
+ * chosen because an album was not a thing that existed on its own. */
 function GalleryAdmin() {
+  const [albums, setAlbums] = useState([]);
   const [events, setEvents] = useState([]);
-  // "" is the sitewide gallery; any other value is an event album.
   const [albumId, setAlbumId] = useState("");
 
-  useEffect(() => {
-    http.get("/admin/events").then((r) => setEvents(r.data)).catch(() => setEvents([]));
+  const loadAlbums = useCallback(async () => {
+    const { data } = await http.get("/admin/albums");
+    setAlbums(data);
+    return data;
   }, []);
 
-  const current = events.find((e) => e.event_id === albumId);
+  useEffect(() => {
+    loadAlbums().then((data) => setAlbumId((id) => id || data[0]?.album_id || "")).catch(() => setAlbums([]));
+    http.get("/admin/events").then((r) => setEvents(r.data)).catch(() => setEvents([]));
+  }, [loadAlbums]);
+
+  const current = albums.find((a) => a.album_id === albumId);
+  const eventTitle = (id) => events.find((e) => e.event_id === id)?.title;
 
   return (
     <div>
       <div className="border border-ink/10 bg-surface p-4 mb-4">
         <Field label="Album">
           <select value={albumId} onChange={(e) => setAlbumId(e.target.value)} className="input-x w-full" data-testid="gallery-album-select">
-            <option value="">Sitewide gallery</option>
-            {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
+            {albums.length === 0 && <option value="">No albums yet</option>}
+            {albums.map((a) => (
+              <option key={a.album_id} value={a.album_id}>
+                {a.title}{a.event_id ? ` · ${eventTitle(a.event_id) || "linked event"}` : ""} ({a.count})
+              </option>
+            ))}
           </select>
         </Field>
         <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-2">
-          {current
-            ? "Shown on this event's page and as its tile on the Gallery page."
-            : "Shown directly in the main Gallery grid, alongside event album tiles."}
+          {current?.event_id
+            ? "Shown on its linked event's page, and as a tile on the Gallery page."
+            : "Shown as a tile on the Gallery page. Link it to an event whenever you want to."}
+        </div>
+        <div className="mt-3 pt-3 hairline-t">
+          <NewAlbum onCreated={(a) => { loadAlbums(); setAlbumId(a.album_id); }} label="New album title" />
         </div>
       </div>
-      {/* Event albums take their title and slug from the event itself, so this only
-          applies to the sitewide one. */}
-      {!current && <GallerySettings />}
+
+      {/* Both this and the manager below remount when the album changes, so neither
+          carries state across albums — and their keys must DIFFER from each other:
+          two siblings sharing one key is unsupported, and React duplicates them. */}
+      {current && (
+        <AlbumDetails
+          key={`album-details-${current.album_id}`}
+          album={current}
+          events={events}
+          onSaved={() => loadAlbums()}
+          onDeleted={(id) => {
+            loadAlbums().then((data) => setAlbumId(data.find((a) => a.album_id !== id)?.album_id || ""));
+          }}
+        />
+      )}
+
       {/* Remount on album change so upload queue and drag state never leak across albums. */}
-      <AlbumManager
-        key={albumId || "sitewide"}
-        eventId={albumId || null}
-        emptyHint={current ? `No media in "${current.title}" yet.` : "No sitewide gallery items yet."}
-      />
+      {current && (
+        <AlbumManager
+          key={`album-items-${current.album_id}`}
+          albumId={current.album_id}
+          emptyHint={`No media in "${current.title}" yet.`}
+        />
+      )}
     </div>
   );
 }

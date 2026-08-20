@@ -33,6 +33,23 @@ POST `/api/cms/seed` — idempotent. Seeds 3 pages (home, mission, contact) + de
 ## Blocks (14)
 hero · rich_text · image · gallery_grid · events_grid · artists_grid · marquee · cta_banner · contact_form · newsletter · video · custom_html · spacer · split
 
+### The video block
+Two sources, one block. Paste a **YouTube or Vimeo URL** (`url`), or **upload a file**
+(`file_url` — MP4/WebM/MOV, through the same `/admin/uploads` endpoint as everything
+else, with a poster frame captured in the browser). When both are set the uploaded file
+wins.
+
+Autoplay is always muted, on both sources, because every current browser refuses to
+start an unmuted video on its own — the "Start muted" toggle is an override that
+autoplay ignores. For a background-style video, turn on autoplay + loop and turn off
+"Show player controls"; note that controls only apply to an uploaded file, since a
+YouTube or Vimeo player draws its own.
+
+Only `www.youtube.com` and `player.vimeo.com` can ever be framed (`EMBED_HOSTS` in
+`frontend/src/lib/embeds.js`, matched against `frame-src` in the deployed CSP). An
+uploaded file is a media load rather than a frame, so it answers to `media-src`, which
+covers the site's own origin and the blob store and nothing else.
+
 ## Data model
 - `cms_pages`: {page_id, slug, title, nav_label, nav_order, in_nav, draft:{blocks}, published:{blocks}, versions:[last 20]}
 - `cms_theme`: singleton doc_id="theme_current" with draft/published/versions

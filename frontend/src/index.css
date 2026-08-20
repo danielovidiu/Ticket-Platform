@@ -319,3 +319,22 @@ body {
    across the middle of the header would defeat the point. */
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Hero heading size.
+ *
+ * Set per block from the CMS as two plain pixel values — one for narrow screens, one
+ * from the `md` breakpoint up — rather than a slice of the viewport. `7vw` tied the
+ * heading to the browser window, which is why it could never be stable: the same
+ * heading was a different size in the editor than on the site.
+ *
+ * Two variables and one media query, because a per-block size cannot be a utility class
+ * (Tailwind can only emit classes it can see at build time) and a media query cannot be
+ * written inline. The fallbacks are the `l` step, which is what a block with no size set
+ * has always rendered at. */
+.hero-heading {
+  font-size: var(--hero-heading-mobile, 48px);
+  line-height: 0.9;
+}
+@media (min-width: 768px) {
+  .hero-heading { font-size: var(--hero-heading-desktop, 72px); }
+}

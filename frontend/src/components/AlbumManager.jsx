@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
 import { captureVideoPoster } from "../lib/videoPoster";
+import { runPipeline, describe, STAGE } from "../lib/uploadPipeline";
 
 // Files are uploaded a few at a time: enough to keep the connection busy without
 // stalling the UI or tripping the server's rate limits on a 60-photo drop.
@@ -16,6 +17,18 @@ const hasPoster = (g) => g.media_type === "video" && g.thumbnail_url && g.thumbn
 /** A pasted URL carries no Content-Type to inspect, so the extension is all there is to
  * go on. Guessing wrong only picks the wrong element to render it in, which the editor
  * can see immediately in the grid. */
+/** What a row in the queue says. A retry is worth showing — an editor watching a file
+ * go round a second time is watching it work, not hang. */
+function stageLabel(q) {
+  if (q.stage === STAGE.DONE) return "✓";
+  if (q.stage === STAGE.FAILED) return q.error || "failed";
+  const suffix = q.attempt > 1 ? ` · try ${q.attempt}` : "";
+  if (q.stage === STAGE.PROCESSING) return `resizing${suffix}`;
+  if (q.stage === STAGE.WAITING) return `retrying${suffix}`;
+  if (q.stage === STAGE.UPLOADING) return `uploading${suffix}`;
+  return "queued";
+}
+
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v)(\?|#|$)/i;
 const guessMediaType = (url) => (VIDEO_EXT.test(url) ? "video" : "image");
 
@@ -95,11 +108,14 @@ function Tile({ item, index, count, isDragging, isDropTarget, onDragStart, onDra
 }
 
 /**
- * Manages one album: the sitewide gallery when `eventId` is null, or a single
- * event's collection. Ordering, cover choice, captions and deletion all persist
- * immediately — there is no separate save step.
+ * Manages the contents of one album. Ordering, cover choice, captions and deletion all
+ * persist immediately — there is no separate save step.
+ *
+ * The album is identified by `albumId` and nothing else. It used to be identified by the
+ * event it hung off (`eventId`, with null meaning the one sitewide gallery), which is
+ * why an album could not exist without an event.
  */
-export default function AlbumManager({ eventId = null, emptyHint }) {
+export default function AlbumManager({ albumId, emptyHint }) {
   const [items, setItems] = useState([]);
   const [queue, setQueue] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -107,20 +123,24 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
   const [dragOver, setDragOver] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
   const [urlDraft, setUrlDraft] = useState("");
+  const [failedIndexes, setFailedIndexes] = useState([]);
   const inputRef = useRef(null);
+  // The Files themselves, kept out of state: a retry has to resend the exact bytes the
+  // editor dropped, and re-rendering does not need them.
+  const filesRef = useRef([]);
 
   const load = useCallback(async () => {
-    const qs = eventId ? `?event_id=${encodeURIComponent(eventId)}` : "";
-    const { data } = await http.get(`/admin/gallery${qs}`);
+    if (!albumId) { setItems([]); return; }
+    const { data } = await http.get(`/admin/gallery?album_id=${encodeURIComponent(albumId)}`);
     setItems(data);
-  }, [eventId]);
+  }, [albumId]);
 
   useEffect(() => { load().catch(() => setItems([])); }, [load]);
 
   const persistOrder = async (ordered) => {
     setItems(ordered); // optimistic — the grid reorders under the cursor immediately
     try {
-      await http.patch("/admin/gallery/reorder", { event_id: eventId, ordered_ids: ordered.map((g) => g.gallery_id) });
+      await http.patch("/admin/gallery/reorder", { album_id: albumId, ordered_ids: ordered.map((g) => g.gallery_id) });
     } catch (e) {
       toast.error(e.response?.data?.detail || "Could not save order");
       load();
@@ -164,61 +184,97 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
     }
   };
 
+  /**
+   * Drop files in, get items out. Two phases, both of which can fail and neither of
+   * which used to say why.
+   *
+   * Phase 1 sends the bytes, a few at a time, through the pipeline: each file is
+   * downscaled on this machine first (see lib/imagePipeline — a full-size phone photo
+   * is larger than the request body the deployed function accepts, which is what made
+   * a 20-photo drop fail on an apparently random handful), and each failure is retried
+   * or reported according to what it actually was.
+   *
+   * Phase 2 creates the rows. Sequential on purpose: the server assigns sort_order as
+   * "last + 1", which parallel inserts would race, so the editor's chosen order is only
+   * preserved by inserting in it.
+   */
   const uploadFiles = async (files) => {
     if (!files.length) return;
     setBusy(true);
-    const entries = files.map((file, i) => ({ key: `${Date.now()}-${i}`, name: file.name, file, status: "pending" }));
-    setQueue(entries.map(({ file, ...rest }) => rest));
-    const mark = (key, status, error) =>
-      setQueue((q) => q.map((e) => (e.key === key ? { ...e, status, error } : e)));
+    filesRef.current = files;
 
-    // Phase 1 — push the bytes up a few at a time. Results are keyed by the
-    // original index so the user's selection order survives the parallelism.
-    const results = new Array(entries.length).fill(null);
-    let cursor = 0;
-    const worker = async () => {
-      while (cursor < entries.length) {
-        const i = cursor++;
-        const entry = entries[i];
-        mark(entry.key, "uploading");
-        try {
-          const fd = new FormData();
-          fd.append("file", entry.file);
-          if (entry.file.type.startsWith("video/")) {
-            const poster = await captureVideoPoster(entry.file);
-            if (poster) fd.append("poster", poster, "poster.jpg");
-          }
-          const { data } = await http.post("/admin/uploads", fd);
-          results[i] = data;
-          mark(entry.key, "done");
-        } catch (err) {
-          mark(entry.key, "error", err.response?.data?.detail || "Upload failed");
-        }
+    setQueue(files.map((file, i) => ({
+      key: `${Date.now()}-${i}`, name: file.name, stage: STAGE.QUEUED, attempt: 1,
+    })));
+    const mark = (i, patch) =>
+      setQueue((q) => q.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
+
+    const send = async (file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (file.type.startsWith("video/")) {
+        const poster = await captureVideoPoster(file);
+        if (poster) fd.append("poster", poster, "poster.jpg");
       }
+      const { data } = await http.post("/admin/uploads", fd);
+      return data;
     };
-    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, entries.length) }, worker));
 
-    // Phase 2 — create the rows strictly in order. Sequential on purpose: the
-    // server assigns sort_order as "last + 1", which parallel inserts would race.
+    const results = await runPipeline(files, {
+      send,
+      concurrency: UPLOAD_CONCURRENCY,
+      onUpdate: (i, stage, meta) => mark(i, {
+        stage,
+        attempt: meta?.attempt ?? 1,
+        error: stage === STAGE.FAILED ? meta?.message : undefined,
+      }),
+    });
+
+    // Phase 2. A row that fails to be created leaves bytes in storage with nothing
+    // pointing at them, so it is worth one retry before it is called a failure.
     let added = 0;
-    for (const data of results) {
-      if (!data) continue;
+    const rowFailures = [];
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (!r?.ok) continue;
+      const { url, thumbnail_url, media_type } = r.data;
       try {
-        await http.post("/admin/gallery", {
-          image_url: data.url, thumbnail_url: data.thumbnail_url, media_type: data.media_type, event_id: eventId,
-        });
+        await http.post("/admin/gallery", { image_url: url, thumbnail_url, media_type, album_id: albumId });
         added++;
-      } catch {
-        /* surfaced by the failure count below */
+      } catch (first) {
+        try {
+          await http.post("/admin/gallery", { image_url: url, thumbnail_url, media_type, album_id: albumId });
+          added++;
+        } catch (err) {
+          rowFailures.push(i);
+          mark(i, { stage: STAGE.FAILED, error: describe(err) });
+        }
       }
     }
 
     await load();
     setBusy(false);
-    const failed = entries.length - added;
+
+    // Which files are still worth another go, so the retry button sends only those.
+    const failed = results
+      .map((r, i) => (r?.ok && !rowFailures.includes(i) ? null : i))
+      .filter((i) => i !== null);
+    setFailedIndexes(failed);
+
     if (added) toast.success(`Added ${added} item${added === 1 ? "" : "s"}`);
-    if (failed > 0) toast.error(`${failed} file${failed === 1 ? "" : "s"} failed`);
-    setTimeout(() => setQueue([]), failed > 0 ? 8000 : 2500);
+    if (failed.length) toast.error(`${failed.length} file${failed.length === 1 ? "" : "s"} failed — retry below`);
+    // Failures stay on screen until they are retried or dismissed; a clean run clears
+    // itself, because a queue of ticks is nothing to read.
+    if (!failed.length) setTimeout(() => setQueue([]), 2500);
+  };
+
+  /** Send only what failed. The files never left the browser, so this costs the editor
+   * nothing but a click — the old flow made them re-pick all twenty. */
+  const retryFailed = () => {
+    const files = failedIndexes.map((i) => filesRef.current[i]).filter(Boolean);
+    if (!files.length) return;
+    setFailedIndexes([]);
+    uploadFiles(files);
   };
 
   const addByUrl = async () => {
@@ -234,7 +290,7 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
         // whose poster couldn't be captured.
         thumbnail_url: url,
         media_type,
-        event_id: eventId,
+        album_id: albumId,
       });
       setUrlDraft("");
       await load();
@@ -270,7 +326,7 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
           {busy ? "Uploading…" : "Drop photos & videos here, or click to choose"}
         </div>
         <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
-          Multiple files supported · JPEG, PNG, WebP, GIF, MP4, WebM, MOV · 25MB each
+          JPEG, PNG, WebP, GIF, MP4, WebM, MOV · photos are resized here before sending
         </div>
         <input ref={inputRef} type="file" accept="image/*,video/*" multiple className="hidden" data-testid="album-upload-input"
                onChange={(e) => { const f = [...e.target.files]; e.target.value = ""; uploadFiles(f); }} />
@@ -292,19 +348,39 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
       </div>
 
       {queue.length > 0 && (
-        <div className="mt-3 border border-ink/10 divide-y divide-ink/10" data-testid="album-upload-queue">
-          {queue.map((q) => (
-            <div key={q.key} className="flex items-center justify-between gap-3 px-3 py-1.5 font-mono-x text-[10px] uppercase tracking-[0.15em]">
-              <span className="truncate text-ink-3">{q.name}</span>
-              <span className={
-                q.status === "done" ? "text-ok shrink-0"
-                : q.status === "error" ? "text-brand shrink-0"
-                : "text-ink-4 shrink-0"
-              }>
-                {q.status === "done" ? "✓" : q.status === "error" ? (q.error || "failed") : q.status}
+        <div className="mt-3 border border-ink/10" data-testid="album-upload-queue">
+          <div className="divide-y divide-ink/10">
+            {queue.map((q) => (
+              <div key={q.key} className="flex items-center justify-between gap-3 px-3 py-1.5 font-mono-x text-[10px] uppercase tracking-[0.15em]">
+                <span className="truncate text-ink-3">{q.name}</span>
+                <span className={
+                  q.stage === STAGE.DONE ? "text-ok shrink-0"
+                  : q.stage === STAGE.FAILED ? "text-brand shrink-0"
+                  : "text-ink-4 shrink-0"
+                } data-testid={`queue-stage-${q.key}`}>
+                  {stageLabel(q)}
+                </span>
+              </div>
+            ))}
+          </div>
+          {failedIndexes.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 hairline-t">
+              <span className="font-mono-x text-[10px] uppercase tracking-[0.15em] text-ink-4">
+                {failedIndexes.length} failed · the files are still here
               </span>
+              <div className="flex gap-2">
+                <button onClick={retryFailed} disabled={busy}
+                        className="btn-primary text-xs shrink-0 disabled:opacity-40" data-testid="album-retry-failed">
+                  Retry {failedIndexes.length}
+                </button>
+                <button onClick={() => { setFailedIndexes([]); setQueue([]); }}
+                        className="font-mono-x text-[10px] uppercase tracking-[0.15em] text-ink-4 hover:text-ink"
+                        data-testid="album-dismiss-failed">
+                  Dismiss
+                </button>
+              </div>
             </div>
-          ))}
+          )}
         </div>
       )}
 

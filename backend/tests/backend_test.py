@@ -447,15 +447,37 @@ def test_admin_discounts_crud(admin_headers):
     assert r3.status_code == 200
 
 
+def test_admin_album_crud(admin_headers):
+    """An album is created on its own, with no event involved — the ordinary case."""
+    r = requests.post(f"{API}/admin/albums", json={"title": "TEST_album"}, headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    album = r.json()
+    assert album["event_id"] is None
+    try:
+        listed = requests.get(f"{API}/admin/albums", headers=admin_headers, timeout=15).json()
+        assert any(a["album_id"] == album["album_id"] for a in listed)
+    finally:
+        r2 = requests.delete(f"{API}/admin/albums/{album['album_id']}", headers=admin_headers, timeout=15)
+        assert r2.status_code == 200
+
+
 def test_admin_gallery_crud(admin_headers):
-    body = {"image_url": "https://example.com/x.jpg", "caption": "TEST_gallery"}
-    r = requests.post(f"{API}/admin/gallery", json=body, headers=admin_headers, timeout=15)
-    assert r.status_code == 200
-    gid = r.json()["gallery_id"]
-    r2 = requests.get(f"{API}/admin/gallery", headers=admin_headers, timeout=15)
-    assert any(x["gallery_id"] == gid for x in r2.json())
-    r3 = requests.delete(f"{API}/admin/gallery/{gid}", headers=admin_headers, timeout=15)
-    assert r3.status_code == 200
+    r = requests.post(f"{API}/admin/albums", json={"title": "TEST_gallery_album"},
+                      headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    album_id = r.json()["album_id"]
+    try:
+        body = {"album_id": album_id, "image_url": "https://example.com/x.jpg", "caption": "TEST_gallery"}
+        r = requests.post(f"{API}/admin/gallery", json=body, headers=admin_headers, timeout=15)
+        assert r.status_code == 200
+        gid = r.json()["gallery_id"]
+        r2 = requests.get(f"{API}/admin/gallery?album_id={album_id}", headers=admin_headers, timeout=15)
+        assert any(x["gallery_id"] == gid for x in r2.json())
+        r3 = requests.delete(f"{API}/admin/gallery/{gid}", headers=admin_headers, timeout=15)
+        assert r3.status_code == 200
+    finally:
+        requests.delete(f"{API}/admin/albums/{album_id}?delete_items=true",
+                        headers=admin_headers, timeout=15)
 
 
 def test_admin_event_create_patch_delete(admin_headers):
