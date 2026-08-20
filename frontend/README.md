@@ -113,9 +113,16 @@ warning Resolution field "form-data@4.0.4" is incompatible with requested versio
 ```
 
 That means a dependent asked for a floor above the pin — read it as "re-check this one",
-not as noise. The inverse is legitimate and also warns: `@eslint/plugin-kit` is pinned to
-0.3.4 while eslint asks for `^0.2.7`, because the pin deliberately upgrades past
-GHSA-xffm-g5w8-qvg7. Tell them apart by which side is higher.
+not as noise. The inverse warns identically and is legitimate: a pin that deliberately
+*upgrades* past what the parent asks for. Tell the two apart by which side is higher.
+
+`@eslint/plugin-kit` was the second kind — pinned to 0.3.4 while eslint 9.23.0 asked for
+`^0.2.7`, because GHSA-xffm-g5w8-qvg7 affects everything below 0.3.4. It was removed on
+2026-08-20 by fixing the cause rather than the symptom: eslint 9.39.5 asks for `^0.4.1`,
+which clears the advisory on its own. Note what would have happened otherwise — one
+upgrade of the parent, and a pin that had been holding the line at 0.3.4 would have been
+holding it *back* from 0.4.1. A legitimate pin of this kind is a bet that the parent will
+not move, so prefer upgrading the parent, and pin only where you cannot.
 
 To check a version rather than a name, ask the advisory API directly — it takes package
 names to version lists and returns only what those exact versions are exposed to:
