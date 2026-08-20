@@ -129,6 +129,18 @@ curl -s -X POST https://registry.npmjs.org/-/npm/v1/security/advisories/bulk \
 An empty `{}` is the clean answer. Every other pin in the block returned `{}` on
 2026-08-20.
 
-Do not delete a pin because its name looks obsolete — `rollup` reads like Vite-era dead
-weight but is pulled in by `react-qr-reader`, and dropping it would un-patch it. Re-run
-the check above instead, and update the date here.
+Do not delete a pin because its name looks obsolete. `flatted` reads like nothing this
+app uses and arrives via `flat-cache`, under eslint; `follow-redirects` is axios's.
+Dropping either on the strength of its name would un-patch it. Re-run the checks above
+instead, and update the date here.
+
+The `rollup` pin *was* the example in this paragraph, on exactly that reasoning — it
+looked like Vite-era dead weight and was really pulled in by `react-qr-reader`. It was
+removed on 2026-08-20 when `react-qr-reader` itself went (unused: the scanner reads QR
+codes through `jsqr`, loaded dynamically in `src/hooks/useScanner.js`). That is the only
+safe reason to drop a pin — the thing it protected is no longer installed — and the way
+to establish it is to find what requires the package, not to judge the name:
+
+```bash
+grep -B40 '^\s\+rollup ' yarn.lock | grep -E '^\S.*:$' | tail -1
+```
