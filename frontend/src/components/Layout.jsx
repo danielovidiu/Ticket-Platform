@@ -6,14 +6,22 @@ import { Menu, X, ShoppingBag, ChevronDown, User } from "lucide-react";
 import { useCart } from "../lib/cart";
 import { loadNav, onNavChanged, readCachedNav } from "../lib/nav";
 
-/** Nav shown before /cms/nav answers.
+/** Nav of last resort: shown only if /cms/nav cannot be reached at all.
  *
- * The bar is entirely CMS-ordered now, so the real one arrives a request late. Rendering
- * nothing until then made the header visibly reflow on every page load — the same fault
- * as the login jump, just triggered by latency instead of auth. These are the built-in
- * sections in their default order; the CMS list replaces them wholesale on arrival.
+ * This used to be the FIRST thing rendered on every page load, with the CMS list
+ * replacing it on arrival. That is what made the menu look like it loaded in two stages —
+ * these five appeared immediately and the authored pages arrived a request later. They
+ * were never faster; they were the placeholder.
+ *
+ * The built-in sections are CMS rows themselves (`kind: "core"` — see CORE_NAV_ITEMS in
+ * cms_routes.py), editable for label, order and visibility like any other page. So the
+ * server's list is the ONLY correct answer, and rendering a hardcoded guess before it
+ * arrives can only ever be wrong-then-corrected.
+ *
+ * It survives as a fallback because a site whose nav request fails should still be
+ * navigable — but it is a failure path now, not the opening state.
  */
-const FALLBACK_NAV = [
+const OFFLINE_NAV = [
   { route: "/events", label: "Events" },
   { route: "/shop", label: "Shop" },
   { route: "/artists", label: "Artists" },
@@ -123,11 +131,18 @@ const AccountMenu = ({ user, logout }) => {
   );
 };
 
-const Header = ({ cmsNav }) => {
+const Header = ({ cmsNav, navFailed }) => {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
-  // Order, labels and hrefs all come from the CMS now — see cms_routes.get_public_nav.
-  const nav = cmsNav.length ? cmsNav : FALLBACK_NAV;
+  // Order, labels and hrefs all come from the CMS — see cms_routes.get_public_nav.
+  //
+  // Empty until the answer is known, rather than showing the built-ins and adding the
+  // rest a moment later: the whole menu appears at once, in one arrangement, or not yet.
+  // Safe to render nothing here because the row is `justify-between` with both outer
+  // groups `shrink-0` — the logo and the account controls are pinned to the edges, and
+  // the nav sits in the space between them, so an empty nav moves nothing and the row's
+  // height comes from the logo either way.
+  const nav = cmsNav.length ? cmsNav : navFailed ? OFFLINE_NAV : [];
   return (
     <header className="sticky top-0 z-40 bg-page hairline-b">
       {/* One row, no wrapping. The account actions live behind a dropdown now, so the
@@ -213,10 +228,13 @@ export default function Layout({ children }) {
   // sections and the authored pages appear a request later, which reads as the site
   // loading in two stages.
   const [cmsNav, setCmsNav] = useState(readCachedNav);
+  // Only true once a request has actually failed, which is what lets the header tell
+  // "not yet" apart from "not coming" — and show the offline nav for the second only.
+  const [navFailed, setNavFailed] = useState(false);
   const refreshNav = useCallback((force) => {
-    // A failure leaves whatever is on screen — the cached nav, or the fallback. Blanking
-    // it would turn a slow network into a header that loses its links.
-    loadNav({ force }).then(setCmsNav).catch(() => {});
+    loadNav({ force })
+      .then((items) => { setCmsNav(items); setNavFailed(false); })
+      .catch(() => setNavFailed(true));
   }, []);
   // Confirm on mount (usually a 304 against the request this module already started),
   // then again whenever the CMS says the nav changed. Layout never unmounts during
@@ -231,7 +249,7 @@ export default function Layout({ children }) {
   return (
     <div className="min-h-screen flex flex-col">
       <div className="grain-overlay" />
-      <Header cmsNav={cmsNav} />
+      <Header cmsNav={cmsNav} navFailed={navFailed} />
       <main className="flex-1 min-h-0">{children}</main>
       <Footer />
     </div>
