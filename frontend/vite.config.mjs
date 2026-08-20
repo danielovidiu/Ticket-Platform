@@ -20,6 +20,17 @@ export default defineConfig({
     // session cookie's origin.
     port: 3000,
     strictPort: true,
+
+    // Deployed, vercel.json rewrites /api/* to the backend service, so the document can
+    // link /api/cms/theme.css as a same-origin stylesheet. Dev runs the two on different
+    // ports, so the same path is proxied here — otherwise that <link> would 404 against
+    // Vite and the theme would only arrive via JS, which is the flash this removes.
+    proxy: {
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: false,
+      },
+    },
   },
 
   build: {

@@ -13,6 +13,15 @@
              hints went with it: they opened a TLS connection to Google for every public
              visitor, to speed up an admin-only path. -->
         <title>Supersanity | Artist Collective</title>
+        <!-- The CMS theme, as a render-blocking stylesheet.
+             This is what stops the palette flashing. The theme used to arrive only as
+             JSON, fetched after the app mounted and applied as inline custom properties —
+             two round trips behind the first paint, so every reload showed the defaults
+             from index.css and then snapped to the real colours. A stylesheet in <head>
+             is render-blocking by definition, so the browser has the theme before it
+             paints anything. Served from the backend (/api/* is same-origin in the
+             deployed rewrite, and proxied in dev by vite.config.mjs). -->
+        <link rel="stylesheet" href="/api/cms/theme.css" />
     </head>
     <body>
         <noscript>You need to enable JavaScript to run this app.</noscript>

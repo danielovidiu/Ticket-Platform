@@ -9,8 +9,9 @@ from typing import List, Optional
 import json
 import re
 import uuid
+import hashlib
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 from models_base import ApiModel, LONG_TEXT, MAX_JSON_DOC_BYTES
 
@@ -282,6 +283,154 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         if not t:
             return {"published": _default_theme()}
         return {"published": t.get("published", _default_theme())}
+
+    # ---- The theme as a stylesheet ----
+    #
+    # WHY THIS EXISTS. The theme used to arrive only as JSON, fetched by the app AFTER it
+    # mounted, and applied as inline custom properties. That is two round trips behind the
+    # first paint, so every reload showed the default palette from index.css for a moment
+    # and then snapped to the real one — most visible right after publishing, which is
+    # exactly when someone is looking.
+    #
+    # A stylesheet in <head> is render-blocking by definition: the browser will not paint
+    # until it has it. So the theme now travels with the initial payload and the flash is
+    # gone by construction rather than by being made faster. ThemeLoader still runs for
+    # the live CMS preview and for Google-hosted families; on a public page it now finds
+    # everything already applied and changes nothing.
+
+    def _font_face_css(fonts: list) -> str:
+        """@font-face rules for the uploaded faces. Mirrors fontFaceCss() in lib/fonts.js
+        — the two must agree, or the live CMS preview and the served page disagree about
+        which file a family points at."""
+        hints = {"woff2": "woff2", "woff": "woff", "ttf": "truetype", "otf": "opentype"}
+        out = []
+        for f in fonts or []:
+            family, url = (f.get("family") or "").strip(), (f.get("url") or "").strip()
+            if not family or not url:
+                continue
+            hint = hints.get((f.get("format") or "").lower())
+            src = f'url("{_css_value(url)}")' + (f' format("{hint}")' if hint else "")
+            out.append("\n".join([
+                "@font-face {",
+                f'  font-family: "{_css_value(family)}";',
+                f"  src: {src};",
+                f"  font-weight: {int(f.get('weight') or 400)};",
+                f"  font-style: {'italic' if f.get('style') == 'italic' else 'normal'};",
+                # Show the fallback while the file downloads rather than nothing at all.
+                "  font-display: swap;",
+                "}",
+            ]))
+        return "\n\n".join(out)
+
+    def _hex_channels(value: str):
+        """"#1166ff" -> "17 102 255", which is the shape Tailwind's rgb(var(--x) / a)
+        needs. Mirrors toChannels() in lib/cms.js; anything not a plain hex triple is
+        skipped rather than guessed at."""
+        v = (value or "").strip()
+        if not v.startswith("#"):
+            return None
+        v = v[1:]
+        if len(v) == 3:
+            v = "".join(c * 2 for c in v)
+        if len(v) != 6:
+            return None
+        try:
+            return " ".join(str(int(v[i:i + 2], 16)) for i in (0, 2, 4))
+        except ValueError:
+            return None
+
+    def _css_value(value: str) -> str:
+        """Custom property values land inside a declaration block, so a `}` or a comment
+        opener in one would end the rule early and let an editor's colour field write
+        arbitrary CSS. Colours and lengths need none of those characters."""
+        return re.sub(r"[^A-Za-z0-9#(),.%/_\- ]", "", str(value or ""))[:120]
+
+    def _theme_css(theme: dict, fonts: list) -> str:
+        c = (theme or {}).get("colors") or {}
+        f = (theme or {}).get("fonts") or {}
+        s = (theme or {}).get("spacing") or {}
+        light = (theme or {}).get("mode") == "light"
+
+        decls = []
+
+        def color(name, key, channel=None):
+            raw = c.get(key)
+            if not raw:
+                return
+            decls.append(f"  {name}: {_css_value(raw)};")
+            if channel:
+                ch = _hex_channels(raw)
+                if ch:
+                    decls.append(f"  {channel}: {ch};")
+
+        color("--bg", "bg", "--bg-rgb")
+        color("--surface", "surface")
+        color("--text", "text", "--text-rgb")
+        # --text-muted, not --text-2: index.css derives the -2/-4/-5 ramp from this one.
+        color("--text-muted", "textMuted")
+        color("--accent", "accent", "--accent-rgb")
+        color("--accent-fg", "accentFg")
+        color("--success", "success")
+        color("--border", "border")
+
+        if f.get("display"):
+            decls.append(f'  --font-display: "{_css_value(f["display"])}";')
+        if f.get("body"):
+            decls.append(f'  --font-body: "{_css_value(f["body"])}";')
+        if f.get("mono"):
+            decls.append(f'  --font-mono: "{_css_value(f["mono"])}";')
+        if s.get("sectionY"):
+            decls.append(f"  --section-y: {_css_value(s['sectionY'])};")
+        if s.get("containerX"):
+            decls.append(f"  --container-x: {_css_value(s['containerX'])};")
+        if (theme or {}).get("radius") is not None:
+            decls.append(f"  --radius: {int((theme or {}).get('radius') or 0)}px;")
+        decls.append(
+            "  --btn-radius: 999px;" if (theme or {}).get("button_style") == "pill"
+            else "  --btn-radius: var(--radius);"
+        )
+        # index.css hangs these off `:root[data-theme="light"]`, and an attribute is the
+        # one thing a stylesheet cannot set on its own. Emitting the resolved values
+        # instead means first paint is right without waiting for the JS that sets it.
+        if light:
+            decls.append("  --hero-image-opacity: 0.85;")
+
+        # `:root:root`, not `:root`. index.css declares the same custom properties as
+        # defaults, and the bundler injects that stylesheet AFTER this link — so at equal
+        # specificity the defaults win on source order and this file does nothing.
+        # Doubling the pseudo-class raises specificity to 0,2,0 and settles it whichever
+        # order the two arrive in, which is the only thing that stays true across a dev
+        # server that injects CSS from JS and a build that emits a second <link>.
+        blocks = [":root:root {\n" + "\n".join(decls) + "\n}"]
+        if light:
+            blocks.append(":root:root .grain-overlay { opacity: 0.02; }")
+
+        # The uploaded faces ride along, so `--font-display: "SomeUpload"` resolves at
+        # first paint too. Without this the page renders one frame in the fallback face.
+        face_css = _font_face_css(fonts)
+        if face_css:
+            blocks.append(face_css)
+        return "\n\n".join(blocks) + "\n"
+
+    @api.get("/cms/theme.css")
+    async def get_theme_css(request: Request):
+        """The published theme, as the stylesheet the document links in <head>."""
+        t = await db.cms_theme.find_one({"doc_id": "theme_current"}, {"_id": 0})
+        theme = (t or {}).get("published") or _default_theme()
+        fonts = await _fonts_sorted()
+        css = _theme_css(theme, fonts)
+
+        # Revalidate every load, but pay for the bytes only when it actually changed:
+        # publishing a theme has to take effect on the next reload, and a cached stale
+        # palette would be a worse bug than the flash this replaces.
+        etag = '"' + hashlib.sha256(css.encode()).hexdigest()[:32] + '"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+        return Response(
+            content=css,
+            media_type="text/css",
+            headers={"ETag": etag, "Cache-Control": "no-cache"},
+        )
 
     def _font_public(f):
         return {"font_id": f["font_id"], "family": f["family"], "weight": f["weight"],
