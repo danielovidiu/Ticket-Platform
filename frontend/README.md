@@ -51,6 +51,24 @@ become `""`.
 `DEPLOY_VPS.md` both name that path. Source maps are off, and
 `backend/tests/test_deploy_config.py` fails if that changes.
 
+### Code splitting
+
+Every route is imported statically in `App.jsx` except three: `Admin`, `CMSEditor` and
+`Scan`, which are `React.lazy` over the loaders in `src/pages/backstage.js`. They are
+staff-only and they are large — Admin's chunk alone is 216 KB — so bundling them meant a
+visitor who came to buy a ticket downloaded the CMS editor first. Splitting them took the
+public first load from 782 KB to 496 KB raw, 231 KB to 150 KB gzipped, and took the build
+under Vite's 500 KB chunk warning.
+
+The cost of a split route is one round trip the first time it opens, which staff would
+pay repeatedly — door staff reload `Scan` on venue wifi. `prefetchBackstage(role)` pays
+it up front instead: the header calls it when auth resolves, and it warms only the chunks
+that role's links can reach, while the browser is idle. The role table there mirrors the
+`roles` on `ACCOUNT_LINKS` in `Layout.jsx`; if you add a staff route, add it to both.
+
+`src/pages/backstage.test.js` asserts the part that matters — that a signed-out visitor
+and an ordinary customer fetch none of it.
+
 ## Dependency pins (`resolutions`)
 
 The `resolutions` block in `package.json` forces transitive dependencies to patched

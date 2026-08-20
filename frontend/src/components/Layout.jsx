@@ -5,6 +5,7 @@ import { http } from "../api";
 import { Menu, X, ShoppingBag, ChevronDown, User } from "lucide-react";
 import { useCart } from "../lib/cart";
 import { loadNav, onNavChanged, readCachedNav } from "../lib/nav";
+import { prefetchBackstage } from "../pages/backstage";
 
 /** Nav of last resort: shown only if /cms/nav cannot be reached at all.
  *
@@ -134,6 +135,13 @@ const AccountMenu = ({ user, logout }) => {
 const Header = ({ cmsNav, navFailed }) => {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  // Warm the chunks behind the staff links this role can see. Admin, CMS and Scan are
+  // split out of the main bundle (see pages/backstage.js), which costs one round trip
+  // the first time one is opened — paid here, while the browser is idle, instead of
+  // after the click. Keyed on the role rather than on `user` so it does not re-run when
+  // an unrelated field of the account object changes; the loaders are idempotent anyway,
+  // since a module already imported resolves from the module registry.
+  useEffect(() => { prefetchBackstage(user?.role); }, [user?.role]);
   // Order, labels and hrefs all come from the CMS — see cms_routes.get_public_nav.
   //
   // Empty until the answer is known, rather than showing the built-ins and adding the

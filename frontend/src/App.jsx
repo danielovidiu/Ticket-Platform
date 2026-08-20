@@ -1,4 +1,5 @@
 import "@/App.css";
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "./auth";
@@ -21,9 +22,6 @@ import Cart from "./pages/Cart";
 import ShopCheckout from "./pages/ShopCheckout";
 import ShopSuccess from "./pages/ShopSuccess";
 import MyOrders from "./pages/MyOrders";
-import Admin from "./pages/Admin";
-import Scan from "./pages/Scan";
-import CMSEditor from "./pages/CMSEditor";
 import Login from "./pages/Login";
 import CompleteProfile from "./pages/CompleteProfile";
 import VerifyEmail from "./pages/VerifyEmail";
@@ -31,8 +29,26 @@ import ResetPassword from "./pages/ResetPassword";
 import Settings from "./pages/Settings";
 import NewsletterConfirm from "./pages/NewsletterConfirm";
 import NewsletterUnsubscribe from "./pages/NewsletterUnsubscribe";
+/* Admin, CMSEditor and Scan are the only routes not imported at the top of this file.
+   They are staff-only and they are big — together about a quarter of the application
+   source — so importing them here would put the CMS editor in front of every visitor
+   who came to buy a ticket. The loaders they wrap are shared with prefetchBackstage(),
+   which warms exactly these chunks for signed-in staff; see pages/backstage.js. */
+import { loadAdmin, loadCMSEditor, loadScan } from "./pages/backstage";
 import ThemeLoader from "./components/ThemeLoader";
 import CookieConsent from "./components/CookieConsent";
+
+const Admin = lazy(loadAdmin);
+const CMSEditor = lazy(loadCMSEditor);
+const Scan = lazy(loadScan);
+
+/** Shown only while a split chunk is in flight, which for staff is usually never —
+ * prefetchBackstage() has normally already fetched it. Deliberately the same line the
+ * three pages show while their own auth call resolves, so a slow load reads as one wait
+ * rather than a flicker between two different spinners. */
+const RouteFallback = () => (
+  <div className="p-16 text-center font-mono-x text-ink-4">Loading…</div>
+);
 
 // Pages a signed-in user with an unfinished profile may still reach. The completion
 // form itself obviously, the auth flows (so signing out or verifying still works), and
@@ -57,6 +73,7 @@ function AppRouter() {
   return (
     <Layout>
       <ProfileGate>
+      <Suspense fallback={<RouteFallback />}>
       <Routes>
         {/* Which page this is, is a CMS setting — not the slug "home". */}
         <Route path="/" element={<DynamicPage home />} />
@@ -106,6 +123,7 @@ function AppRouter() {
         <Route path="/newsletter/confirm" element={<NewsletterConfirm />} />
         <Route path="/newsletter/unsubscribe" element={<NewsletterUnsubscribe />} />
       </Routes>
+      </Suspense>
       </ProfileGate>
     </Layout>
   );
