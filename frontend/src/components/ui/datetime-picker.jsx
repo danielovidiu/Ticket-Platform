@@ -64,7 +64,10 @@ export function DateTimePicker({ value, onChange, placeholder = "Pick date & tim
              data-testid="datetime-readout">
           {date ? format(date, "EEE d MMM yyyy · HH:mm") : "No date set"}
         </div>
-        <Calendar mode="single" selected={date} onSelect={setDatePart} initialFocus />
+        {/* defaultMonth, or the calendar opens on the current month even when the field
+            already holds a date — someone checking a sale window set for December was
+            shown August and had to page back to see what they came to look at. */}
+        <Calendar mode="single" selected={date} defaultMonth={date} onSelect={setDatePart} autoFocus />
         <div className="p-3 border-t border-ink/10 flex items-center gap-2">
           <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 shrink-0">Time</span>
           <input type="time" value={date ? format(date, "HH:mm") : ""} data-testid="datetime-time"
