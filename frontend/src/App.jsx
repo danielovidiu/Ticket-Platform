@@ -14,6 +14,7 @@ import Artists from "./pages/Artists";
 import ArtistDetail from "./pages/ArtistDetail";
 import Archive from "./pages/Archive";
 import Gallery from "./pages/Gallery";
+import AlbumPage from "./pages/AlbumPage";
 import Shop from "./pages/Shop";
 import ProductDetail from "./pages/ProductDetail";
 import Cart from "./pages/Cart";
@@ -83,9 +84,9 @@ function AppRouter() {
         <Route path="/artists/:slug" element={<ArtistDetail />} />
         <Route path="/archive" element={<Archive />} />
         <Route path="/gallery" element={<Gallery />} />
-        {/* The sitewide gallery's own slug. Gallery redirects to the canonical one when
-            the slug in the URL isn't the configured one. */}
-        <Route path="/gallery/:slug" element={<Gallery />} />
+        {/* One album per slug. This used to be the single sitewide gallery's own
+            address, which redirected any slug but its configured one. */}
+        <Route path="/gallery/:slug" element={<AlbumPage />} />
         {/* Webshop. /shop/checkout and /shop/success are declared before /shop/:slug so
             they aren't swallowed by the product route. */}
         <Route path="/shop" element={<Shop />} />

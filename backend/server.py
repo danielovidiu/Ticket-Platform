@@ -1970,16 +1970,18 @@ async def list_events(upcoming: bool = True):
             {"ends_at": {"$exists": False}, "starts_at": {"$lt": now_iso}},
         ]
     items = await db.events.find(query, {"_id": 0}).sort("starts_at", 1 if upcoming else -1).to_list(200)
-    # Batch-fetch albums for every listed event in one query instead of N+1,
-    # so cards can show a cover photo without a per-event round trip.
-    event_ids = [e["event_id"] for e in items]
-    gallery_items = await db.gallery.find({"event_id": {"$in": event_ids}}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(2000)
-    gallery_by_event = {}
-    for g in gallery_items:
-        gallery_by_event.setdefault(g["event_id"], []).append(g)
+    # Batch-fetch albums for every listed event at once instead of N+1, so cards can
+    # show a cover photo without a per-event round trip.
+    albums = await _albums_with_items({"event_id": {"$in": [e["event_id"] for e in items]}})
+    albums_by_event = {}
+    for a in albums:
+        albums_by_event.setdefault(a["event_id"], []).append(a)
     for e in items:
         e["total_available"] = sum(max(0, w.get("available", w.get("capacity", 0))) for w in e.get("waves", []))
-        e["gallery"] = gallery_by_event.get(e["event_id"], [])
+        e["albums"] = albums_by_event.get(e["event_id"], [])
+        # An event can hold several albums now, but a card still wants one flat run of
+        # media for its cover and its count, so both shapes are served.
+        e["gallery"] = [g for a in e["albums"] for g in a["items"]]
     return items
 
 
@@ -1995,24 +1997,41 @@ async def get_event(slug: str):
         w["available"] = max(0, w.get("available", w.get("capacity", 0)))
         active_waves.append(w)
     e["waves"] = active_waves
-    e["gallery"] = await db.gallery.find({"event_id": e["event_id"]}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(200)
+    # Albums the event carries, in album order, each with its own title and items —
+    # plus the same flat run of media the event page used to get as `gallery`.
+    e["albums"] = await _albums_with_items({"event_id": e["event_id"]})
+    e["gallery"] = [g for a in e["albums"] for g in a["items"]]
     return e
 
 
 @api.get("/gallery")
 async def gallery():
-    # Sitewide "Documentation" gallery only — event albums (event_id set) live
-    # on their own event page instead.
-    return await db.gallery.find({"event_id": None}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(200)
+    """Flat feed of recent media — what the `gallery_grid` CMS block renders. Albums are
+    how the Gallery page organises itself, not how this endpoint does: a block asking for
+    six photos wants the six most recent ones, whichever album they live in.
+
+    Visibility still follows the album, though. This used to read the sitewide bucket
+    alone, so media attached to a draft event could never surface here; drawing from
+    every album without the same check would put an unpublished event's photos on the
+    homepage.
+    """
+    visible = await db.albums.find(await _public_album_query(), {"_id": 0, "album_id": 1}).to_list(500)
+    return await db.gallery.find(
+        {"album_id": {"$in": [a["album_id"] for a in visible]}}, {"_id": 0}
+    ).sort([("created_at", -1)]).to_list(200)
 
 
-# ----- Sitewide gallery identity (title + slug) -----
+# ----- Albums -----
 #
-# One document, not a collection: there is exactly one sitewide gallery, and its title
-# and slug are what the public page shows and lives at (/gallery/<slug>). Event albums
-# keep taking their title and slug from the event they belong to.
+# An album is a record of its own in `db.albums`, with its own title, slug, description
+# and cover. It MAY name an event, and one event may have several albums — but an album
+# needs no event at all, which is the entire reason the collection exists: a gallery can
+# be created on its own and linked (or unlinked) later, from either side.
+#
+# Gallery items belong to an album via `album_id`. They used to be bucketed by `event_id`
+# directly, with `None` meaning one hard-coded sitewide gallery whose title and slug lived
+# in a `site_settings` singleton; migrate_gallery_albums converts both of those shapes.
 
-GALLERY_SETTINGS_DEFAULT = {"title": "Gallery", "slug": "gallery", "description": ""}
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
@@ -2023,58 +2042,88 @@ def _slugify(value: str) -> str:
     return s.strip("-")
 
 
-async def _gallery_settings() -> dict:
-    """Stored values over defaults, ignoring blanks so a half-written document can't
-    leave the public page with no title or an empty URL."""
-    doc = await db.site_settings.find_one({"_id": "gallery"}, {"_id": 0}) or {}
-    merged = dict(GALLERY_SETTINGS_DEFAULT)
-    for k in merged:
-        v = doc.get(k)
-        if isinstance(v, str) and (v.strip() or k == "description"):
-            merged[k] = v.strip()
-    return merged
+async def _unique_album_slug(base: str, exclude_id: Optional[str] = None) -> str:
+    """`base`, or `base-2`, `base-3`… — an album's slug is the address it lives at, so
+    two albums cannot share one. Renaming an album passes its own id as `exclude_id`,
+    or every save would push the slug one number further along.
+
+    Event albums used to borrow the event's slug, which stopped being available the
+    moment an event could have more than one album.
+    """
+    slug = _slugify(base) or "album"
+    candidate, n = slug, 1
+    while await db.albums.find_one({"slug": candidate, "album_id": {"$ne": exclude_id}}, {"_id": 1}):
+        n += 1
+        candidate = f"{slug}-{n}"
+    return candidate
 
 
-@api.get("/gallery/settings")
-async def gallery_settings():
-    return await _gallery_settings()
-
-
-def _album_cover(items: List[dict]) -> dict:
-    """The explicitly chosen cover, else the first item in the album's order."""
+def _album_cover(items: List[dict]) -> Optional[dict]:
+    """The explicitly chosen cover, else the first item in the album's order, else
+    nothing at all — an album with no media has no tile to show."""
+    if not items:
+        return None
     return next((g for g in items if g.get("is_cover")), items[0])
+
+
+async def _albums_with_items(query: dict) -> List[dict]:
+    """Albums matching `query`, each carrying its items, cover and count, in album order.
+
+    Two queries regardless of how many albums come back, rather than one per album:
+    the Gallery page and the admin both need every album's cover at once.
+    """
+    albums = await db.albums.find(query, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(500)
+    items = await db.gallery.find(
+        {"album_id": {"$in": [a["album_id"] for a in albums]}}, {"_id": 0}
+    ).sort([("sort_order", 1), ("created_at", 1)]).to_list(5000)
+
+    by_album = {}
+    for g in items:
+        by_album.setdefault(g["album_id"], []).append(g)
+    for a in albums:
+        a["items"] = by_album.get(a["album_id"], [])
+        a["count"] = len(a["items"])
+        a["cover"] = _album_cover(a["items"])
+    return albums
+
+
+async def _public_album_query() -> dict:
+    """Which albums a visitor may see: every unlinked one, plus those whose event is
+    published. An album attached to a draft event stays out of sight along with it,
+    which is what event albums did before they were records of their own."""
+    live = await db.events.find({"is_published": True}, {"_id": 0, "event_id": 1}).to_list(1000)
+    return {"$or": [{"event_id": None}, {"event_id": {"$in": [e["event_id"] for e in live]}}]}
 
 
 @api.get("/gallery/clusters")
 async def gallery_clusters():
-    """Powers the public Gallery page: standalone photos plus one cover tile
-    per event album, so 100s of event photos don't flood the main grid."""
-    standalone = await db.gallery.find({"event_id": None}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(200)
+    """Powers the public Gallery page: one cover tile per album — linked to an event or
+    not, they are the same kind of thing now — so hundreds of photos don't flood the
+    grid. Empty albums are left out: a tile with no cover has nothing to show."""
+    albums = await _albums_with_items(await _public_album_query())
+    return {"albums": [a for a in albums if a["count"]]}
 
-    event_items = await db.gallery.find({"event_id": {"$ne": None}}, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(5000)
-    by_event = {}
-    for g in event_items:
-        by_event.setdefault(g["event_id"], []).append(g)
 
-    events = await db.events.find(
-        {"event_id": {"$in": list(by_event.keys())}, "is_published": True},
-        {"_id": 0, "event_id": 1, "title": 1, "slug": 1},
-    ).to_list(500)
+@api.get("/gallery/albums/{slug}")
+async def gallery_album(slug: str):
+    """One album and everything in it — the album's own page at /gallery/<slug>."""
+    album = await db.albums.find_one({"slug": slug}, {"_id": 0})
+    if not album:
+        raise HTTPException(404, "Not found")
 
-    event_albums = []
-    for ev in events:
-        items = by_event.get(ev["event_id"], [])
-        if not items:
-            continue
-        event_albums.append({
-            "event_id": ev["event_id"], "title": ev["title"], "slug": ev["slug"],
-            "cover": _album_cover(items), "count": len(items), "items": items,
-        })
+    event = None
+    if album.get("event_id"):
+        event = await db.events.find_one(
+            {"event_id": album["event_id"], "is_published": True},
+            {"_id": 0, "event_id": 1, "title": 1, "slug": 1},
+        )
+        # Linked to an event that is unpublished or gone: the album is not public either.
+        if not event:
+            raise HTTPException(404, "Not found")
 
-    # Settings ride along so the page renders its heading and canonical URL from one
-    # request instead of flashing a placeholder title while a second one lands.
-    return {"standalone": standalone, "event_albums": event_albums,
-            "settings": await _gallery_settings()}
+    full = (await _albums_with_items({"album_id": album["album_id"]}))[0]
+    full["event"] = event
+    return full
 
 
 class ContactMsg(ApiModel):
@@ -3219,6 +3268,10 @@ async def admin_update_event(event_id: str, body: EventPatchIn, user=Depends(req
 @api.delete("/admin/events/{event_id}")
 async def admin_delete_event(event_id: str, user=Depends(require_admin)):
     await db.events.delete_one({"event_id": event_id})
+    # Its albums outlive it as unlinked galleries rather than pointing at a row that is
+    # no longer there. Deleting an event has never deleted its photos, and an album is
+    # no longer something the event owns.
+    await db.albums.update_many({"event_id": event_id}, {"$set": {"event_id": None}})
     await _audit(user["user_id"], "event_delete", "event", event_id, None)
     return {"ok": True}
 
@@ -3723,19 +3776,164 @@ async def admin_audit(limit: int = 100, skip: int = 0, user=Depends(require_admi
     return items
 
 
+# ----- Albums (admin) -----
+
+
+class AlbumIn(ApiModel):
+    title: str
+    slug: Optional[str] = None
+    description: str = ""
+    event_id: Optional[str] = None
+
+
+class AlbumPatchIn(ApiModel):
+    title: Optional[str] = None
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    event_id: Optional[str] = None
+
+
+class AlbumReorderIn(ApiModel):
+    ordered_ids: List[str]
+
+
+async def _linked_event_id(event_id: Optional[str]) -> Optional[str]:
+    """Validate an album's event link. A blank or absent value is a real answer — an
+    unlinked album — so only a named event that does not exist is an error."""
+    if not event_id:
+        return None
+    if not await db.events.find_one({"event_id": event_id}, {"_id": 1}):
+        raise HTTPException(400, "That event does not exist")
+    return event_id
+
+
+@api.get("/admin/albums")
+async def admin_albums(event_id: Optional[str] = None, user=Depends(require_admin)):
+    """Every album, or with `event_id`, only the ones linked to that event. Items ride
+    along so the admin can render covers and counts from one request."""
+    return await _albums_with_items({} if event_id is None else {"event_id": event_id})
+
+
+@api.post("/admin/albums")
+async def admin_create_album(body: AlbumIn, user=Depends(require_admin)):
+    """Create an album. `event_id` is optional and usually absent: an album is made on
+    its own, and linked to an event afterwards (from here or from the event form)."""
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "The album needs a title")
+
+    # An editor either types a slug or leaves it blank and means "derive it from the
+    # title"; either way it is made unique before it becomes an address.
+    slug = await _unique_album_slug(body.slug or title)
+    if not _SLUG_RE.match(slug):
+        raise HTTPException(400, "The slug must use letters, numbers and hyphens, e.g. live-documentation")
+
+    last = await db.albums.find({}, {"_id": 0, "sort_order": 1}).sort("sort_order", -1).limit(1).to_list(1)
+    album = {
+        "album_id": new_id("alb"),
+        "title": title,
+        "slug": slug,
+        "description": (body.description or "").strip(),
+        "event_id": await _linked_event_id(body.event_id),
+        "sort_order": (last[0].get("sort_order", -1) + 1) if last else 0,
+        "created_at": now_utc().isoformat(),
+    }
+    await db.albums.insert_one(album)
+    await _audit(user["user_id"], "album_created", "album", album["album_id"],
+                 {"title": title, "event_id": album["event_id"]})
+    return {k: v for k, v in album.items() if k != "_id"}
+
+
+# Declared BEFORE /admin/albums/{album_id} — FastAPI matches in declaration order, and a
+# literal path registered after the parameterised one would be swallowed by it.
+@api.patch("/admin/albums/reorder")
+async def admin_reorder_albums(body: AlbumReorderIn, user=Depends(require_admin)):
+    """Rewrite album sort_order to match ordered_ids — the order tiles appear in on the
+    Gallery page."""
+    known = {a["album_id"] for a in await db.albums.find({}, {"_id": 0, "album_id": 1}).to_list(500)}
+    unknown = [i for i in body.ordered_ids if i not in known]
+    if unknown:
+        raise HTTPException(400, f"{len(unknown)} album(s) do not exist")
+    for i, album_id in enumerate(body.ordered_ids):
+        await db.albums.update_one({"album_id": album_id}, {"$set": {"sort_order": i}})
+    return {"ok": True, "count": len(body.ordered_ids)}
+
+
+@api.patch("/admin/albums/{album_id}")
+async def admin_update_album(album_id: str, body: AlbumPatchIn, user=Depends(require_admin)):
+    album = await db.albums.find_one({"album_id": album_id}, {"_id": 0})
+    if not album:
+        raise HTTPException(404, "Not found")
+
+    updates = {}
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(400, "The album needs a title")
+        updates["title"] = title
+
+    if body.slug is not None:
+        slug = await _unique_album_slug(body.slug or updates.get("title", album["title"]), exclude_id=album_id)
+        if not _SLUG_RE.match(slug):
+            raise HTTPException(400, "The slug must use letters, numbers and hyphens, e.g. live-documentation")
+        updates["slug"] = slug
+
+    if body.description is not None:
+        updates["description"] = body.description.strip()
+
+    # Linking and unlinking are the same request, and `event_id: null` is the unlink —
+    # so an ABSENT key has to mean "leave the link alone", which a plain `is not None`
+    # check cannot tell apart from an explicit null. Pydantic records which keys the
+    # client actually sent, so ask it.
+    if "event_id" in body.model_fields_set:
+        updates["event_id"] = await _linked_event_id(body.event_id)
+
+    if updates:
+        await db.albums.update_one({"album_id": album_id}, {"$set": updates})
+        await _audit(user["user_id"], "album_updated", "album", album_id, updates)
+    return await db.albums.find_one({"album_id": album_id}, {"_id": 0})
+
+
+@api.delete("/admin/albums/{album_id}")
+async def admin_delete_album(album_id: str, delete_items: bool = False, user=Depends(require_admin)):
+    """Delete an album, and refuse to take media down with it unless asked.
+
+    An album is a name and an ordering — cheap to recreate. The sixty uploads inside it
+    are not, and they are unrecoverable once the blobs are gone, so `?delete_items=true`
+    is the difference between "I meant this album" and "I meant these photos too".
+    """
+    album = await db.albums.find_one({"album_id": album_id}, {"_id": 0})
+    if not album:
+        return {"ok": True}
+
+    items = await db.gallery.find({"album_id": album_id}, {"_id": 0}).to_list(5000)
+    if items and not delete_items:
+        raise HTTPException(400, f"This album still holds {len(items)} item(s). Move or delete them first.")
+
+    for item in items:
+        await _drop_gallery_item(item)
+    await db.albums.delete_one({"album_id": album_id})
+    await _audit(user["user_id"], "album_deleted", "album", album_id,
+                 {"title": album.get("title"), "items": len(items)})
+    return {"ok": True, "deleted_items": len(items)}
+
+
+# ----- Album contents -----
+
+
 @api.get("/admin/gallery")
-async def admin_gallery(event_id: Optional[str] = None, user=Depends(require_admin)):
-    # No event_id -> the sitewide "Documentation" gallery tab; with one -> that event's album.
-    query = {"event_id": event_id if event_id else None}
+async def admin_gallery(album_id: Optional[str] = None, user=Depends(require_admin)):
+    """One album's contents, or every item across every album when no album is named."""
+    query = {} if album_id is None else {"album_id": album_id}
     return await db.gallery.find(query, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(500)
 
 
 class GalleryIn(ApiModel):
+    album_id: str
     image_url: str
     thumbnail_url: str = ""
     caption: str = ""
     media_type: str = "image"
-    event_id: Optional[str] = None
 
 
 def _valid_media_url(url: str) -> bool:
@@ -3752,6 +3950,10 @@ def _valid_media_url(url: str) -> bool:
 @api.post("/admin/gallery")
 async def admin_add_gallery(body: GalleryIn, user=Depends(require_admin)):
     g = body.model_dump()
+    # Every item belongs to an album — there is no unfiled bucket to fall back on, so a
+    # missing or stale album_id is refused rather than silently orphaning the upload.
+    if not await db.albums.find_one({"album_id": g["album_id"]}, {"_id": 1}):
+        raise HTTPException(400, "That album does not exist")
     # Items normally arrive from /admin/uploads, but an editor can also paste the URL of
     # an image that already lives somewhere else, so the value is checked here.
     g["image_url"] = (g.get("image_url") or "").strip()
@@ -3762,8 +3964,8 @@ async def admin_add_gallery(body: GalleryIn, user=Depends(require_admin)):
         raise HTTPException(400, "media_type must be 'image' or 'video'")
     g["gallery_id"] = new_id("gal")
     g["created_at"] = now_utc().isoformat()
-    # New items land at the end of their own bucket.
-    last = await db.gallery.find({"event_id": g["event_id"]}).sort("sort_order", -1).limit(1).to_list(1)
+    # New items land at the end of their own album.
+    last = await db.gallery.find({"album_id": g["album_id"]}).sort("sort_order", -1).limit(1).to_list(1)
     g["sort_order"] = (last[0].get("sort_order", -1) + 1) if last else 0
     g["is_cover"] = False
     await db.gallery.insert_one(g)
@@ -3771,16 +3973,15 @@ async def admin_add_gallery(body: GalleryIn, user=Depends(require_admin)):
 
 
 class GalleryReorderIn(ApiModel):
-    event_id: Optional[str] = None
+    album_id: str
     ordered_ids: List[str]
 
 
 @api.patch("/admin/gallery/reorder")
 async def admin_reorder_gallery(body: GalleryReorderIn, user=Depends(require_admin)):
     """Rewrite sort_order to match ordered_ids. Every id must belong to the named
-    bucket — otherwise a stale client could drag an item out of its own album."""
-    bucket = body.event_id or None
-    owned = await db.gallery.find({"event_id": bucket}, {"_id": 0, "gallery_id": 1}).to_list(5000)
+    album — otherwise a stale client could drag an item out of its own album."""
+    owned = await db.gallery.find({"album_id": body.album_id}, {"_id": 0, "gallery_id": 1}).to_list(5000)
     owned_ids = {g["gallery_id"] for g in owned}
     unknown = [i for i in body.ordered_ids if i not in owned_ids]
     if unknown:
@@ -3791,49 +3992,10 @@ async def admin_reorder_gallery(body: GalleryReorderIn, user=Depends(require_adm
     return {"ok": True, "count": len(body.ordered_ids)}
 
 
-class GallerySettingsIn(ApiModel):
-    title: Optional[str] = None
-    slug: Optional[str] = None
-    description: Optional[str] = None
-
-
-# Declared BEFORE /admin/gallery/{gallery_id} — FastAPI matches in declaration order, and
-# a literal path registered after the parameterised one would be swallowed by it.
-@api.get("/admin/gallery/settings")
-async def admin_gallery_settings(user=Depends(require_admin)):
-    return await _gallery_settings()
-
-
-@api.patch("/admin/gallery/settings")
-async def admin_update_gallery_settings(body: GallerySettingsIn, user=Depends(require_admin)):
-    current = await _gallery_settings()
-    updates = {}
-
-    if body.title is not None:
-        title = body.title.strip()
-        if not title:
-            raise HTTPException(400, "The gallery needs a title")
-        updates["title"] = title
-
-    if body.slug is not None:
-        # Editors type a slug, or leave it blank and mean "derive it from the title".
-        slug = _slugify(body.slug) or _slugify(updates.get("title", current["title"]))
-        if not _SLUG_RE.match(slug or ""):
-            raise HTTPException(400, "The slug must use letters, numbers and hyphens, e.g. live-documentation")
-        updates["slug"] = slug
-
-    if body.description is not None:
-        updates["description"] = body.description.strip()
-
-    if updates:
-        await db.site_settings.update_one({"_id": "gallery"}, {"$set": updates}, upsert=True)
-        await _audit(user["user_id"], "gallery_settings_updated", "gallery", "sitewide", updates)
-    return await _gallery_settings()
-
-
 class GalleryPatchIn(ApiModel):
     caption: Optional[str] = None
     is_cover: Optional[bool] = None
+    album_id: Optional[str] = None
 
 
 @api.patch("/admin/gallery/{gallery_id}")
@@ -3845,14 +4007,51 @@ async def admin_update_gallery(gallery_id: str, body: GalleryPatchIn, user=Depen
     updates = {}
     if body.caption is not None:
         updates["caption"] = body.caption
+
+    if body.album_id is not None and body.album_id != item.get("album_id"):
+        # Moving an item between albums. It lands at the end of the destination and
+        # gives up any cover status, which belonged to the album it is leaving.
+        if not await db.albums.find_one({"album_id": body.album_id}, {"_id": 1}):
+            raise HTTPException(400, "That album does not exist")
+        last = await db.gallery.find({"album_id": body.album_id}).sort("sort_order", -1).limit(1).to_list(1)
+        updates["album_id"] = body.album_id
+        updates["sort_order"] = (last[0].get("sort_order", -1) + 1) if last else 0
+        updates["is_cover"] = False
+        await _promote_next_cover(item)
+
     if body.is_cover is not None:
         if body.is_cover:
-            # Exactly one cover per bucket.
-            await db.gallery.update_many({"event_id": item.get("event_id")}, {"$set": {"is_cover": False}})
+            # Exactly one cover per album.
+            await db.gallery.update_many(
+                {"album_id": updates.get("album_id", item.get("album_id"))}, {"$set": {"is_cover": False}}
+            )
         updates["is_cover"] = body.is_cover
+
     if updates:
         await db.gallery.update_one({"gallery_id": gallery_id}, {"$set": updates})
     return await db.gallery.find_one({"gallery_id": gallery_id}, {"_id": 0})
+
+
+async def _drop_gallery_item(item: dict):
+    """Delete one item's row and its bytes. The thumbnail may be the same URL as the
+    original (videos without a poster), so guard against deleting it twice."""
+    await db.gallery.delete_one({"gallery_id": item["gallery_id"]})
+    await storage.delete(item.get("image_url"))
+    thumb = item.get("thumbnail_url")
+    if thumb and thumb != item.get("image_url"):
+        await storage.delete(thumb)
+
+
+async def _promote_next_cover(item: dict):
+    """Hand the cover to the next item in the album, so an album never loses its tile
+    because the photo that happened to be the cover was deleted or moved away."""
+    if not item.get("is_cover"):
+        return
+    nxt = await db.gallery.find(
+        {"album_id": item.get("album_id"), "gallery_id": {"$ne": item["gallery_id"]}}
+    ).sort([("sort_order", 1)]).limit(1).to_list(1)
+    if nxt:
+        await db.gallery.update_one({"gallery_id": nxt[0]["gallery_id"]}, {"$set": {"is_cover": True}})
 
 
 @api.delete("/admin/gallery/{gallery_id}")
@@ -3860,18 +4059,8 @@ async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
     item = await db.gallery.find_one({"gallery_id": gallery_id}, {"_id": 0})
     if not item:
         return {"ok": True}
-    await db.gallery.delete_one({"gallery_id": gallery_id})
-    # Drop the bytes too, or uploads accumulate forever. The thumbnail may be the
-    # same URL as the original (videos without a poster), so guard against that.
-    await storage.delete(item.get("image_url"))
-    thumb = item.get("thumbnail_url")
-    if thumb and thumb != item.get("image_url"):
-        await storage.delete(thumb)
-    # Promote a new cover if this was it, so the album never loses its cover.
-    if item.get("is_cover"):
-        nxt = await db.gallery.find({"event_id": item.get("event_id")}).sort([("sort_order", 1)]).limit(1).to_list(1)
-        if nxt:
-            await db.gallery.update_one({"gallery_id": nxt[0]["gallery_id"]}, {"$set": {"is_cover": True}})
+    await _drop_gallery_item(item)
+    await _promote_next_cover(item)
     return {"ok": True}
 
 
@@ -3984,12 +4173,21 @@ async def seed_demo(user=Depends(require_admin)):
           "created_at": now_utc().isoformat()}
     await db.projects.insert_many([p1, p2])
 
-    # Gallery
+    # Gallery. Two albums, neither attached to an event — which is the ordinary case now,
+    # and the one the seed should demonstrate. Linking one to an event is a later edit.
+    alb1 = {"album_id": new_id("alb"), "title": "FIELD NOTES", "slug": "field-notes",
+            "description": "Documentation from the room.", "event_id": None,
+            "sort_order": 0, "created_at": now_utc().isoformat()}
+    alb2 = {"album_id": new_id("alb"), "title": "CORPUS · RESIDENCY", "slug": "corpus-residency",
+            "description": "Stills from the summer residency.", "event_id": None,
+            "sort_order": 1, "created_at": now_utc().isoformat()}
+    await db.albums.insert_many([alb1, alb2])
+
     await db.gallery.insert_many([
-        {"gallery_id": new_id("gal"), "image_url": "https://images.unsplash.com/photo-1545128485-c400e7702796?crop=entropy&cs=srgb&fm=jpg&q=85", "caption": "Black Room · Night 02", "created_at": now_utc().isoformat()},
-        {"gallery_id": new_id("gal"), "image_url": "https://images.unsplash.com/photo-1687511844598-165c1fc387cc?crop=entropy&cs=srgb&fm=jpg&q=85", "caption": "Crowd · Opening", "created_at": now_utc().isoformat()},
-        {"gallery_id": new_id("gal"), "image_url": "https://images.unsplash.com/photo-1593408995262-1d8933c37afc?crop=entropy&cs=srgb&fm=jpg&q=85", "caption": "Corpus · Residency", "created_at": now_utc().isoformat()},
-        {"gallery_id": new_id("gal"), "image_url": "https://images.unsplash.com/photo-1618601208267-baa5b780b70e?crop=entropy&cs=srgb&fm=jpg&q=85", "caption": "Light installation", "created_at": now_utc().isoformat()},
+        {"gallery_id": new_id("gal"), "album_id": alb1["album_id"], "sort_order": 0, "media_type": "image", "is_cover": True, "image_url": "https://images.unsplash.com/photo-1545128485-c400e7702796?crop=entropy&cs=srgb&fm=jpg&q=85", "caption": "Black Room · Night 02", "created_at": now_utc().isoformat()},
+        {"gallery_id": new_id("gal"), "album_id": alb1["album_id"], "sort_order": 1, "media_type": "image", "is_cover": False, "image_url": "https://images.unsplash.com/photo-1687511844598-165c1fc387cc?crop=entropy&cs=srgb&fm=jpg&q=85", "caption": "Crowd · Opening", "created_at": now_utc().isoformat()},
+        {"gallery_id": new_id("gal"), "album_id": alb2["album_id"], "sort_order": 0, "media_type": "image", "is_cover": True, "image_url": "https://images.unsplash.com/photo-1593408995262-1d8933c37afc?crop=entropy&cs=srgb&fm=jpg&q=85", "caption": "Corpus · Residency", "created_at": now_utc().isoformat()},
+        {"gallery_id": new_id("gal"), "album_id": alb2["album_id"], "sort_order": 1, "media_type": "image", "is_cover": False, "image_url": "https://images.unsplash.com/photo-1618601208267-baa5b780b70e?crop=entropy&cs=srgb&fm=jpg&q=85", "caption": "Light installation", "created_at": now_utc().isoformat()},
     ])
 
     # Event with three waves
@@ -4231,7 +4429,7 @@ async def security_headers(request: Request, call_next):
 # 6: custom_fonts gained its unique (family, weight, style) index — without the bump an
 #    already-initialised database never runs init_indexes again and the upload route's
 #    replace-on-conflict guarantee would rest on nothing.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 async def init_app():
@@ -4326,7 +4524,12 @@ async def init_indexes():
         await db.users.create_index("apple_sub", unique=True, partialFilterExpression={"apple_sub": {"$type": "string"}})
         await db.processed_stripe_events.create_index("event_id", unique=True)
         await db.newsletter_subscriptions.create_index("email", unique=True)
-        await db.gallery.create_index([("event_id", 1), ("sort_order", 1)])
+        await db.gallery.create_index([("album_id", 1), ("sort_order", 1)])
+        # Albums. The slug is the public address of an album page, so uniqueness is
+        # enforced by the database and not only by _unique_album_slug.
+        await db.albums.create_index("album_id", unique=True)
+        await db.albums.create_index("slug", unique=True)
+        await db.albums.create_index([("event_id", 1), ("sort_order", 1)])
         # Webshop. The variant index backs the atomic stock hold, which filters on
         # product_id plus a variant with enough stock on every add-to-cart and checkout.
         await db.products.create_index("product_id", unique=True)
@@ -4349,6 +4552,13 @@ async def init_indexes():
         logger.info("Indexes ensured")
     except Exception:
         logger.exception("init_indexes failed")
+
+    try:
+        # Order matters: ordering is assigned per album, so the albums have to exist and
+        # every item has to know which one it is in before that runs.
+        await migrate_gallery_albums()
+    except Exception:
+        logger.exception("migrate_gallery_albums failed")
 
     try:
         await migrate_gallery_ordering()
@@ -4415,27 +4625,104 @@ async def migrate_session_token_hashes():
         logger.info("Session tokens hashed at rest: %d migrated, %d dropped", migrated, dropped)
 
 
+async def migrate_gallery_albums():
+    """Turn the old `event_id` buckets into real album records.
+
+    Before this, an "album" was not a thing you could create — it was whatever gallery
+    rows happened to share an `event_id`, plus one hard-coded sitewide bucket
+    (`event_id: None`) whose title and slug lived in a `site_settings` singleton. That
+    made "a gallery with no event" unrepresentable, which is exactly what this migration
+    exists to fix.
+
+    Each distinct bucket becomes one row in `db.albums`:
+
+      * an event bucket -> an album titled after the event, still linked to it via
+        `event_id`, so nothing disappears from an event page;
+      * the sitewide bucket -> a single album carrying the old gallery settings' title,
+        slug and description, now linked to nothing.
+
+    Items are then stamped with `album_id` and their old `event_id` is dropped, so the
+    bucket key lives in one place. Rows that already have an `album_id` are skipped
+    outright, which is what makes this safe to re-run on every cold start.
+    """
+    legacy = await db.gallery.find(
+        {"album_id": {"$exists": False}}, {"_id": 0, "gallery_id": 1, "event_id": 1, "created_at": 1}
+    ).sort("created_at", 1).to_list(20000)
+    if not legacy:
+        return
+
+    # Buckets in the order their first item was created, so album ordering follows the
+    # order the albums were actually filled.
+    buckets = []
+    for g in legacy:
+        bucket = g.get("event_id") or None
+        if bucket not in buckets:
+            buckets.append(bucket)
+
+    # The retired singleton. Left in place rather than deleted: it is the only record of
+    # what the sitewide gallery was called, and re-running this must find it again.
+    settings = await db.site_settings.find_one({"_id": "gallery"}, {"_id": 0}) or {}
+
+    last = await db.albums.find({}, {"_id": 0, "sort_order": 1}).sort("sort_order", -1).limit(1).to_list(1)
+    next_order = (last[0].get("sort_order", -1) + 1) if last else 0
+    now_iso = now_utc().isoformat()
+    created = {}
+
+    for bucket in buckets:
+        if bucket:
+            event = await db.events.find_one({"event_id": bucket}, {"_id": 0, "title": 1, "slug": 1})
+            # An event that no longer exists still has its photos; they become an
+            # unlinked album rather than vanishing into a dead reference.
+            title = (event or {}).get("title") or "Untitled album"
+            slug_seed = (event or {}).get("slug") or title
+            event_id, description = (bucket if event else None), ""
+        else:
+            title = (settings.get("title") or "").strip() or "Gallery"
+            slug_seed = (settings.get("slug") or "").strip() or title
+            event_id, description = None, (settings.get("description") or "").strip()
+
+        album = {
+            "album_id": new_id("alb"),
+            "title": title,
+            "slug": await _unique_album_slug(slug_seed),
+            "description": description,
+            "event_id": event_id,
+            "sort_order": next_order,
+            "created_at": now_iso,
+        }
+        next_order += 1
+        await db.albums.insert_one(album)
+        created[bucket] = album["album_id"]
+
+    for g in legacy:
+        await db.gallery.update_one(
+            {"gallery_id": g["gallery_id"]},
+            {"$set": {"album_id": created[g.get("event_id") or None]}, "$unset": {"event_id": ""}},
+        )
+
+    logger.info("Gallery migrated into %d album(s): %d item(s) filed", len(created), len(legacy))
+
+
 async def migrate_gallery_ordering():
     """Backfill the fields the album manager relies on.
 
-    Pre-existing rows predate ordering entirely, and the earliest seeded ones also
-    lack media_type/event_id. Ordering is assigned per bucket (each event album and
-    the sitewide one are independent sequences) following the old created_at order,
-    so existing albums keep exactly the order they already displayed in.
+    Pre-existing rows predate ordering entirely, and the earliest seeded ones also lack
+    media_type. Ordering is assigned per album (each is an independent sequence)
+    following the old created_at order, so existing albums keep exactly the order they
+    already displayed in.
     """
     await db.gallery.update_many({"media_type": {"$exists": False}}, {"$set": {"media_type": "image"}})
-    await db.gallery.update_many({"event_id": {"$exists": False}}, {"$set": {"event_id": None}})
 
-    buckets = await db.gallery.distinct("event_id")
+    albums = await db.gallery.distinct("album_id")
     fixed = 0
-    for bucket in buckets:
+    for album_id in albums:
         items = await db.gallery.find(
-            {"event_id": bucket, "sort_order": {"$exists": False}}, {"_id": 0, "gallery_id": 1}
+            {"album_id": album_id, "sort_order": {"$exists": False}}, {"_id": 0, "gallery_id": 1}
         ).sort("created_at", 1).to_list(5000)
         if not items:
             continue
-        # Append after anything already ordered in this bucket.
-        ordered = await db.gallery.find({"event_id": bucket, "sort_order": {"$exists": True}}).to_list(5000)
+        # Append after anything already ordered in this album.
+        ordered = await db.gallery.find({"album_id": album_id, "sort_order": {"$exists": True}}).to_list(5000)
         base = max((o.get("sort_order", 0) for o in ordered), default=-1) + 1
         for i, g in enumerate(items):
             await db.gallery.update_one({"gallery_id": g["gallery_id"]}, {"$set": {"sort_order": base + i}})

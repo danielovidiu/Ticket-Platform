@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
 import { useAuth, startLogin } from "../auth";
 import { toast } from "sonner";
@@ -119,7 +119,9 @@ export default function EventDetail() {
   const [code, setCode] = useState("");
   const [special, setSpecial] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [lbIndex, setLbIndex] = useState(null);
+  // Which album is open in the lightbox and at which item — an event can carry several
+  // albums now, so an index on its own no longer says what it is an index into.
+  const [lb, setLb] = useState(null); // { album, index }
 
   const specialToken = search.get("invite") || null;
 
@@ -293,15 +295,22 @@ export default function EventDetail() {
           {renderRich(event.description, { paraClassName: "text-ink-2 text-lg leading-relaxed max-w-2xl mt-4 first:mt-0" })}
         </Collapsible>
 
-        {event.gallery && event.gallery.length > 0 && (
-          <div className="mt-12">
-            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4 mb-4">Album · {event.gallery.length}</div>
+        {(event.albums || []).filter((a) => a.count > 0).map((album, ai) => (
+          <div className="mt-12" key={album.album_id} data-testid={`event-album-${ai}`}>
+            <div className="flex items-baseline justify-between gap-3 mb-4">
+              <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{album.title} · {album.count}</div>
+              {/* Each album has a page of its own; the event shows it inline and links there. */}
+              <Link to={`/gallery/${album.slug}`} className="font-mono-x text-[10px] uppercase tracking-[0.25em] text-ink-4 hover:text-ink shrink-0"
+                    data-testid={`event-album-link-${ai}`}>
+                Open ↗
+              </Link>
+            </div>
             <div className="columns-2 sm:columns-3 gap-2">
-              {event.gallery.map((g, i) => (
+              {album.items.map((g, i) => (
                 <button
                   key={g.gallery_id}
-                  onClick={() => setLbIndex(i)}
-                  data-testid={`album-thumb-${i}`}
+                  onClick={() => setLb({ album, index: i })}
+                  data-testid={`album-thumb-${ai}-${i}`}
                   className="mb-2 block w-full break-inside-avoid relative group"
                 >
                   {g.media_type === "video" ? (
@@ -330,7 +339,7 @@ export default function EventDetail() {
               ))}
             </div>
           </div>
-        )}
+        ))}
       </div>
 
       {!soldOut && (
@@ -338,12 +347,12 @@ export default function EventDetail() {
                       total={total} busy={busy} onBuy={reserve} />
       )}
 
-      {lbIndex !== null && (
+      {lb && (
         <Lightbox
-          items={event.gallery.map((g) => ({ url: g.image_url, thumbnail_url: g.thumbnail_url, media_type: g.media_type, caption: g.caption }))}
-          index={lbIndex}
-          onClose={() => setLbIndex(null)}
-          onIndexChange={setLbIndex}
+          items={lb.album.items.map((g) => ({ url: g.image_url, thumbnail_url: g.thumbnail_url, media_type: g.media_type, caption: g.caption }))}
+          index={lb.index}
+          onClose={() => setLb(null)}
+          onIndexChange={(i) => setLb({ ...lb, index: i })}
         />
       )}
     </div>

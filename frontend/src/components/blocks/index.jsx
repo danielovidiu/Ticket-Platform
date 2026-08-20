@@ -116,7 +116,9 @@ function EventsGrid({ props }) {
       <div className={`grid grid-cols-1 ${cols} gap-6 items-stretch`}>
         {events.map((e) => {
           const hasAlbum = e.gallery && e.gallery.length > 0;
-          const cover = hasAlbum ? e.gallery[0] : null;
+          // The first album's chosen cover, not just the first photo the event owns —
+          // an album carries an explicit cover now, and this card is a tile for it.
+          const cover = hasAlbum ? (e.albums?.[0]?.cover || e.gallery[0]) : null;
           return (
             <div key={e.event_id} className="group flex flex-col h-full border border-ink/10 bg-surface hover:border-ink transition-colors">
               {hasAlbum ? (

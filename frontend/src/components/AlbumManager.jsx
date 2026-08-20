@@ -95,11 +95,14 @@ function Tile({ item, index, count, isDragging, isDropTarget, onDragStart, onDra
 }
 
 /**
- * Manages one album: the sitewide gallery when `eventId` is null, or a single
- * event's collection. Ordering, cover choice, captions and deletion all persist
- * immediately — there is no separate save step.
+ * Manages the contents of one album. Ordering, cover choice, captions and deletion all
+ * persist immediately — there is no separate save step.
+ *
+ * The album is identified by `albumId` and nothing else. It used to be identified by the
+ * event it hung off (`eventId`, with null meaning the one sitewide gallery), which is
+ * why an album could not exist without an event.
  */
-export default function AlbumManager({ eventId = null, emptyHint }) {
+export default function AlbumManager({ albumId, emptyHint }) {
   const [items, setItems] = useState([]);
   const [queue, setQueue] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -110,17 +113,17 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
   const inputRef = useRef(null);
 
   const load = useCallback(async () => {
-    const qs = eventId ? `?event_id=${encodeURIComponent(eventId)}` : "";
-    const { data } = await http.get(`/admin/gallery${qs}`);
+    if (!albumId) { setItems([]); return; }
+    const { data } = await http.get(`/admin/gallery?album_id=${encodeURIComponent(albumId)}`);
     setItems(data);
-  }, [eventId]);
+  }, [albumId]);
 
   useEffect(() => { load().catch(() => setItems([])); }, [load]);
 
   const persistOrder = async (ordered) => {
     setItems(ordered); // optimistic — the grid reorders under the cursor immediately
     try {
-      await http.patch("/admin/gallery/reorder", { event_id: eventId, ordered_ids: ordered.map((g) => g.gallery_id) });
+      await http.patch("/admin/gallery/reorder", { album_id: albumId, ordered_ids: ordered.map((g) => g.gallery_id) });
     } catch (e) {
       toast.error(e.response?.data?.detail || "Could not save order");
       load();
@@ -205,7 +208,7 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
       if (!data) continue;
       try {
         await http.post("/admin/gallery", {
-          image_url: data.url, thumbnail_url: data.thumbnail_url, media_type: data.media_type, event_id: eventId,
+          image_url: data.url, thumbnail_url: data.thumbnail_url, media_type: data.media_type, album_id: albumId,
         });
         added++;
       } catch {
@@ -234,7 +237,7 @@ export default function AlbumManager({ eventId = null, emptyHint }) {
         // whose poster couldn't be captured.
         thumbnail_url: url,
         media_type,
-        event_id: eventId,
+        album_id: albumId,
       });
       setUrlDraft("");
       await load();

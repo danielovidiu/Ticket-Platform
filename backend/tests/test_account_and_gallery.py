@@ -1,6 +1,5 @@
 """
-The mandatory-profile / verified-email account rules, and the sitewide gallery's
-title + slug.
+The mandatory-profile / verified-email account rules, and album identity.
 
 Covers:
   * Name, surname, email and phone are all required to register, and the phone is
@@ -11,7 +10,8 @@ Covers:
     but can never empty one.
   * A profile-incomplete or unverified account cannot create a reservation, whatever
     the UI does.
-  * The sitewide gallery's title/slug round-trip, and the slug is slugified.
+  * An album's title/slug round-trip, the slug is slugified, and two albums cannot
+    share one — an album's slug is the address its page lives at.
   * Ticking the newsletter box actually puts the address on the subscriber list — it
     used to set a consent flag that no admin screen could see.
 
@@ -249,49 +249,109 @@ class TestResendVerification:
             assert r.json() == {"ok": True}
 
 
-class TestGalleryIdentity:
-    """Title + slug for the sitewide gallery."""
+@pytest.fixture()
+def album(admin_headers):
+    """A throwaway album to file items into. Items belong to an album now — there is no
+    unfiled bucket left to post into."""
+    r = requests.post(f"{API}/admin/albums", headers=admin_headers, timeout=TIMEOUT,
+                      json={"title": f"TEST_album_{uuid.uuid4().hex[:8]}"})
+    assert r.status_code == 200, r.text
+    created = r.json()
+    yield created
+    requests.delete(f"{API}/admin/albums/{created['album_id']}?delete_items=true",
+                    headers=admin_headers, timeout=TIMEOUT)
 
-    @pytest.fixture()
-    def restore_settings(self, admin_headers):
-        before = requests.get(f"{API}/admin/gallery/settings", headers=admin_headers, timeout=TIMEOUT).json()
-        yield
-        requests.patch(f"{API}/admin/gallery/settings", headers=admin_headers, json=before, timeout=TIMEOUT)
 
-    def test_defaults_are_served_before_anything_is_configured(self):
-        r = requests.get(f"{API}/gallery/settings", timeout=TIMEOUT)
-        assert r.status_code == 200, r.text
-        assert set(r.json()) == {"title", "slug", "description"}
-        assert r.json()["slug"], "the gallery must always have a slug to live at"
+class TestAlbumIdentity:
+    """Title + slug for an album. These used to belong to a single sitewide gallery
+    stored as a `site_settings` singleton; albums are records now, and every one of them
+    carries its own."""
 
-    def test_title_and_slug_round_trip(self, admin_headers, restore_settings):
-        r = requests.patch(f"{API}/admin/gallery/settings", headers=admin_headers, timeout=TIMEOUT,
+    def test_an_album_needs_no_event(self, admin_headers, album):
+        assert album["event_id"] is None
+        assert album["slug"], "an album must always have a slug to live at"
+
+    def test_title_and_slug_round_trip(self, admin_headers, album):
+        r = requests.patch(f"{API}/admin/albums/{album['album_id']}", headers=admin_headers,
+                           timeout=TIMEOUT,
                            json={"title": "TEST_Live Documentation", "slug": "TEST Live Documentation!"})
         assert r.status_code == 200, r.text
         # Whatever the editor typed, the stored slug is URL-shaped.
         assert r.json()["slug"] == "test-live-documentation"
         assert r.json()["title"] == "TEST_Live Documentation"
 
-        public = requests.get(f"{API}/gallery/clusters", timeout=TIMEOUT).json()
-        assert public["settings"]["slug"] == "test-live-documentation"
+    def test_two_albums_cannot_share_a_slug(self, admin_headers, album):
+        requests.patch(f"{API}/admin/albums/{album['album_id']}", headers=admin_headers,
+                       json={"slug": "test-shared-slug"}, timeout=TIMEOUT)
+        r = requests.post(f"{API}/admin/albums", headers=admin_headers, timeout=TIMEOUT,
+                          json={"title": "TEST_second", "slug": "test-shared-slug"})
+        assert r.status_code == 200, r.text
+        second = r.json()
+        try:
+            assert second["slug"] != "test-shared-slug"
+            assert second["slug"].startswith("test-shared-slug")
+        finally:
+            requests.delete(f"{API}/admin/albums/{second['album_id']}", headers=admin_headers, timeout=TIMEOUT)
 
-    def test_a_blank_title_is_refused(self, admin_headers, restore_settings):
-        r = requests.patch(f"{API}/admin/gallery/settings", headers=admin_headers,
+    def test_a_blank_title_is_refused(self, admin_headers, album):
+        r = requests.patch(f"{API}/admin/albums/{album['album_id']}", headers=admin_headers,
                            json={"title": "   "}, timeout=TIMEOUT)
         assert r.status_code == 400, r.text
 
-    def test_settings_are_admin_only(self, user_headers):
-        r = requests.patch(f"{API}/admin/gallery/settings", headers=user_headers,
-                           json={"title": "TEST_nope"}, timeout=TIMEOUT)
+    def test_albums_are_admin_only(self, user_headers):
+        r = requests.post(f"{API}/admin/albums", headers=user_headers,
+                          json={"title": "TEST_nope"}, timeout=TIMEOUT)
         assert r.status_code == 403, r.text
+
+    def test_an_empty_album_has_no_public_tile(self, admin_headers, album):
+        public = requests.get(f"{API}/gallery/clusters", timeout=TIMEOUT).json()
+        assert not any(a["album_id"] == album["album_id"] for a in public["albums"]), \
+            "an album with no media has no cover to show"
+
+
+class TestAlbumVisibility:
+    """An album linked to an unpublished event is not public — and neither is its media.
+
+    Worth pinning: the flat /gallery feed (which the `gallery_grid` CMS block renders,
+    homepage included) used to read one sitewide bucket, so a draft event's photos could
+    not reach it by construction. Now that every album feeds it, only the album's own
+    visibility keeps them out.
+    """
+
+    def test_a_draft_events_album_is_withheld(self, admin_headers, album):
+        event = db.events.find_one({"is_published": True}, {"_id": 0, "event_id": 1})
+        if not event:
+            pytest.skip("no published event to link against")
+
+        r = requests.post(f"{API}/admin/gallery", headers=admin_headers, timeout=TIMEOUT,
+                          json={"album_id": album["album_id"],
+                                "image_url": "https://example.com/TEST_draft.jpg",
+                                "caption": "TEST_draft_item"})
+        assert r.status_code == 200, r.text
+        captions = lambda: [g["caption"] for g in requests.get(f"{API}/gallery", timeout=TIMEOUT).json()]
+
+        assert "TEST_draft_item" in captions(), "an unlinked album's media is public"
+
+        requests.patch(f"{API}/admin/albums/{album['album_id']}", headers=admin_headers,
+                       json={"event_id": event["event_id"]}, timeout=TIMEOUT)
+        db.events.update_one({"event_id": event["event_id"]}, {"$set": {"is_published": False}})
+        try:
+            assert "TEST_draft_item" not in captions(), \
+                "a draft event's media reached the public feed"
+            public = requests.get(f"{API}/gallery/clusters", timeout=TIMEOUT).json()
+            assert not any(a["album_id"] == album["album_id"] for a in public["albums"])
+            assert requests.get(f"{API}/gallery/albums/{album['slug']}", timeout=TIMEOUT).status_code == 404
+        finally:
+            db.events.update_one({"event_id": event["event_id"]}, {"$set": {"is_published": True}})
 
 
 class TestGalleryItemUrls:
     """Items can be added by URL as well as by upload, so the value is checked."""
 
-    def test_a_pasted_http_url_is_accepted(self, admin_headers):
+    def test_a_pasted_http_url_is_accepted(self, admin_headers, album):
         r = requests.post(f"{API}/admin/gallery", headers=admin_headers, timeout=TIMEOUT,
-                          json={"image_url": "https://example.com/TEST_x.jpg", "caption": "TEST_url_item"})
+                          json={"album_id": album["album_id"],
+                                "image_url": "https://example.com/TEST_x.jpg", "caption": "TEST_url_item"})
         assert r.status_code == 200, r.text
         item = r.json()
         # No bytes of ours to thumbnail, so the item stands in as its own thumbnail.
@@ -299,10 +359,16 @@ class TestGalleryItemUrls:
         requests.delete(f"{API}/admin/gallery/{item['gallery_id']}", headers=admin_headers, timeout=TIMEOUT)
 
     @pytest.mark.parametrize("bad", ["javascript:alert(1)", "data:text/html,<script>", "//evil.example.com/x.jpg", ""])
-    def test_non_media_urls_are_refused(self, admin_headers, bad):
+    def test_non_media_urls_are_refused(self, admin_headers, album, bad):
         r = requests.post(f"{API}/admin/gallery", headers=admin_headers,
-                          json={"image_url": bad}, timeout=TIMEOUT)
+                          json={"album_id": album["album_id"], "image_url": bad}, timeout=TIMEOUT)
         assert r.status_code == 400, f"{bad!r} was accepted"
+
+    def test_an_item_needs_a_real_album(self, admin_headers):
+        r = requests.post(f"{API}/admin/gallery", headers=admin_headers,
+                          json={"album_id": "alb_does_not_exist",
+                                "image_url": "https://example.com/TEST_y.jpg"}, timeout=TIMEOUT)
+        assert r.status_code == 400, r.text
 
 
 class TestUploadPermissions:

@@ -51,11 +51,14 @@ admin  POST   /api/admin/events/{event_id}/cancel
 admin  GET    /api/admin/events/{event_id}/notice-preview
 admin  GET    /api/admin/events/{event_id}/notices
 admin  POST   /api/admin/events/{event_id}/notify
+admin  GET    /api/admin/albums
+admin  POST   /api/admin/albums
+admin  PATCH  /api/admin/albums/reorder
+admin  DELETE /api/admin/albums/{album_id}
+admin  PATCH  /api/admin/albums/{album_id}
 admin  GET    /api/admin/gallery
 admin  POST   /api/admin/gallery
 admin  PATCH  /api/admin/gallery/reorder
-admin  GET    /api/admin/gallery/settings
-admin  PATCH  /api/admin/gallery/settings
 admin  DELETE /api/admin/gallery/{gallery_id}
 admin  PATCH  /api/admin/gallery/{gallery_id}
 editor GET    /api/admin/newsletter
