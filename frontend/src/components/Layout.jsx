@@ -4,7 +4,7 @@ import { useAuth, startLogin } from "../auth";
 import { http } from "../api";
 import { Menu, X, ShoppingBag, ChevronDown, User } from "lucide-react";
 import { useCart } from "../lib/cart";
-import { onNavChanged } from "../lib/nav";
+import { loadNav, onNavChanged, readCachedNav } from "../lib/nav";
 
 /** Nav shown before /cms/nav answers.
  *
@@ -208,17 +208,24 @@ const Footer = () => (
 );
 
 export default function Layout({ children }) {
-  const [cmsNav, setCmsNav] = useState([]);
-  const loadNav = useCallback(() => {
-    http.get("/cms/nav").then((r) => setCmsNav(r.data)).catch(() => setCmsNav([]));
+  // Seeded from the last nav this browser saw, read synchronously so a returning visitor
+  // renders the real menu in the FIRST paint. Without it the header shows the built-in
+  // sections and the authored pages appear a request later, which reads as the site
+  // loading in two stages.
+  const [cmsNav, setCmsNav] = useState(readCachedNav);
+  const refreshNav = useCallback((force) => {
+    // A failure leaves whatever is on screen — the cached nav, or the fallback. Blanking
+    // it would turn a slow network into a header that loses its links.
+    loadNav({ force }).then(setCmsNav).catch(() => {});
   }, []);
-  // Load once, then again whenever the CMS says the nav changed. Layout never unmounts
-  // during client-side navigation, so without the subscription an editor who reorders
-  // pages and returns to the site keeps seeing the order from when the tab was opened.
+  // Confirm on mount (usually a 304 against the request this module already started),
+  // then again whenever the CMS says the nav changed. Layout never unmounts during
+  // client-side navigation, so without the subscription an editor who reorders pages and
+  // returns to the site keeps seeing the order from when the tab was opened.
   useEffect(() => {
-    loadNav();
-    return onNavChanged(loadNav);
-  }, [loadNav]);
+    refreshNav(false);
+    return onNavChanged(() => refreshNav(true));
+  }, [refreshNav]);
   // The header and footer are common to every page — including full-screen tools
   // like Scan and the CMS editor.
   return (

@@ -453,12 +453,16 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         return [_font_public(f) for f in await _fonts_sorted()]
 
     @api.get("/cms/nav")
-    async def get_public_nav():
+    async def get_public_nav(request: Request):
         """The whole navigation bar, in order, with hrefs resolved.
 
         Core rows qualify on `kind` rather than on `published`: they have no blocks to
         publish, so the published check that (correctly) hides an unfinished page would
         otherwise hide every built-in section permanently.
+
+        Carries an ETag. This is fetched on every page load by every visitor and changes
+        only when an editor reorders or publishes something, so the common case should
+        cost a 304 and no body — the header is one of the first things a visitor waits on.
         """
         cursor = db.cms_pages.find(
             {"in_nav": True, "$or": [{"kind": "core"}, {"published": {"$ne": None}}]},
@@ -473,7 +477,7 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             # The homepage links to the root, whatever its slug spells.
             return "/" if p.get("is_home") else page_route(p["slug"])
 
-        return [
+        nav = [
             {
                 "slug": p["slug"],
                 "label": p.get("nav_label") or p["title"],
@@ -482,6 +486,15 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             }
             for p in items
         ]
+
+        body = json.dumps(nav, separators=(",", ":"))
+        etag = '"' + hashlib.sha256(body.encode()).hexdigest()[:32] + '"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+        # no-cache, not max-age: a reordered nav has to appear on the next load, and the
+        # revalidation it costs is a 304 with no body.
+        return Response(content=body, media_type="application/json",
+                        headers={"ETag": etag, "Cache-Control": "no-cache"})
 
     # ---------- Admin/Editor ----------
 
