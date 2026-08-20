@@ -43,12 +43,48 @@ function Container({ children, className = "" }) {
  * A step ladder is stable, previews honestly, and is the thing the editor asked for:
  * typography that only changes when someone changes it.
  */
-const HERO_SIZES = {
-  s: "text-3xl md:text-4xl",
-  m: "text-4xl md:text-6xl",
-  l: "text-5xl md:text-7xl",
-  xl: "text-6xl md:text-8xl",
+/**
+ * Hero heading size, in plain pixels, one value per breakpoint.
+ *
+ * Not `vw`: that tied type size to the browser window, so the same heading was a
+ * different size in the editor than on the site — measured at 71px inside a 501px
+ * preview pane, and the same 71px inside the 418px "mobile" preview where a phone
+ * renders 42px. Not a four-step ladder either: four steps is a choice between four
+ * headings, and a hero heading is the one piece of type on a page that is worth setting
+ * exactly.
+ *
+ * The two values are separate because they have to be. A 96px heading is right on a
+ * laptop and unreadable on a 375px phone, and there is no single number that is both.
+ */
+export const HERO_SIZE_LIMITS = {
+  mobile: { min: 16, max: 120, fallback: 48 },
+  desktop: { min: 16, max: 240, fallback: 72 },
 };
+
+/** The named steps this replaced, in the pixel sizes those Tailwind classes emitted.
+ * Blocks saved with one keep rendering at exactly the size they were published at. */
+const LEGACY_STEPS = {
+  s: { mobile: 30, desktop: 36 },
+  m: { mobile: 36, desktop: 60 },
+  l: { mobile: 48, desktop: 72 },
+  xl: { mobile: 60, desktop: 96 },
+};
+
+const clampPx = (value, { min, max }) => Math.min(max, Math.max(min, Math.round(Number(value))));
+
+/**
+ * The size a hero heading actually renders at, from whichever of the three shapes the
+ * block was saved in: explicit pixels, a legacy named step, or nothing at all.
+ */
+export function heroHeadingSize(props) {
+  const legacy = LEGACY_STEPS[props.heading_size] || LEGACY_STEPS.l;
+  const pick = (key) => {
+    const raw = props[`heading_size_${key}`];
+    if (raw === undefined || raw === null || raw === "" || Number.isNaN(Number(raw))) return legacy[key];
+    return clampPx(raw, HERO_SIZE_LIMITS[key]);
+  };
+  return { mobile: pick("mobile"), desktop: pick("desktop") };
+}
 
 /**
  * Blocks authored before `text_case` existed rendered their heading through CSS
@@ -73,7 +109,7 @@ const overlayMode = (props) => (props.overlay === undefined ? "gradient" : props
 function Hero({ props }) {
   const h = props.height === "short" ? "min-h-[50vh]" : props.height === "medium" ? "min-h-[70vh]" : "min-h-[85vh]";
   const align = props.align === "center" ? "text-center items-center" : props.align === "right" ? "text-right items-end" : "text-left items-start";
-  const size = HERO_SIZES[props.heading_size] || HERO_SIZES.l;
+  const size = heroHeadingSize(props);
   const upper = casing(props);
   // Absent means legacy, where the hero was always edge to edge.
   const fullFrame = props.full_frame !== false;
@@ -106,7 +142,8 @@ function Hero({ props }) {
       <div className={`flex flex-col ${align}`}>
         {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-3 mb-6`}>{props.eyebrow}</div>}
         {props.heading && (
-          <h1 className={`font-display ${size} leading-[0.9] ${upper} tracking-tighter font-black max-w-6xl whitespace-pre-wrap`}
+          <h1 className={`font-display hero-heading ${upper} tracking-tighter font-black max-w-6xl whitespace-pre-wrap`}
+              style={{ "--hero-heading-mobile": `${size.mobile}px`, "--hero-heading-desktop": `${size.desktop}px` }}
               data-testid="hero-heading">
             {props.heading}
           </h1>

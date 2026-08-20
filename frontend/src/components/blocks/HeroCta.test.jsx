@@ -18,25 +18,65 @@ const draw = (type, props) =>
   ).container;
 
 describe("hero typography", () => {
-  test("size is a fixed step, not a slice of the browser window", () => {
+  const heading = (props) => draw("hero", { heading: "Hello", ...props }).querySelector('[data-testid="hero-heading"]');
+  const px = (el, key) => el.style.getPropertyValue(`--hero-heading-${key}`);
+
+  test("size is a pixel value, not a slice of the browser window", () => {
     // It was `text-[10vw] md:text-[7vw]`, so the same heading was a different size in
     // the editor than on the site, and the CMS preview sized it from the whole window
     // while drawing it into a pane half that wide.
-    const h = draw("hero", { heading: "Hello", heading_size: "l" }).querySelector('[data-testid="hero-heading"]');
-    expect(h.className).toContain("text-5xl");
+    const h = heading({ heading_size_desktop: 120, heading_size_mobile: 40 });
+    expect(px(h, "desktop")).toBe("120px");
+    expect(px(h, "mobile")).toBe("40px");
     expect(h.className).not.toMatch(/\[\d+vw\]/);
   });
 
-  test.each([["s", "text-3xl"], ["m", "text-4xl"], ["l", "text-5xl"], ["xl", "text-6xl"]])(
-    "size %s is honoured", (size, cls) => {
-      const h = draw("hero", { heading: "Hello", heading_size: size }).querySelector('[data-testid="hero-heading"]');
-      expect(h.className).toContain(cls);
+  test("any pixel value in range is honoured, not just a few steps", () => {
+    for (const size of [37, 61, 83, 149, 231]) {
+      expect(px(heading({ heading_size_desktop: size }), "desktop")).toBe(`${size}px`);
     }
-  );
+  });
 
-  test("a block with no size set gets a stable default rather than a viewport slice", () => {
-    const h = draw("hero", { heading: "Hello" }).querySelector('[data-testid="hero-heading"]');
-    expect(h.className).toContain("text-5xl");
+  test("the two breakpoints are set independently", () => {
+    const h = heading({ heading_size_desktop: 200, heading_size_mobile: 24 });
+    expect(px(h, "desktop")).toBe("200px");
+    expect(px(h, "mobile")).toBe("24px");
+  });
+
+  test("a value beyond the slider's range is clamped rather than rendered", () => {
+    expect(px(heading({ heading_size_desktop: 9999 }), "desktop")).toBe("240px");
+    expect(px(heading({ heading_size_mobile: -50 }), "mobile")).toBe("16px");
+  });
+
+  test("a fractional value is rounded to a whole pixel", () => {
+    expect(px(heading({ heading_size_desktop: 72.6 }), "desktop")).toBe("73px");
+  });
+
+  test("rubbish falls back rather than rendering a broken size", () => {
+    expect(px(heading({ heading_size_desktop: "abc" }), "desktop")).toBe("72px");
+  });
+
+  test.each([
+    ["s", "36px", "30px"],
+    ["m", "60px", "36px"],
+    ["l", "72px", "48px"],
+    ["xl", "96px", "60px"],
+  ])("a block saved with the old %s step renders at exactly that size", (step, desktop, mobile) => {
+    const h = heading({ heading_size: step });
+    expect(px(h, "desktop")).toBe(desktop);
+    expect(px(h, "mobile")).toBe(mobile);
+  });
+
+  test("a block with nothing set keeps the size it has always rendered at", () => {
+    const h = heading({});
+    expect(px(h, "desktop")).toBe("72px");
+    expect(px(h, "mobile")).toBe("48px");
+  });
+
+  test("an explicit size wins over an old named step on the same block", () => {
+    const h = heading({ heading_size: "s", heading_size_desktop: 150 });
+    expect(px(h, "desktop")).toBe("150px");
+    expect(px(h, "mobile")).toBe("30px"); // still the step, since only desktop was set
   });
 });
 

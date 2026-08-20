@@ -3,7 +3,7 @@ import { http } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home } from "lucide-react";
-import { BlockRenderer } from "../components/blocks";
+import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme, MODE_NEUTRALS } from "../lib/cms";
 import { applyCustomFonts } from "../lib/fonts";
 import { FormatToolbar } from "../lib/richText";
@@ -841,7 +841,8 @@ const FIELDS = {
     { k: "overlay", label: "Overlay", type: "select", options: ["gradient", "solid", "none"], fallback: "gradient" },
     { k: "overlay_color", label: "Overlay colour", type: "color", fallback: "#050505", when: (v) => v.overlay === "solid" },
     { k: "overlay_opacity", label: "Overlay opacity", type: "range", min: 0, max: 100, fallback: 45, when: (v) => v.overlay === "solid" },
-    { k: "heading_size", label: "Heading size", type: "select", options: ["s", "m", "l", "xl"], fallback: "l" },
+    { k: "heading_size_desktop", label: "Heading size — desktop", type: "size", breakpoint: "desktop" },
+    { k: "heading_size_mobile", label: "Heading size — mobile", type: "size", breakpoint: "mobile" },
     { k: "text_case", label: "Text case", type: "select", options: ["as-typed", "uppercase"], fallback: "uppercase" },
     { k: "cta_label", label: "Primary CTA label" },
     { k: "cta_href", label: "Primary CTA link" },
@@ -936,6 +937,51 @@ function FormattedTextareaField({ f, value, onCommit, testId }) {
   );
 }
 
+/**
+ * A pixel size, set two ways: drag the slider to find it, type the number when you know
+ * it. Both write the same value, so neither is the "real" control.
+ *
+ * The number box keeps its own text while being typed — a bare `Number(input)` would
+ * turn a half-typed "1" into a 1px heading and yank the slider to its floor between
+ * keystrokes. It commits on a pause like every other field here.
+ *
+ * The placeholder shows what the block renders at TODAY when nothing has been set, which
+ * for a hero saved before this existed is its old named step rather than a guess.
+ */
+function SizeField({ value, breakpoint, block, onCommit, testId }) {
+  const limits = HERO_SIZE_LIMITS[breakpoint];
+  const current = heroHeadingSize(block)[breakpoint];
+  const isSet = value !== undefined && value !== null && value !== "";
+  const { local, onChange, flush } = useDebouncedField(isSet ? String(value) : "", (text) => {
+    const trimmed = text.trim();
+    // Cleared on purpose means "go back to the default", not "zero pixels".
+    if (trimmed === "") return onCommit(undefined);
+    const n = Number(trimmed);
+    if (Number.isNaN(n)) return;
+    onCommit(Math.min(limits.max, Math.max(limits.min, Math.round(n))));
+  });
+
+  return (
+    <div className="flex items-center gap-3" data-testid={testId}>
+      <input
+        type="range" min={limits.min} max={limits.max} step={1} value={current}
+        onChange={(e) => onCommit(Number(e.target.value))}
+        data-testid={`${testId}-range`} className="flex-1"
+      />
+      <div className="flex items-center gap-1 shrink-0">
+        <input
+          type="text" inputMode="numeric" value={local} placeholder={String(current)}
+          onChange={(e) => onChange(e.target.value)} onBlur={flush}
+          {...RAW_TEXT_PROPS}
+          data-testid={`${testId}-number`}
+          className="input-x !py-1 !px-2 !text-xs w-14 text-right font-mono-x"
+        />
+        <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">px</span>
+      </div>
+    </div>
+  );
+}
+
 function PropsEditor({ block, onChange }) {
   const fields = FIELDS[block.type] || [];
   const v = block.props || {};
@@ -994,6 +1040,9 @@ function PropsEditor({ block, onChange }) {
                        data-testid={testId} className="h-8 w-12 bg-transparent border border-ink/20 p-0" />
                 <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{v[f.k] ?? f.fallback ?? "#050505"}</span>
               </div>
+            ) : f.type === "size" ? (
+              <SizeField value={v[f.k]} breakpoint={f.breakpoint} block={v}
+                         onCommit={commitField(f.k)} testId={testId} />
             ) : f.type === "range" ? (
               <div className="flex items-center gap-3">
                 <input type="range" min={f.min ?? 0} max={f.max ?? 100} value={v[f.k] ?? f.fallback ?? 0}
