@@ -495,14 +495,23 @@ function EventForm({ form, setForm, onSave, onClose }) {
             <FormatToolbar textareaRef={descRef} value={form.description} onChange={(v) => setF("description", v)} />
             <textarea ref={descRef} placeholder="Description" value={form.description} onChange={(e) => setF("description", e.target.value)} className="input-x w-full" rows={3} />
           </div>
-          <label className="col-span-1"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Starts</div><DateTimePicker value={form.starts_at} onChange={(v) => setF("starts_at", v)} /></label>
-          <label className="col-span-1"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Ends</div><DateTimePicker value={form.ends_at} onChange={(v) => setF("ends_at", v)} /></label>
-          <label className="col-span-1"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Doors</div><DateTimePicker value={form.doors_open_at} onChange={(v) => setF("doors_open_at", v)} /></label>
-          <label className="col-span-1"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Max per user</div><input type="number" value={form.max_tickets_per_user} onChange={(e) => setF("max_tickets_per_user", Number(e.target.value))} className="input-x" /></label>
-          <label className="col-span-1">
-            <div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Sold-out message</div>
-            <input placeholder="e.g. Sold Out, At the door" value={form.sold_out_message || ""} onChange={(e) => setF("sold_out_message", e.target.value)} className="input-x" />
-          </label>
+          {/* The three times the event runs on, on one line: they are read together —
+              doors relative to start, start relative to end — and reading them meant
+              crossing rows while the two-column grid put Doors beside Max per user,
+              which has nothing to do with when the night runs. Stacks on a phone. */}
+          <div className="col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Starts</div><DateTimePicker value={form.starts_at} onChange={(v) => setF("starts_at", v)} /></label>
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Ends</div><DateTimePicker value={form.ends_at} onChange={(v) => setF("ends_at", v)} /></label>
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Doors</div><DateTimePicker value={form.doors_open_at} onChange={(v) => setF("doors_open_at", v)} /></label>
+          </div>
+          {/* The two selling rules, on the line below. */}
+          <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Max per user</div><input type="number" value={form.max_tickets_per_user} onChange={(e) => setF("max_tickets_per_user", Number(e.target.value))} className="input-x w-full" /></label>
+            <label className="min-w-0">
+              <div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Sold-out message</div>
+              <input placeholder="e.g. Sold Out, At the door" value={form.sold_out_message || ""} onChange={(e) => setF("sold_out_message", e.target.value)} className="input-x w-full" />
+            </label>
+          </div>
           <label className="col-span-2 flex gap-2 items-center"><input type="checkbox" checked={form.is_published} onChange={(e) => setF("is_published", e.target.checked)} /> <span className="text-sm">Published</span></label>
         </div>
         <div className="mt-8 hairline-b pb-3 flex items-baseline gap-3">
@@ -523,14 +532,21 @@ function EventForm({ form, setForm, onSave, onClose }) {
                   <option value="vip">VIP</option>
                 </select>
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-                <Field label="Price (RON)"><input type="number" step="0.01" value={w.price_ron} onChange={(e) => setWave(i, "price_ron", Number(e.target.value))} className="input-x w-full" /></Field>
-                <Field label="Tickets"><input type="number" value={w.capacity} onChange={(e) => setWave(i, "capacity", Number(e.target.value))} className="input-x w-full" /></Field>
-                <Field label="Sale starts"><DateTimePicker value={w.starts_at} onChange={(v) => setWave(i, "starts_at", v)} /></Field>
-                <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => setWave(i, "ends_at", v)} /></Field>
-                <Field label="Access until" className="col-span-2 md:col-span-1">
-                  <DateTimePicker value={w.access_until} onChange={(v) => setWave(i, "access_until", v)} />
-                </Field>
+              {/* Two rows rather than one four-column flow: what the tier costs, then when
+                  it is sellable and usable. In one grid the three dates wrapped wherever
+                  the column count left them — Access until landed under Price on desktop
+                  and under Sale starts on tablet — so the three fields that answer the
+                  same question were never on the same line as each other. */}
+              <div className="mt-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Price (RON)"><input type="number" step="0.01" value={w.price_ron} onChange={(e) => setWave(i, "price_ron", Number(e.target.value))} className="input-x w-full" /></Field>
+                  <Field label="Tickets"><input type="number" value={w.capacity} onChange={(e) => setWave(i, "capacity", Number(e.target.value))} className="input-x w-full" /></Field>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Field label="Sale starts"><DateTimePicker value={w.starts_at} onChange={(v) => setWave(i, "starts_at", v)} /></Field>
+                  <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => setWave(i, "ends_at", v)} /></Field>
+                  <Field label="Access until"><DateTimePicker value={w.access_until} onChange={(v) => setWave(i, "access_until", v)} /></Field>
+                </div>
               </div>
             </div>
           ))}
