@@ -1,42 +1,121 @@
 
 /**
- * Shared markdown-ish subset used everywhere free text is entered: event
- * descriptions, artist bios, project descriptions, and CMS body/content
- * fields. Deliberately not full CommonMark — just enough to back the
- * formatting toolbar (see FormatToolbar / wrapTextareaSelection below).
+ * Shared markdown-ish subset used everywhere free text is entered: event descriptions,
+ * artist bios, project descriptions, and CMS body/content fields. Deliberately not full
+ * CommonMark — just enough to back the formatting toolbar (see FormatToolbar /
+ * wrapTextareaSelection below).
  *
- * Block level: #/##/### headings, blank-line paragraphs, ALL-CAPS eyebrow lines.
+ * Block level: #/##/### headings, `-`/`*`/`1.` lists, blank-line paragraphs.
  * Inline: **bold**, *italic*, ~~strikethrough~~, __underline__, [text](url).
- * (Markdown has no native underline mark — `__x__` is repurposed for it here
- * since this subset doesn't use `__` for anything else.)
+ * (Markdown has no native underline mark — `__x__` is repurposed for it here since this
+ * subset doesn't use `__` for anything else.)
+ *
+ * WHAT THIS RENDERER GUARANTEES, and did not before:
+ *
+ *   * a single newline is a LINE BREAK, not a space. Lines inside a paragraph used to be
+ *     `join(" ")`-ed, so an address or a set of credits came out as one run-on line.
+ *   * blank lines survive. One separates paragraphs; further ones are kept as spacing,
+ *     rather than every run of them collapsing to the same gap.
+ *   * leading indentation survives, via `white-space: pre-wrap` on the paragraph.
+ *   * nothing is reinterpreted by its casing. An ALL-CAPS line used to be silently
+ *     promoted to a styled eyebrow, so an author who shouted one line got a different
+ *     element than the one they wrote — the clearest case of the CMS editing the author.
  */
+
+/** Text nodes plus <br>, so a newline inside a paragraph renders as a newline. */
+function withLineBreaks(text, keyBase) {
+  const lines = text.split("\n");
+  const out = [];
+  lines.forEach((line, i) => {
+    if (i > 0) out.push(<br key={`${keyBase}-br${i}`} />);
+    out.push(<span key={`${keyBase}-l${i}`}>{renderInline(line)}</span>);
+  });
+  return out;
+}
+
+const LIST_ITEM = /^(\s*)([-*]|\d+[.)])\s+(.*)$/;
+
 export function renderRich(md, opts = {}) {
   if (!md) return null;
+  // `whitespace-pre-wrap` is what keeps an author's indentation and runs of spaces —
+  // the CSS default would collapse both no matter how carefully the text is preserved
+  // on the way here.
   const paraClassName = opts.paraClassName || "text-ink-2 text-lg leading-relaxed max-w-2xl mt-4";
   const lines = String(md).split(/\n/);
   const nodes = [];
   let paraBuf = [];
+  let listBuf = null; // { ordered, items: [] }
+
   const flushPara = () => {
     if (paraBuf.length === 0) return;
-    const text = paraBuf.join(" ");
-    nodes.push(<p key={`p${nodes.length}`} className={paraClassName}>{renderInline(text)}</p>);
+    const text = paraBuf.join("\n");
+    nodes.push(
+      <p key={`p${nodes.length}`} className={`${paraClassName} whitespace-pre-wrap`}>
+        {withLineBreaks(text, `p${nodes.length}`)}
+      </p>
+    );
     paraBuf = [];
   };
+
+  const flushList = () => {
+    if (!listBuf) return;
+    const Tag = listBuf.ordered ? "ol" : "ul";
+    nodes.push(
+      <Tag key={`l${nodes.length}`}
+           className={`${listBuf.ordered ? "list-decimal" : "list-disc"} pl-6 mt-4 space-y-1 text-ink-2 text-lg leading-relaxed max-w-2xl`}>
+        {listBuf.items.map((item, i) => (
+          <li key={i} className="whitespace-pre-wrap">{renderInline(item)}</li>
+        ))}
+      </Tag>
+    );
+    listBuf = null;
+  };
+
+  const flushAll = () => { flushPara(); flushList(); };
+
+  const heading = (line, level, className) => {
+    flushAll();
+    const Tag = `h${level}`;
+    nodes.push(<Tag key={`h${nodes.length}`} className={className}>{renderInline(line)}</Tag>);
+  };
+
   for (const raw of lines) {
-    const line = raw.trim();
-    if (line === "") { flushPara(); continue; }
-    if (line.startsWith("### ")) { flushPara(); nodes.push(<h3 key={`h${nodes.length}`} className="font-display text-2xl md:text-3xl uppercase font-bold tracking-tight mt-8">{renderInline(line.slice(4))}</h3>); continue; }
-    if (line.startsWith("## ")) { flushPara(); nodes.push(<h2 key={`h${nodes.length}`} className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mt-10">{renderInline(line.slice(3))}</h2>); continue; }
-    if (line.startsWith("# ")) { flushPara(); nodes.push(<h1 key={`h${nodes.length}`} className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-4 leading-[0.9]">{renderInline(line.slice(2))}</h1>); continue; }
-    if (/^[A-Z][A-Z0-9 ·\-—/]{2,}$/.test(line) && paraBuf.length === 0) {
-      nodes.push(<div key={`eb${nodes.length}`} className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4 mt-6">{line}</div>);
+    // Only the trailing newline is stripped; leading whitespace is the author's.
+    const line = raw.replace(/\s+$/, "");
+
+    if (line === "") {
+      // A blank line ends whatever was open. A SECOND consecutive blank is deliberate
+      // spacing rather than a no-op, so it is kept as an empty paragraph.
+      if (paraBuf.length === 0 && !listBuf && nodes.length > 0) {
+        nodes.push(<p key={`sp${nodes.length}`} className={`${paraClassName} whitespace-pre-wrap`} aria-hidden="true">{"\u00a0"}</p>);
+      } else {
+        flushAll();
+      }
       continue;
     }
+
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("### ")) { heading(trimmed.slice(4), 3, "font-display text-2xl md:text-3xl font-bold tracking-tight mt-8"); continue; }
+    if (trimmed.startsWith("## ")) { heading(trimmed.slice(3), 2, "font-display text-3xl md:text-5xl font-bold tracking-tighter mt-10"); continue; }
+    if (trimmed.startsWith("# ")) { heading(trimmed.slice(2), 1, "font-display text-5xl md:text-7xl font-black tracking-tighter mt-4 leading-[0.9]"); continue; }
+
+    const li = LIST_ITEM.exec(line);
+    if (li) {
+      const ordered = /\d/.test(li[2]);
+      flushPara();
+      if (listBuf && listBuf.ordered !== ordered) flushList();
+      if (!listBuf) listBuf = { ordered, items: [] };
+      listBuf.items.push(li[3]);
+      continue;
+    }
+
+    flushList();
     paraBuf.push(line);
   }
-  flushPara();
+  flushAll();
   return nodes;
 }
+
 
 export function renderInline(t) {
   const parts = [];

@@ -12,6 +12,7 @@ import VideoField from "../components/VideoField";
 import FontPicker from "../components/FontPicker";
 import FontManager from "../components/FontManager";
 import { navChanged } from "../lib/nav";
+import { useAutosave, useDebouncedField } from "../lib/useAutosave";
 
 // Wait this long after the last edit before saving...
 const AUTOSAVE_MS = 1200;
@@ -178,6 +179,10 @@ export default function CMSEditor() {
   const redo = useCallback(() => applyHistory(redoRef, undoRef), [applyHistory]);
 
   // ----- Saving -----
+  // The unload/visibility/⌘S listeners are installed once; these keep them pointed at the
+  // current closures rather than the ones that existed on first render.
+  const flushAllRef = useRef(() => {});
+  const unsavedRef = useRef(() => false);
   const inFlightRef = useRef(false);
   const queuedRef = useRef(false);
 
@@ -227,14 +232,14 @@ export default function CMSEditor() {
   // Last lines of defence for work still sitting in the debounce window.
   useEffect(() => {
     const onBeforeUnload = (e) => {
-      if (pageRef.current && pageRef.current.draft !== savedDraftRef.current) {
+      if (unsavedRef.current()) {
         e.preventDefault();
         e.returnValue = "";
       }
     };
-    const onVisibility = () => { if (document.visibilityState === "hidden") saveNow(); };
+    const onVisibility = () => { if (document.visibilityState === "hidden") flushAllRef.current(); };
     const onKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveNow(); }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); flushAllRef.current(); }
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     document.addEventListener("visibilitychange", onVisibility);
@@ -246,12 +251,14 @@ export default function CMSEditor() {
     };
   }, [saveNow]);
 
-  /** Switching pages replaces `page` wholesale — flush first or the last edit is lost. */
+  /** Switching pages replaces `page` wholesale — flush first or the last edit is lost.
+   *  Metadata too: a half-typed title belongs to the page being left, not the one
+   *  being opened. */
   const selectPage = useCallback((pid) => {
     if (pid === pageRef.current?.page_id) return;
-    saveNow();
+    flushAllRef.current();
     setCurrentId(pid);
-  }, [saveNow]);
+  }, []);
 
   // ----- Block ops -----
   const selectBlock = useCallback((id) => setSelectedId(id), []);
@@ -387,10 +394,22 @@ export default function CMSEditor() {
     }
     navChanged();
   };
-  const updatePageMeta = async (patch) => {
+  /**
+   * Page metadata — title, nav label, nav visibility.
+   *
+   * This used to PATCH and then re-fetch the whole page list on EVERY KEYSTROKE, with no
+   * debounce and no ordering: typing "Mission" was seven writes and fourteen reads, and
+   * two of those writes could land out of order and leave the title one character behind
+   * what is on screen. It now edits locally and rides the same autosave the draft does.
+   */
+  const metaPendingRef = useRef(null);
+
+  const saveMeta = useCallback(async (patch) => {
+    const p = pageRef.current;
+    if (!p) return;
+    const r = await http.patch(`/admin/cms/pages/${p.page_id}`, patch);
     // The response carries the server's copy of the draft, which is behind whatever is
     // pending locally — keep the local draft and take only the metadata.
-    const r = await http.patch(`/admin/cms/pages/${page.page_id}`, patch);
     const merged = { ...r.data, draft: pageRef.current?.draft || r.data.draft };
     pageRef.current = merged;
     setPage(merged);
@@ -398,7 +417,25 @@ export default function CMSEditor() {
     setPages(list.data);
     // title / nav_label / in_nav all show up in the header.
     navChanged();
-  };
+  }, []);
+
+  const metaSave = useAutosave({
+    getPending: () => metaPendingRef.current,
+    save: saveMeta,
+  });
+
+  /** Apply metadata locally at once, and let the autosave carry it to the server. */
+  const updatePageMeta = useCallback((patch) => {
+    const p = pageRef.current;
+    if (!p) return;
+    const merged = { ...p, ...patch };
+    pageRef.current = merged;
+    setPage(merged);
+    // Accumulate, so a title edit followed by a nav-label edit within one debounce
+    // window is one request carrying both rather than the second discarding the first.
+    metaPendingRef.current = { ...(metaPendingRef.current || {}), ...patch };
+    metaSave.bump();
+  }, [metaSave]);
   /** Save a new page order. The arrows and the drag handler both go through here, so
    *  the two cannot drift apart.
    *
@@ -448,18 +485,57 @@ export default function CMSEditor() {
   };
 
   // ----- Theme -----
-  const setThemeDraft = async (patch) => {
-    const nextDraft = { ...(theme?.draft || theme?.published || {}), ...patch };
-    setTheme({ ...theme, draft: nextDraft });
-    applyTheme(nextDraft);
-    await http.patch("/admin/cms/theme", { draft: nextDraft });
-  };
+  /**
+   * Theme draft. Applied to the live preview immediately and written on the same
+   * autosave as everything else.
+   *
+   * It used to PATCH on every change — which for a colour picker is a request per pixel
+   * dragged, with no ordering, so the colour that landed last was whichever response the
+   * network happened to deliver last rather than the one the editor chose.
+   */
+  const themePendingRef = useRef(null);
+
+  const themeSave = useAutosave({
+    getPending: () => themePendingRef.current,
+    save: (draft) => http.patch("/admin/cms/theme", { draft }),
+  });
+
+  const setThemeDraft = useCallback((patch) => {
+    setTheme((prev) => {
+      const nextDraft = { ...(prev?.draft || prev?.published || {}), ...patch };
+      themePendingRef.current = nextDraft;
+      applyTheme(nextDraft);
+      return { ...prev, draft: nextDraft };
+    });
+    themeSave.bump();
+  }, [themeSave]);
   const publishTheme = async () => {
+    // Publish snapshots what the SERVER holds, so anything still in the debounce window
+    // has to go up first or it silently doesn't get published.
+    await themeSave.flush();
     await http.post("/admin/cms/theme/publish");
     toast.success("Theme published");
     const r = await http.get("/admin/cms/theme");
     setTheme(r.data);
   };
+
+  /** Blocks, metadata and theme save independently; the header reports the one that
+   * most needs attention. An error anywhere outranks a save in flight, which outranks
+   * "saved". */
+  const anythingPending = dirty || metaSave.dirty || themeSave.dirty || saveState === "error"
+    || metaSave.state === "error" || themeSave.state === "error";
+
+  const saveEverythingNow = useCallback(() => {
+    saveNow();
+    metaSave.flush();
+    themeSave.flush();
+  }, [saveNow, metaSave, themeSave]);
+
+  useEffect(() => {
+    flushAllRef.current = saveEverythingNow;
+    unsavedRef.current = () =>
+      (!!pageRef.current && pageRef.current.draft !== savedDraftRef.current) || metaSave.dirty || themeSave.dirty;
+  }, [saveEverythingNow, metaSave.dirty, themeSave.dirty]);
 
   const selectedBlock = useMemo(
     () => (selectedId ? blocks.find((b) => b.block_id === selectedId) || null : null),
@@ -496,8 +572,15 @@ export default function CMSEditor() {
           <button onClick={() => setDevice("mobile")} className={`p-2 ${device==="mobile"?"bg-ink text-page":""}`}><Smartphone size={14} /></button>
         </div>
 
-        <SaveStatus state={saveState} savedAt={savedAt} dirty={dirty} />
-        <button onClick={saveNow} disabled={!dirty && saveState !== "error"} title="Save draft now (⌘S)"
+        {/* One indicator for the whole editor. Blocks, page metadata and the theme are
+            three different requests, and an editor does not care which of them is in
+            flight — they care whether their work is safe. Worst state wins. */}
+        <SaveStatus
+          state={worstState([saveState, metaSave.state, themeSave.state])}
+          savedAt={savedAt}
+          dirty={dirty || metaSave.dirty || themeSave.dirty}
+        />
+        <button onClick={saveEverythingNow} disabled={!anythingPending} title="Save draft now (⌘S)"
                 data-testid="save-draft-btn" className="btn-primary !py-1.5 !px-3 !text-xs disabled:opacity-30">
           Save now
         </button>
@@ -675,6 +758,13 @@ const PreviewBlock = React.memo(function PreviewBlock({ block, selected, onSelec
   );
 });
 
+/** The state that most needs attention, across the editor's independent savers.
+ * An error outranks a save in flight, which outranks a completed one. */
+const STATE_RANK = { error: 3, saving: 2, saved: 1, idle: 0 };
+function worstState(states) {
+  return states.reduce((worst, s) => (STATE_RANK[s] > STATE_RANK[worst] ? s : worst), "idle");
+}
+
 /** Honest save indicator. Its own component with its own interval, so the clock ticking
  * doesn't re-render the editor (and the preview) every few seconds. The label it replaced
  * was memoized on the save timestamp, so it read "Saved just now" indefinitely — including
@@ -705,74 +795,21 @@ function SaveStatus({ state, savedAt, dirty }) {
 
 // -------------- Props editor --------------
 
-// Text fields keep their own value while you type and push upward on this delay. Binding
-// them straight to the editor's state meant a full preview re-render inside every
-// keystroke, and once that render outlasts the gap between two keys, React writes the
-// older state back into the input and the characters typed in between are lost.
-const FIELD_DEBOUNCE_MS = 250;
-// ...and the same ceiling the autosave needs, for the same reason: a debounce that resets
-// on every keystroke never elapses for someone typing steadily, which would freeze the
-// preview mid-sentence and starve the autosave of anything to save. Kept below
-// HISTORY_COALESCE_MS so a continuous run still collapses into one undo entry.
-const FIELD_MAX_WAIT_MS = 600;
-
-function useDebouncedField(external, onCommit) {
-  const [local, setLocal] = useState(external);
-  const localRef = useRef(external);
-  const pushedRef = useRef(external);
-  const timer = useRef(null);
-  const pendingSinceRef = useRef(0);
-  // The commit callback changes identity every render; a pending timeout must call the
-  // latest one rather than the closure it was created with.
-  const commitRef = useRef(onCommit);
-  useEffect(() => { commitRef.current = onCommit; });
-
-  // Adopt changes that came from somewhere else — undo, revert, a version being loaded.
-  // Values this field pushed itself come back identical and are ignored, which is what
-  // keeps the caret from jumping mid-word.
-  useEffect(() => {
-    if (external !== pushedRef.current) {
-      pushedRef.current = external;
-      localRef.current = external;
-      setLocal(external);
-    }
-  }, [external]);
-
-  const push = useCallback((val) => {
-    pushedRef.current = val;
-    pendingSinceRef.current = 0;
-    commitRef.current(val);
-  }, []);
-
-  const onChange = useCallback((val) => {
-    localRef.current = val;
-    setLocal(val);
-    if (!pendingSinceRef.current) pendingSinceRef.current = Date.now();
-    const waited = Date.now() - pendingSinceRef.current;
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => push(val), Math.max(0, Math.min(FIELD_DEBOUNCE_MS, FIELD_MAX_WAIT_MS - waited)));
-  }, [push]);
-
-  const flush = useCallback(() => {
-    clearTimeout(timer.current);
-    if (localRef.current !== pushedRef.current) push(localRef.current);
-  }, [push]);
-
-  // Blur covers clicking away; unmount covers switching block or page mid-word. Commits
-  // target the block by id, so a flush landing after the selection moved is still safe.
-  useEffect(() => () => {
-    clearTimeout(timer.current);
-    if (localRef.current !== pushedRef.current) push(localRef.current);
-  }, [push]);
-
-  return { local, onChange, flush };
-}
+/**
+ * Nothing may rewrite what was typed. `autoCapitalize` and `autoCorrect` are ON by
+ * default on iOS and in some desktop contexts, which capitalises the first letter of a
+ * field and "corrects" words the author meant — an artist name in lower case, a stylised
+ * title. The CMS records the author's text, so both are off everywhere it takes input.
+ *
+ * `spellCheck` stays on: it underlines, it does not change anything.
+ */
+const RAW_TEXT_PROPS = { autoCapitalize: "off", autoCorrect: "off", autoComplete: "off", spellCheck: true };
 
 function TextField({ value, onCommit, testId }) {
   const { local, onChange, flush } = useDebouncedField(value, onCommit);
   return (
     <input value={local} data-testid={testId} onChange={(e) => onChange(e.target.value)} onBlur={flush}
-           className="input-x !py-2 !text-sm" />
+           {...RAW_TEXT_PROPS} className="input-x !py-2 !text-sm" />
   );
 }
 
@@ -780,7 +817,7 @@ function TextareaField({ value, onCommit, rows, testId }) {
   const { local, onChange, flush } = useDebouncedField(value, onCommit);
   return (
     <textarea rows={rows || 4} value={local} data-testid={testId} onChange={(e) => onChange(e.target.value)} onBlur={flush}
-              className="input-x !py-2 !text-sm" />
+              {...RAW_TEXT_PROPS} className="input-x !py-2 !text-sm" />
   );
 }
 
@@ -790,16 +827,22 @@ function ListField({ value, onCommit }) {
     onCommit(text.split("\n").filter(Boolean)));
   return (
     <textarea rows={5} value={local} onChange={(e) => onChange(e.target.value)} onBlur={flush}
-              className="input-x !py-2 !text-sm font-mono-x" />
+              {...RAW_TEXT_PROPS} className="input-x !py-2 !text-sm font-mono-x" />
   );
 }
 
 const FIELDS = {
   hero: [
-    { k: "eyebrow", label: "Eyebrow (small caps)" },
+    { k: "eyebrow", label: "Eyebrow" },
     { k: "heading", label: "Heading", type: "textarea" },
     { k: "body", label: "Body", type: "textarea", format: true },
     { k: "image_url", label: "Background image", type: "image" },
+    { k: "full_frame", label: "Full frame (edge to edge)", type: "checkbox", fallback: true },
+    { k: "overlay", label: "Overlay", type: "select", options: ["gradient", "solid", "none"], fallback: "gradient" },
+    { k: "overlay_color", label: "Overlay colour", type: "color", fallback: "#050505", when: (v) => v.overlay === "solid" },
+    { k: "overlay_opacity", label: "Overlay opacity", type: "range", min: 0, max: 100, fallback: 45, when: (v) => v.overlay === "solid" },
+    { k: "heading_size", label: "Heading size", type: "select", options: ["s", "m", "l", "xl"], fallback: "l" },
+    { k: "text_case", label: "Text case", type: "select", options: ["as-typed", "uppercase"], fallback: "uppercase" },
     { k: "cta_label", label: "Primary CTA label" },
     { k: "cta_href", label: "Primary CTA link" },
     { k: "cta_style", label: "Primary CTA style", type: "select", options: ["accent", "outline"] },
@@ -835,14 +878,18 @@ const FIELDS = {
   ],
   marquee: [{ k: "items", label: "Fallback items (used only when there are no upcoming events)", type: "list" }],
   cta_banner: [
-    { k: "heading", label: "Heading", type: "textarea" },
-    { k: "body", label: "Body", type: "textarea", format: true },
+    { k: "image_url", label: "Image", type: "image" },
+    { k: "eyebrow", label: "Eyebrow" },
+    { k: "heading", label: "Title", type: "textarea" },
+    { k: "body", label: "Description", type: "textarea", format: true, rows: 5 },
     { k: "cta_label", label: "Button label" },
     { k: "cta_href", label: "Button link" },
+    { k: "cta_style", label: "Button style", type: "select", options: ["outline", "accent"], fallback: "outline" },
+    { k: "text_case", label: "Text case", type: "select", options: ["as-typed", "uppercase"], fallback: "uppercase" },
   ],
   contact_form: [
     { k: "heading", label: "Heading" },
-    { k: "success_message", label: "Success message" },
+    { k: "success_message", label: "Success message", type: "textarea", rows: 2 },
   ],
   newsletter: [
     { k: "heading", label: "Heading" },
@@ -884,7 +931,7 @@ function FormattedTextareaField({ f, value, onCommit, testId }) {
       <FormatToolbar textareaRef={ref} value={local} onChange={(val) => { onChange(val); flush(); }} />
       <textarea ref={ref} rows={f.rows || 4} value={local} data-testid={testId}
                 onChange={(e) => onChange(e.target.value)} onBlur={flush}
-                className="input-x !py-2 !text-sm" />
+                {...RAW_TEXT_PROPS} className="input-x !py-2 !text-sm" />
     </>
   );
 }
@@ -903,7 +950,7 @@ function PropsEditor({ block, onChange }) {
   return (
     <div className="space-y-4">
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">{BLOCK_LABELS[block.type]}</div>
-      {fields.map((f) => {
+      {fields.filter((f) => (f.when ? f.when(v) : true)).map((f) => {
         // Keyed by block AND field: selecting another block must give the text fields
         // fresh local state rather than leaving the previous block's text on screen.
         const key = `${blockId}:${f.k}`;
@@ -929,13 +976,31 @@ function PropsEditor({ block, onChange }) {
             ) : f.type === "textarea" ? (
               <TextareaField value={v[f.k] || ""} rows={f.rows} onCommit={commitField(f.k)} testId={testId} />
             ) : f.type === "select" ? (
-              <select value={v[f.k] || ""} onChange={(e) => commitField(f.k)(e.target.value)} className="input-x !py-2 !text-sm">
+              <select value={v[f.k] ?? f.fallback ?? ""} onChange={(e) => commitField(f.k)(e.target.value)}
+                      data-testid={testId} className="input-x !py-2 !text-sm">
                 {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
             ) : f.type === "checkbox" ? (
-              <div className="flex items-center gap-2 pt-1"><input type="checkbox" checked={!!v[f.k]} onChange={(e) => commitField(f.k)(e.target.checked)} /> <span className="text-xs text-ink-3">{f.label}</span></div>
+              <div className="flex items-center gap-2 pt-1">
+                <input type="checkbox" checked={v[f.k] ?? f.fallback ?? false} data-testid={testId}
+                       onChange={(e) => commitField(f.k)(e.target.checked)} />
+                <span className="text-xs text-ink-3">{f.label}</span>
+              </div>
             ) : f.type === "number" ? (
               <input type="number" value={v[f.k] ?? ""} onChange={(e) => commitField(f.k)(Number(e.target.value))} className="input-x !py-2 !text-sm" />
+            ) : f.type === "color" ? (
+              <div className="flex items-center gap-2">
+                <input type="color" value={v[f.k] ?? f.fallback ?? "#050505"} onChange={(e) => commitField(f.k)(e.target.value)}
+                       data-testid={testId} className="h-8 w-12 bg-transparent border border-ink/20 p-0" />
+                <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{v[f.k] ?? f.fallback ?? "#050505"}</span>
+              </div>
+            ) : f.type === "range" ? (
+              <div className="flex items-center gap-3">
+                <input type="range" min={f.min ?? 0} max={f.max ?? 100} value={v[f.k] ?? f.fallback ?? 0}
+                       onChange={(e) => commitField(f.k)(Number(e.target.value))}
+                       data-testid={testId} className="flex-1" />
+                <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 w-10 text-right">{v[f.k] ?? f.fallback ?? 0}%</span>
+              </div>
             ) : f.type === "list" ? (
               <ListField value={v[f.k]} onCommit={commitField(f.k)} />
             ) : (
@@ -954,11 +1019,11 @@ function PageMetaEditor({ page, onChange }) {
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Page</div>
       <label className="block">
         <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Title</div>
-        <input value={page.title} onChange={(e) => onChange({ title: e.target.value })} className="input-x !py-2 !text-sm" />
+        <TextField value={page.title || ""} onCommit={(val) => onChange({ title: val })} testId="cms-page-title" />
       </label>
       <label className="block">
         <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Nav label</div>
-        <input value={page.nav_label || page.title} onChange={(e) => onChange({ nav_label: e.target.value })} className="input-x !py-2 !text-sm" />
+        <TextField value={page.nav_label || page.title || ""} onCommit={(val) => onChange({ nav_label: val })} testId="cms-page-nav-label" />
       </label>
       <label className="block flex items-center gap-2 mt-2"><input type="checkbox" checked={!!page.in_nav} onChange={(e) => onChange({ in_nav: e.target.checked })} /> <span className="text-xs text-ink-2">Show in main navigation</span></label>
       <div className="pt-3 text-xs text-ink-4">
