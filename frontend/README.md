@@ -72,6 +72,45 @@ Two removals looked risky and were not: the `js-yaml` and `form-data` copies tha
 come in via `@eslint/eslintrc` and `axios`, which keep their own pins, so the patched
 versions still win. Removing the dead keys left the resolved tree byte-identical.
 
+**Audited again 2026-08-20, on the other half of the question.** A pin being *live* says
+nothing about it being *current*. A pin is written when some version is the fix; upstream
+then publishes a newer fix, the parent package raises its range to ask for it, and the pin
+— unchanged, still matching, still "live" — is now the thing holding the vulnerable copy
+in place. Two had gone that way:
+
+| pin | was | now | advisory the old value was exposed to |
+|---|---|---|---|
+| `**/axios/form-data` | 4.0.4 | 4.0.6 | GHSA-hmw2-7cc7-3qxx, CRLF injection, high |
+| `**/@eslint/eslintrc/js-yaml` | 4.1.1 | 4.3.1 | GHSA-52cp-r559-cp3m, GHSA-5p4m-2wfm-xmqj, DoS, high |
+
+Neither reaches a browser — `form-data` is Node-only inside axios (the built bundle
+contains the string `multipart/form-data` and no more), and `js-yaml` is build-time only.
+So this was audit hygiene rather than a live hole. It is still the failure mode to watch,
+because the pins were doing the opposite of their stated job.
+
+**yarn tells you, on every install.** Each stale pin prints one line:
+
+```
+warning Resolution field "form-data@4.0.4" is incompatible with requested version "form-data@^4.0.6"
+```
+
+That means a dependent asked for a floor above the pin — read it as "re-check this one",
+not as noise. The inverse is legitimate and also warns: `@eslint/plugin-kit` is pinned to
+0.3.4 while eslint asks for `^0.2.7`, because the pin deliberately upgrades past
+GHSA-xffm-g5w8-qvg7. Tell them apart by which side is higher.
+
+To check a version rather than a name, ask the advisory API directly — it takes package
+names to version lists and returns only what those exact versions are exposed to:
+
+```bash
+curl -s -X POST https://registry.npmjs.org/-/npm/v1/security/advisories/bulk \
+  -H 'Content-Type: application/json' \
+  -d '{"form-data":["4.0.6"],"js-yaml":["4.3.1"]}'
+```
+
+An empty `{}` is the clean answer. Every other pin in the block returned `{}` on
+2026-08-20.
+
 Do not delete a pin because its name looks obsolete — `rollup` reads like Vite-era dead
 weight but is pulled in by `react-qr-reader`, and dropping it would un-patch it. Re-run
 the check above instead, and update the date here.
