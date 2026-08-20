@@ -226,7 +226,7 @@ export default function AlbumManager({ albumId, emptyHint }) {
       onUpdate: (i, stage, meta) => mark(i, {
         stage,
         attempt: meta?.attempt ?? 1,
-        error: stage === STAGE.FAILED ? describe(meta?.error) : undefined,
+        error: stage === STAGE.FAILED ? meta?.message : undefined,
       }),
     });
 

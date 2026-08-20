@@ -140,3 +140,35 @@ describe("runPipeline", () => {
     expect(results[1].message).toBe("nope");
   });
 });
+
+describe("files that cannot be made smaller", () => {
+  const bigVideo = () => new File([new Uint8Array(32)], "clip.mp4", { type: "video/mp4" });
+  const bigGif = () => new File([new Uint8Array(32)], "loop.gif", { type: "image/gif" });
+
+  test.each([
+    ["a video, which a browser cannot transcode", bigVideo],
+    ["a GIF, which would lose its animation", bigGif],
+  ])("%s fails a rejected body once instead of retrying", async (_label, make) => {
+    let calls = 0;
+    const send = async () => { calls++; throw httpError(413); };
+    const result = await uploadOne(make(), { send });
+
+    // The shrink path has nothing to offer here, so a second attempt would send
+    // identical bytes to an identical refusal.
+    expect(calls).toBe(1);
+    expect(result.ok).toBe(false);
+    expect(result.message).toBe("Too large to send — compress it first");
+  });
+
+  test("an image is shrunk and resent instead", async () => {
+    // jsdom cannot re-encode, so the bytes do not actually change — what is pinned here
+    // is that an image is given the extra attempts a video is not.
+    let calls = 0;
+    const send = async () => { calls++; throw httpError(413); };
+    const photo = new File([new Uint8Array(32)], "photo.jpg", { type: "image/jpeg" });
+    const result = await uploadOne(photo, { send });
+
+    expect(calls).toBeGreaterThan(1);
+    expect(result.message).toBe("Too large to send");
+  });
+});

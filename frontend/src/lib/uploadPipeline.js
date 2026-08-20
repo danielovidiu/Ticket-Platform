@@ -13,7 +13,7 @@
  *   * WHOSE job the retry is — automatic for anything transient, the editor's for
  *     anything that will fail identically the next time.
  */
-import { processImage, needsProcessing, MAX_EDGE, QUALITY } from "./imagePipeline";
+import { processImage, needsProcessing, isProcessableImage, MAX_EDGE, QUALITY } from "./imagePipeline";
 
 export const STAGE = {
   QUEUED: "queued",
@@ -57,12 +57,21 @@ export function classify(error) {
 }
 
 /** What to put in front of a person. Server-supplied detail wins — it is written for
- * this exact case — and the fallbacks name a cause rather than restating "failed". */
-export function describe(error) {
+ * this exact case — and the fallbacks name a cause rather than restating "failed".
+ *
+ * `file` is optional and only changes the "too large" case, where the useful half of the
+ * sentence is whether anything can be done about it here. */
+export function describe(error, file = null) {
   const detail = error?.response?.data?.detail;
   if (typeof detail === "string" && detail) return detail;
   const code = status(error);
-  if (code === 413) return "Too large to send";
+  if (code === 413) {
+    // A video cannot be transcoded in a browser and a GIF would lose its animation, so
+    // there is no smaller version to offer — say so instead of implying a retry helps.
+    return file && !isProcessableImage(file)
+      ? "Too large to send — compress it first"
+      : "Too large to send";
+  }
   if (code === 429) return "Rate limited";
   if (code >= 500) return "Server error";
   if (code === 0) return "Connection lost";
@@ -102,9 +111,10 @@ export async function uploadOne(file, { send, onStage = () => {} }) {
       if (verdict === "fatal" || attempt === MAX_ATTEMPTS) break;
 
       if (verdict === "shrink") {
-        // Out of smaller sizes to try: the file is not going to fit, and saying so beats
-        // three more attempts that cannot succeed.
-        if (step >= SHRINK_STEPS.length - 1) break;
+        // Nothing to shrink, or nothing smaller left to try. Either way the next attempt
+        // would send identical bytes to an identical refusal, so stop rather than spend
+        // two more round trips arriving at the same answer.
+        if (!isProcessableImage(file) || step >= SHRINK_STEPS.length - 1) break;
         step++;
       }
 
@@ -113,8 +123,9 @@ export async function uploadOne(file, { send, onStage = () => {} }) {
     }
   }
 
-  onStage(STAGE.FAILED, { error: lastError });
-  return { ok: false, error: lastError, message: describe(lastError) };
+  const message = describe(lastError, file);
+  onStage(STAGE.FAILED, { error: lastError, message });
+  return { ok: false, error: lastError, message };
 }
 
 /**
