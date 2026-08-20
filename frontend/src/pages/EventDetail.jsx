@@ -108,6 +108,10 @@ function MobileBuyBar({ waveName, total, busy, onBuy }) {
   );
 }
 
+/** Below this many, a tier says "only a few left" instead of "available". Above it, the
+ * number itself is deliberately not published — see the wave list below. */
+const LOW_STOCK_AT = 10;
+
 export default function EventDetail() {
   const { slug } = useParams();
   const navigate = useNavigate();
@@ -242,8 +246,17 @@ export default function EventDetail() {
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-display uppercase font-bold">{w.name}</div>
+                        {/* The exact remaining count is not the buyer's business — it
+                            tells competitors and scalpers how a release is going, and a
+                            large number reads as "no hurry" while a small one reads as
+                            pressure. Only the two facts that change a decision are shown:
+                            it is gone, or it is nearly gone. */}
                         <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
-                          {w.available > 0 ? `${w.available} available` : "SOLD OUT"}
+                          {w.available <= 0
+                            ? "SOLD OUT"
+                            : w.available < LOW_STOCK_AT
+                              ? <span className="text-brand" data-testid={`wave-low-stock-${w.tier}`}>Only a few left</span>
+                              : "Available"}
                         </div>
                       </div>
                       <div className="font-mono-x">{w.price_ron.toFixed(2)} RON</div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { http, API } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
@@ -11,7 +11,7 @@ import ImageField from "../components/ImageField";
 import { ShopProducts, ShopOrders, ShopSettings } from "../components/ShopAdmin";
 import { eventStatus, STATUS_CLASS, TICKET_FILTERS, TICKET_STATUS_CLASS } from "../lib/ticketStatus";
 
-const TABS = ["stats", "events", "orders", "shop", "shop orders", "shop settings",
+const TABS = ["stats", "events", "orders", "transactions", "shop", "shop orders", "shop settings",
               "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
 
 export default function Admin() {
@@ -35,6 +35,7 @@ export default function Admin() {
         {tab === "stats" && <Stats />}
         {tab === "events" && <Events />}
         {tab === "orders" && <Orders />}
+        {tab === "transactions" && <Transactions />}
         {tab === "shop" && <ShopProducts />}
         {tab === "shop orders" && <ShopOrders />}
         {tab === "shop settings" && <ShopSettings />}
@@ -59,32 +60,160 @@ const STAT_PRESETS = [
 ];
 const isoDay = (d) => d.toISOString().slice(0, 10);
 
-function Stats() {
-  const [s, setS] = useState(null);
+/**
+ * The filter set shared by Stats and Transactions.
+ *
+ * They have to agree: a figure checked on the stats cards is the figure someone then
+ * exports and declares, and two screens that filter "the same" rows by slightly
+ * different rules is how a fiscal return ends up wrong. One hook, one query string.
+ */
+const TICKET_STATUS_OPTIONS = ["issued", "used", "denied", "cancelled", "refunded"];
+
+function useSalesFilters() {
   const [events, setEvents] = useState([]);
-  const [eventId, setEventId] = useState("");
+  // Both are sets of choices, not single ones: "how did these three events do" and "issued
+  // plus used" are the questions people actually arrive with, and answering them one
+  // value at a time means reading four screens and adding up by hand.
+  const [eventIds, setEventIds] = useState([]);
+  const [statuses, setStatuses] = useState([]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
   useEffect(() => { http.get("/admin/events").then((r) => setEvents(r.data)).catch(() => setEvents([])); }, []);
-  useEffect(() => {
+
+  const query = useMemo(() => {
     const p = new URLSearchParams();
-    if (eventId) p.set("event_id", eventId);
+    // One comma-separated parameter rather than a repeated key, so the URL stays
+    // readable when someone reproduces a figure by hand.
+    if (eventIds.length) p.set("event_id", eventIds.join(","));
     if (dateFrom) p.set("date_from", dateFrom);
     if (dateTo) p.set("date_to", dateTo);
-    const qs = p.toString();
-    http.get(`/admin/stats${qs ? `?${qs}` : ""}`).then((r) => setS(r.data));
-  }, [eventId, dateFrom, dateTo]);
+    if (statuses.length) p.set("status", statuses.join(","));
+    return p.toString();
+  }, [eventIds, dateFrom, dateTo, statuses]);
 
   const setLastDays = (n) => {
     const to = new Date();
-    const from = new Date(to.getTime() - n * 864e5);
-    setDateFrom(isoDay(from));
+    setDateFrom(isoDay(new Date(to.getTime() - n * 864e5)));
     setDateTo(isoDay(to));
   };
-  const clear = () => { setEventId(""); setDateFrom(""); setDateTo(""); };
-  const filtered = eventId || dateFrom || dateTo;
+  const clear = () => { setEventIds([]); setDateFrom(""); setDateTo(""); setStatuses([]); };
 
+  return { events, eventIds, setEventIds, dateFrom, setDateFrom, dateTo, setDateTo,
+           statuses, setStatuses, query, setLastDays, clear,
+           filtered: !!(eventIds.length || dateFrom || dateTo || statuses.length) };
+}
+
+/**
+ * A dropdown that takes several answers.
+ *
+ * Not a native `<select multiple>`: that renders as a fixed-height scrolling box, needs
+ * ctrl-click to add a second value, and silently drops the whole selection on a stray
+ * plain click — which for a filter feeding a fiscal export is the wrong kind of easy to
+ * get wrong. This closes over its own summary line and every option is a checkbox, so
+ * adding a fourth event cannot clear the first three.
+ */
+function MultiSelect({ label, options, selected, onChange, allLabel, testId }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  // Functional update, not `[...selected, value]`. Two ticks in quick succession both
+  // read the `selected` captured at render, so computing from it drops the first one —
+  // which is exactly what "multi-select" must not do.
+  const toggle = (value) => {
+    onChange((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
+  };
+
+  const summary = selected.length === 0
+    ? allLabel
+    : selected.length === 1
+      ? (options.find((o) => o.value === selected[0])?.label || selected[0])
+      : `${selected.length} selected`;
+
+  return (
+    <div className="relative min-w-0" ref={ref}>
+      <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">{label}</div>
+      <button type="button" onClick={() => setOpen((o) => !o)} data-testid={testId}
+              className="input-x w-full flex items-center justify-between gap-2 text-left min-w-0">
+        <span className={`truncate ${selected.length ? "" : "text-ink-4"}`}>{summary}</span>
+        <span className="text-ink-4 shrink-0 text-[10px]">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="absolute z-40 mt-1 w-full max-h-64 overflow-y-auto border border-ink/20 bg-surface shadow-2xl"
+             data-testid={`${testId}-menu`}>
+          {selected.length > 0 && (
+            <button type="button" onClick={() => onChange([])}
+                    className="w-full text-left px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 hover:text-ink border-b border-ink/10">
+              Clear selection
+            </button>
+          )}
+          {options.map((o) => (
+            <label key={o.value} className="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer hover:bg-ink/5">
+              <input type="checkbox" checked={selected.includes(o.value)} onChange={() => toggle(o.value)}
+                     data-testid={`${testId}-opt-${o.value}`} />
+              <span className="truncate">{o.label}</span>
+            </label>
+          ))}
+          {options.length === 0 && (
+            <div className="px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-5">Nothing to choose</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SalesFilters({ f, testId }) {
+  return (
+    <div className="border border-ink/10 bg-surface p-4 mb-4" data-testid={testId}>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <MultiSelect
+          label="Event" allLabel="All events" testId={`${testId}-event`}
+          options={f.events.map((e) => ({ value: e.event_id, label: e.title }))}
+          selected={f.eventIds} onChange={f.setEventIds}
+        />
+        <MultiSelect
+          label="Ticket status" allLabel="Any status" testId={`${testId}-status`}
+          options={TICKET_STATUS_OPTIONS.map((s) => ({ value: s, label: s }))}
+          selected={f.statuses} onChange={f.setStatuses}
+        />
+        <Field label="From">
+          <input type="date" value={f.dateFrom} max={f.dateTo || undefined} onChange={(e) => f.setDateFrom(e.target.value)} className="input-x w-full" data-testid={`${testId}-date-from`} />
+        </Field>
+        <Field label="To">
+          <input type="date" value={f.dateTo} min={f.dateFrom || undefined} onChange={(e) => f.setDateTo(e.target.value)} className="input-x w-full" data-testid={`${testId}-date-to`} />
+        </Field>
+      </div>
+      <div className="flex flex-wrap gap-2 items-center mt-3">
+        {STAT_PRESETS.map(([label, days]) => (
+          <button key={label} onClick={() => f.setLastDays(days())} className="btn-primary text-xs">Last {label}</button>
+        ))}
+        {f.filtered && <button onClick={f.clear} className="btn-primary text-xs" data-testid={`${testId}-clear`}>Clear</button>}
+        <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 ml-auto">
+          {f.filtered ? "Filtered" : "All time · all events"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function Stats() {
+  const [s, setS] = useState(null);
+  const f = useSalesFilters();
+  const { query } = f;
+
+  useEffect(() => {
+    http.get(`/admin/stats${query ? `?${query}` : ""}`).then((r) => setS(r.data));
+  }, [query]);
+
+  const filtered = f.filtered;
   const cards = s && [
     ["Revenue", `${s.revenue_ron.toFixed(2)} RON`],
     ["Orders", s.total_orders],
@@ -95,31 +224,7 @@ function Stats() {
 
   return (
     <div>
-      <div className="border border-ink/10 bg-surface p-4 mb-4" data-testid="stats-filters">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Field label="Event">
-            <select value={eventId} onChange={(e) => setEventId(e.target.value)} className="input-x w-full" data-testid="stats-event-filter">
-              <option value="">All events</option>
-              {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
-            </select>
-          </Field>
-          <Field label="From">
-            <input type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => setDateFrom(e.target.value)} className="input-x w-full" data-testid="stats-date-from" />
-          </Field>
-          <Field label="To">
-            <input type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => setDateTo(e.target.value)} className="input-x w-full" data-testid="stats-date-to" />
-          </Field>
-        </div>
-        <div className="flex flex-wrap gap-2 items-center mt-3">
-          {STAT_PRESETS.map(([label, days]) => (
-            <button key={label} onClick={() => setLastDays(days())} className="btn-primary text-xs">Last {label}</button>
-          ))}
-          {filtered && <button onClick={clear} className="btn-primary text-xs" data-testid="stats-clear">Clear</button>}
-          <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 ml-auto">
-            {filtered ? "Filtered" : "All time · all events"}
-          </span>
-        </div>
-      </div>
+      <SalesFilters f={f} testId="stats-filters" />
       {!s ? <div>Loading</div> : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           {cards.map(([k, v]) => (
@@ -165,7 +270,7 @@ function Events() {
   const [notice, setNotice] = useState(null);   // { event, kind } while composing
   const load = () => http.get("/admin/events").then((r) => setEvents(r.data));
   useEffect(() => { load(); }, []);
-  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_from: "" }] });
+  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_until: "" }] });
   const save = async () => {
     try {
       if (form.event_id) {
@@ -195,22 +300,71 @@ function Events() {
           // in at lg, where there is actually room for five columns of text.
           // `min-w-0` lets each cell shrink below its content width, without which
           // grid children refuse to shrink and spill over their neighbours.
-          <div key={e.event_id} className="border border-ink/10 bg-surface p-4 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center">
-            <div className="lg:col-span-4 min-w-0 font-display font-bold uppercase break-words lg:truncate">{e.title}</div>
-            <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-ink-3">{new Date(e.starts_at).toLocaleString("en-GB")}</div>
-            <div className="lg:col-span-2 min-w-0 font-mono-x text-xs break-words">{[e.venue, e.city].filter(Boolean).join(", ")}</div>
-            <div className={`lg:col-span-1 min-w-0 font-mono-x text-xs ${STATUS_CLASS[eventStatus(e)]}`}>{eventStatus(e)}</div>
-            <div className="lg:col-span-3 min-w-0 flex flex-wrap gap-2 lg:justify-end">
-              <button onClick={() => setForm(e)} className="btn-primary text-xs">Edit</button>
-              <button onClick={() => setNotice({ event: e, kind: "venue" })} data-testid={`notify-btn-${e.event_id}`} className="btn-primary text-xs">Notify</button>
-              <button onClick={() => cancel(e)} className="btn-primary text-xs">Cancel</button>
-              <button onClick={() => del(e.event_id)} className="btn-primary text-xs">Del</button>
+          // Two columns, and the split is deliberate: everything you DO with an event on
+          // the left under its name, everything you need to KNOW about how it is selling
+          // on the right. The old row put five equal-weight cells in a line, so the title
+          // competed with the venue for attention and the sales numbers were not there
+          // at all — you had to open the event to find out whether it was selling.
+          <div key={e.event_id} className="border border-ink/10 bg-surface p-4 grid grid-cols-1 lg:grid-cols-2 gap-4"
+               data-testid={`event-row-${e.event_id}`}>
+            <div className="min-w-0">
+              <div className="font-display font-bold uppercase break-words text-lg leading-tight">{e.title}</div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
+                <span>{new Date(e.starts_at).toLocaleString("en-GB")}</span>
+                {[e.venue, e.city].filter(Boolean).length > 0 && <span>{[e.venue, e.city].filter(Boolean).join(", ")}</span>}
+                <span className={STATUS_CLASS[eventStatus(e)]}>{eventStatus(e)}</span>
+                {e.event_code && <span className="text-ink-3" title="Code used in ticket serials">{e.event_code}</span>}
+              </div>
+              <div className="flex flex-wrap gap-2 mt-3">
+                <button onClick={() => setForm(e)} className="btn-primary text-xs">Edit</button>
+                <button onClick={() => setNotice({ event: e, kind: "venue" })} data-testid={`notify-btn-${e.event_id}`} className="btn-primary text-xs">Notify</button>
+                <button onClick={() => cancel(e)} className="btn-primary text-xs">Cancel</button>
+                <button onClick={() => del(e.event_id)} className="btn-primary text-xs">Del</button>
+              </div>
             </div>
+            <TierSales waves={e.waves} />
           </div>
         ))}
       </div>
       {form && <EventForm form={form} setForm={setForm} onSave={save} onClose={() => setForm(null)} />}
       {notice && <NoticeComposer event={notice.event} initialKind={notice.kind} onClose={() => setNotice(null)} />}
+    </div>
+  );
+}
+
+/** How each tier is selling, per event row.
+ *
+ * `available` is what the server decrements on every hold, so sold is capacity minus it
+ * — the same arithmetic the box office does, rather than a second count that could
+ * disagree with it. A tier at zero says SOLD OUT rather than "0 left", because those
+ * read very differently at a glance and only one of them is news.
+ */
+function TierSales({ waves }) {
+  const tiers = waves || [];
+  if (!tiers.length) {
+    return <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-5 lg:text-right">No tiers</div>;
+  }
+  return (
+    <div className="min-w-0 space-y-1" data-testid="tier-sales">
+      {tiers.map((w) => {
+        const capacity = w.capacity ?? 0;
+        const left = Math.max(0, w.available ?? capacity);
+        const sold = Math.max(0, capacity - left);
+        const pct = capacity ? Math.round((sold / capacity) * 100) : 0;
+        return (
+          <div key={w.wave_id || w.name} className="flex items-center gap-3 text-xs min-w-0">
+            <span className="font-mono-x uppercase tracking-[0.15em] text-ink-2 truncate flex-1 min-w-0">{w.name}</span>
+            {/* A bar earns its place here: twelve events in a list is a lot of numbers to
+                compare, and relative fill is readable without reading any of them. */}
+            <span className="hidden sm:block w-20 h-1.5 bg-ink/10 shrink-0" aria-hidden="true">
+              <span className="block h-full bg-brand" style={{ width: `${pct}%` }} />
+            </span>
+            <span className="font-mono-x text-[10px] uppercase tracking-[0.15em] text-ink-4 shrink-0 w-28 text-right">
+              {sold}/{capacity} · {left === 0 ? <span className="text-brand">sold out</span> : `${left} left`}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -374,11 +528,13 @@ function EventForm({ form, setForm, onSave, onClose }) {
                 <Field label="Tickets"><input type="number" value={w.capacity} onChange={(e) => setWave(i, "capacity", Number(e.target.value))} className="input-x w-full" /></Field>
                 <Field label="Sale starts"><DateTimePicker value={w.starts_at} onChange={(v) => setWave(i, "starts_at", v)} /></Field>
                 <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => setWave(i, "ends_at", v)} /></Field>
-                <Field label="Access from" className="col-span-2 md:col-span-1"><DateTimePicker value={w.access_from} onChange={(v) => setWave(i, "access_from", v)} /></Field>
+                <Field label="Access until" className="col-span-2 md:col-span-1">
+                  <DateTimePicker value={w.access_until} onChange={(v) => setWave(i, "access_until", v)} />
+                </Field>
               </div>
             </div>
           ))}
-          <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_from: "" }]})} className="btn-primary">+ Add tier</button>
+          <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_until: "" }]})} className="btn-primary">+ Add tier</button>
         </div>
         <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Albums</div>
         <div className="mt-3">
@@ -491,6 +647,139 @@ function EventAlbums({ eventId }) {
 // purchases produced. They are different objects with different lifecycles — an order is
 // paid or refunded, a ticket is issued, used, denied or refunded — so they get one view
 // each rather than one confused list.
+/**
+ * Transactions: what gets declared.
+ *
+ * Separate from Orders on purpose. Orders is where you refund somebody; this is where
+ * you answer to a tax authority, and the two want different things on screen — the same
+ * filters as Stats, a file you can hand over, and a summary whose arithmetic is visible
+ * rather than asserted.
+ */
+function Transactions() {
+  const f = useSalesFilters();
+  const { query } = f;
+  const [summary, setSummary] = useState(null);
+  const [showSummary, setShowSummary] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const loadSummary = async () => {
+    setBusy(true);
+    try {
+      const { data } = await http.get(`/admin/transactions/summary${query ? `?${query}` : ""}`);
+      setSummary(data);
+      setShowSummary(true);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not build the summary");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Re-fetch rather than hide stale numbers behind an open panel: the filters above are
+  // the whole point, and a summary that does not follow them is a trap.
+  useEffect(() => { if (showSummary) loadSummary(); }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** The export goes through the session like every other admin call, so it cannot be a
+   *  bare href — that would be an unauthenticated GET and land on the login page. */
+  const exportCsv = async () => {
+    setBusy(true);
+    try {
+      const { data } = await http.get(`/admin/transactions.csv${query ? `?${query}` : ""}`, { responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([data], { type: "text/csv" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `transactions-${isoDay(new Date())}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("CSV exported");
+    } catch {
+      toast.error("Export failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <SalesFilters f={f} testId="tx-filters" />
+
+      <div className="flex flex-wrap gap-2 mb-4">
+        <button onClick={exportCsv} disabled={busy} className="btn-accent text-xs disabled:opacity-40" data-testid="tx-export-csv">
+          Export CSV
+        </button>
+        <button onClick={showSummary ? () => setShowSummary(false) : loadSummary} disabled={busy}
+                className="btn-primary text-xs disabled:opacity-40" data-testid="tx-summary-btn">
+          {showSummary ? "Hide" : "Executive summary"}
+        </button>
+      </div>
+
+      {showSummary && summary && (
+        <div className="border border-ink/10 bg-surface p-4" data-testid="tx-summary">
+          <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">
+            Executive summary · {new Date(summary.generated_at).toLocaleString("en-GB")}
+          </div>
+
+          {summary.lines.length === 0 ? (
+            <div className="mt-4 font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4">Nothing sold in this range</div>
+          ) : (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm border-collapse" data-testid="tx-summary-table">
+                <thead>
+                  <tr className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 text-left">
+                    <th className="py-2 pr-3 font-normal">Event</th>
+                    <th className="py-2 pr-3 font-normal">Ticket type</th>
+                    <th className="py-2 pr-3 font-normal text-right">Sold</th>
+                    <th className="py-2 pr-3 font-normal text-right">Unit price</th>
+                    <th className="py-2 pr-3 font-normal text-right">Total</th>
+                    <th className="py-2 font-normal">Series range</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.lines.map((l, i) => (
+                    <tr key={i} className="border-t border-ink/10 align-top" data-testid={`tx-summary-row-${i}`}>
+                      <td className="py-2 pr-3 min-w-0">{l.event}</td>
+                      <td className="py-2 pr-3 font-mono-x text-xs uppercase">{l.ticket_type || l.type_code}</td>
+                      <td className="py-2 pr-3 text-right font-mono-x">{l.tickets_sold}</td>
+                      {/* The multiplication is written out because this is the number an
+                          auditor recomputes; showing only the product invites the question. */}
+                      <td className="py-2 pr-3 text-right font-mono-x">× {l.unit_price_ron.toFixed(2)}</td>
+                      <td className="py-2 pr-3 text-right font-mono-x">{l.total_ron.toFixed(2)}</td>
+                      <td className="py-2 font-mono-x text-[10px] break-all">
+                        {l.serial_first ? `${l.serial_first} – ${l.serial_last}` : <span className="text-ink-5">no serials</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-ink/30 font-display font-bold">
+                    <td className="py-3 pr-3" colSpan={2}>Total ticket revenue</td>
+                    <td className="py-3 pr-3 text-right font-mono-x" data-testid="tx-summary-tickets">{summary.tickets_sold}</td>
+                    <td className="py-3 pr-3" />
+                    <td className="py-3 pr-3 text-right font-mono-x" data-testid="tx-summary-total">{summary.total_ron.toFixed(2)} RON</td>
+                    <td className="py-3" />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+
+          {summary.serials_missing > 0 && (
+            // Said out loud rather than left to be discovered: tickets issued before
+            // serials existed have none, so a range covers fewer tickets than the count
+            // beside it, and a fiscal document must not imply otherwise.
+            <div className="mt-3 border border-brand px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-brand"
+                 data-testid="tx-summary-warning">
+              {summary.serials_missing} ticket(s) in this range predate serial numbering and are counted but not covered by a series range
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Orders() {
   const [view, setView] = useState("orders");
   return (

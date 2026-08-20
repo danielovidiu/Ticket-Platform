@@ -638,6 +638,97 @@ def now_utc():
     return datetime.now(timezone.utc)
 
 
+# ---------- Ticket serials ----------
+#
+# A ticket carries two identifiers and they do different jobs.
+#
+#   `qr_code`  — SNTY-<20 random hex>. Unguessable on purpose: it is the thing scanned at
+#                the door, so anyone who could predict one could print a ticket. It is NOT
+#                touched by any of this.
+#   `serial`   — SNTY-<event>-<type>-<0001>. Human-readable, sequential, and the number a
+#                fiscal report is written against. Predictable BY DESIGN, which is exactly
+#                why it cannot be the thing the door trusts.
+#
+# The sequence runs per event AND per ticket type, so every tier owns one unbroken range
+# and "Early Bird 0001–0150" in the fiscal summary is a statement that can be checked.
+
+SERIAL_PREFIX = "SNTY"
+
+# Tiers that have a settled abbreviation. Anything else is derived from the tier's own
+# name, so a promoter inventing "LATE RELEASE" gets LR without a code change.
+TIER_CODES = {"early_bird": "EB", "general": "G", "vip": "VIP"}
+
+
+def _code_from_words(text: str, limit: int) -> str:
+    """Initials when there is more than one word, otherwise the leading letters.
+    "LATE RELEASE" -> LR, "BACKSTAGE" -> BACK. Digits are kept: "NIGHT 2" -> N2."""
+    words = re.findall(r"[A-Za-z0-9]+", (text or "").upper())
+    if not words:
+        return ""
+    if len(words) > 1:
+        return "".join(w[0] for w in words)[:limit]
+    return words[0][:limit]
+
+
+def event_code_for(title: str) -> str:
+    """The short code standing for one event inside a serial."""
+    return _code_from_words(title, 4) or "EVT"
+
+
+def wave_type_code(wave: dict) -> str:
+    """The code standing for one ticket type. The tier decides it when the tier is one
+    we know; otherwise the wave's own name does."""
+    tier = (wave or {}).get("tier")
+    if tier in TIER_CODES:
+        return TIER_CODES[tier]
+    return _code_from_words((wave or {}).get("name", ""), 3) or "T"
+
+
+async def ensure_event_code(event: dict) -> str:
+    """The event's code, assigned once and then never recomputed.
+
+    Stability is the whole point: serials are printed, emailed and filed, so renaming an
+    event in the CMS six months later must not change what a ticket issued today says it
+    is. Collisions are broken with a numeric suffix rather than shared, because two events
+    sharing a code makes every serial in both ambiguous.
+    """
+    existing = event.get("event_code")
+    if existing:
+        return existing
+
+    base = event_code_for(event.get("title", ""))
+    code = base
+    n = 1
+    while await db.events.find_one({"event_code": code, "event_id": {"$ne": event.get("event_id")}}, {"_id": 1}):
+        n += 1
+        code = f"{base}{n}"
+
+    await db.events.update_one({"event_id": event["event_id"]}, {"$set": {"event_code": code}})
+    return code
+
+
+async def next_serial(event_id: str, event_code: str, type_code: str) -> str:
+    """Allocate the next number in one (event, type) sequence.
+
+    `find_one_and_update` with `$inc` and an upsert is the whole concurrency story: the
+    increment happens inside the database, so two checkouts completing in the same
+    millisecond take two different numbers. Doing this by counting existing tickets would
+    hand both the same one — and a duplicated fiscal serial is not a bug you can fix
+    afterwards, because the tickets are already out.
+    """
+    key = f"{event_id}:{type_code}"
+    doc = await db.serial_counters.find_one_and_update(
+        {"_id": key},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    seq = doc["seq"]
+    # Four digits is room for 9999 per tier per event; beyond that it simply grows rather
+    # than wrapping, because a wrapped serial would repeat a number already issued.
+    return f"{SERIAL_PREFIX}-{event_code}-{type_code}-{seq:04d}"
+
+
 def new_id(prefix: str = "id"):
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
@@ -1175,9 +1266,12 @@ class WaveIn(ApiModel):
     starts_at: str
     ends_at: str
     tier: str = "general"  # early_bird, general, vip
-    # When holders of *this* tier may start entering. Per-tier rather than
-    # per-event, so VIP/early-bird can be granted earlier access than general.
-    access_from: Optional[str] = None
+    # The last moment holders of *this* tier may enter on. Per-tier rather than
+    # per-event, so an early-bird ticket can carry an earlier cut-off than general.
+    #
+    # This replaced `access_from`, which stored the opposite end of the window and was
+    # never read by anything — see migrate_access_until.
+    access_until: Optional[str] = None
 
 
 class EventIn(ApiModel):
@@ -2757,17 +2851,31 @@ async def _finalize_paid_reservation(reservation_id: str):
     if updated["status"] != "paid":
         return
 
-    # Create tickets
+    # Create tickets. Two identifiers each: the unguessable `qr_code` the door trusts,
+    # and the sequential `serial` a fiscal report is written against. See the serial
+    # helpers near the top of this module for why those cannot be the same string.
+    event_doc = await db.events.find_one({"event_id": r["event_id"]}, {"_id": 0}) or {}
+    wave = next((w for w in event_doc.get("waves", []) if w.get("wave_id") == r["wave_id"]), {})
+    event_code = await ensure_event_code(event_doc) if event_doc.get("event_id") else "EVT"
+    type_code = wave_type_code(wave)
+
     tickets = []
     for i in range(r["quantity"]):
         qr = f"SNTY-{uuid.uuid4().hex[:20].upper()}"
         t = {
             "ticket_id": new_id("tkt"),
             "qr_code": qr,
+            # Allocated one at a time rather than as a block: the counter is the only
+            # thing standing between two simultaneous checkouts and a duplicated serial.
+            "serial": await next_serial(r["event_id"], event_code, type_code),
+            "event_code": event_code,
+            "type_code": type_code,
             "reservation_id": reservation_id,
             "user_id": r["user_id"],
             "event_id": r["event_id"],
             "wave_id": r["wave_id"],
+            "wave_name": wave.get("name", ""),
+            "tier": wave.get("tier", ""),
             "price_ron": r["unit_price_ron"],
             "status": "issued",
             "scanned_at": None,
@@ -3064,6 +3172,10 @@ async def invoice_pdf(invoice_id: str, user=Depends(get_current_user)):
 
 class ScanIn(ApiModel):
     qr_code: str
+    # Set by the door when a human has looked at an expired-access verdict and decided to
+    # let the guest in anyway. Never defaulted true: the point is that somebody chose.
+    override: bool = False
+    override_reason: str = Field(default="", max_length=200)
 
 
 class ScanDenyIn(ApiModel):
@@ -3091,17 +3203,45 @@ async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
     if ends and now_iso > ends:
         return {"valid": False, "reason": "EVENT ENDED", "ticket": t, "event": ev}
 
+    # Past this tier's cut-off. Deliberately NOT an automatic refusal: the guest is
+    # standing there holding a ticket they paid for, and a late arrival is a judgement
+    # call, not a rule. The door is shown the situation and decides; either outcome is
+    # recorded against the person who made it.
+    wave = next((w for w in ev.get("waves", []) if w.get("wave_id") == t.get("wave_id")), {})
+    access_until = wave.get("access_until")
+    if access_until and now_iso > access_until and not body.override:
+        return {
+            "valid": False,
+            "needs_override": True,
+            "reason": "ACCESS EXPIRED",
+            "access_until": access_until,
+            "wave_name": wave.get("name", ""),
+            "ticket": t,
+            "event": ev,
+        }
+
     # first-scan-wins
+    admit = {"status": "used", "scanned_at": now_iso, "scanned_by": user["user_id"]}
+    if body.override:
+        # Kept on the ticket, not only in the audit log, so the record travels with the
+        # thing it describes when tickets are exported for a fiscal return.
+        admit["override_by"] = user["user_id"]
+        admit["override_at"] = now_iso
+        admit["override_reason"] = body.override_reason.strip() or "admitted after access expiry"
     upd = await db.tickets.update_one(
         {"qr_code": body.qr_code, "status": "issued"},
-        {"$set": {"status": "used", "scanned_at": now_iso, "scanned_by": user["user_id"]}},
+        {"$set": admit},
     )
     if upd.modified_count != 1:
         t2 = await db.tickets.find_one({"qr_code": body.qr_code}, {"_id": 0})
         return {"valid": False, "reason": "ALREADY SCANNED", "ticket": t2, "event": ev}
 
     ticket = await db.tickets.find_one({"qr_code": body.qr_code}, {"_id": 0})
-    return {"valid": True, "ticket": ticket, "event": ev}
+    if body.override:
+        await _audit(user["user_id"], "door_override_admit", "ticket", ticket["ticket_id"],
+                     {"event_id": ticket["event_id"], "access_until": access_until,
+                      "reason": ticket.get("override_reason", "")})
+    return {"valid": True, "ticket": ticket, "event": ev, "overridden": bool(body.override)}
 
 
 @api.post("/scan/deny")
@@ -3113,9 +3253,16 @@ async def deny_ticket(body: ScanDenyIn, user=Depends(require_admin_or_door)):
     the data to someone who walked in. `denied` is terminal — scan_ticket only admits
     `issued`, so a denied guest cannot rescan their way back in.
 
-    Only `used` -> `denied`, because the button that calls this appears on a valid
-    verdict and a valid verdict has just marked the ticket used. Same conditional-write
-    shape as the scan itself, so two doors pressing at once resolve to one decision.
+    `used` -> `denied` covers the original case: the button appears on a valid verdict,
+    and a valid verdict has just marked the ticket used.
+
+    `issued` -> `denied` covers the other one. A ticket past its tier's access cut-off is
+    handed back to the door as a decision rather than admitted, so at the moment it is
+    rejected it has never been marked used — and without this it could not be recorded as
+    refused either, which is the gap that made the whole expired-access flow pointless.
+
+    Same conditional-write shape as the scan itself, so two doors pressing at once
+    resolve to one decision.
     """
     t = await db.tickets.find_one({"qr_code": body.qr_code}, {"_id": 0})
     if not t:
@@ -3128,7 +3275,7 @@ async def deny_ticket(body: ScanDenyIn, user=Depends(require_admin_or_door)):
 
     now_iso = now_utc().isoformat()
     upd = await db.tickets.update_one(
-        {"qr_code": body.qr_code, "status": "used"},
+        {"qr_code": body.qr_code, "status": {"$in": ["used", "issued"]}},
         {"$set": {
             "status": "denied",
             "denied_at": now_iso,
@@ -3161,28 +3308,88 @@ def _created_range(date_from: Optional[str], date_to: Optional[str]) -> dict:
     return {"created_at": rng} if rng else {}
 
 
+def _csv_param(value: Optional[str]) -> List[str]:
+    """A repeatable filter arrives as one comma-separated value.
+
+    Chosen over repeated `?status=a&status=b` because these query strings are also built
+    by hand when someone reproduces a figure, and one readable parameter beats four.
+    A single value still parses to a list of one, so every caller that predates
+    multi-select keeps working unchanged.
+    """
+    if not value:
+        return []
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def _ticket_status_filter(status: Optional[str]) -> dict:
+    """Turn one or more ticket statuses into a query fragment.
+
+    `denied` and `cancelled` match on their timestamps rather than the status field, for
+    the same reason /admin/tickets does it: both end at `refunded` once the money goes
+    back, so matching the current status would hide every settled case. Shared here so
+    the stats cards, the CSV and the fiscal summary all mean the same thing by a word.
+
+    Several statuses are an OR, which is the only reading that makes sense of a filter
+    row: ticking `issued` and `used` asks for tickets that are either, not tickets that
+    are somehow both.
+    """
+    wanted = _csv_param(status)
+    if not wanted:
+        return {}
+
+    unknown = [s for s in wanted if s not in TICKET_STATUSES]
+    if unknown:
+        raise HTTPException(400, f"Unknown status. Expected one of: {', '.join(TICKET_STATUSES)}")
+
+    clauses = []
+    plain = []
+    for s in wanted:
+        field = _TICKET_HISTORY_FIELDS.get(s)
+        if field:
+            clauses.append({field: {"$exists": True}})
+        else:
+            plain.append(s)
+    if plain:
+        clauses.append({"status": {"$in": plain}})
+
+    if len(clauses) == 1:
+        return clauses[0]
+    # $or rather than merging keys: a timestamp clause and a status clause on the same
+    # document would otherwise AND together and match nothing.
+    return {"$or": clauses}
+
+
+def _event_filter(event_id: Optional[str]) -> dict:
+    ids = _csv_param(event_id)
+    if not ids:
+        return {}
+    return {"event_id": ids[0] if len(ids) == 1 else {"$in": ids}}
+
+
 @api.get("/admin/stats")
 async def admin_stats(
     event_id: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    status: Optional[str] = None,
     user=Depends(require_admin),
 ):
     # Same scope applied to every metric so the cards stay mutually consistent.
-    scope = _created_range(date_from, date_to)
-    if event_id:
-        scope["event_id"] = event_id
+    scope = {**_created_range(date_from, date_to), **_event_filter(event_id)}
+    # Ticket-only: an order has its own statuses, and narrowing orders by a TICKET status
+    # would silently answer a different question than the one on screen.
+    ticket_scope = {**scope, **_ticket_status_filter(status)}
 
     total_orders = await db.reservations.count_documents({**scope, "status": "paid"})
-    total_tickets = await db.tickets.count_documents(scope)
-    scanned = await db.tickets.count_documents({**scope, "status": "used"})
+    total_tickets = await db.tickets.count_documents(ticket_scope)
+    scanned = await db.tickets.count_documents({**ticket_scope, "status": "used"})
     revenue_docs = await db.reservations.find({**scope, "status": "paid"}, {"_id": 0, "total_ron": 1}).to_list(5000)
     revenue = sum(r["total_ron"] for r in revenue_docs)
     # Unfiltered this is the catalogue size. Once any filter is on, counting the
     # whole catalogue (or events *scheduled* in the window, which reads as 0 for a
     # backward-looking range) would be the odd one out among four sales metrics —
     # so it becomes "how many events actually sold in this slice".
-    if event_id or date_from or date_to:
+    if event_id or date_from or date_to or status:
         events = len(await db.reservations.distinct("event_id", {**scope, "status": "paid"}))
     else:
         events = await db.events.count_documents({})
@@ -3212,6 +3419,9 @@ async def admin_create_event(body: EventIn, user=Depends(require_admin)):
     e["waves"] = waves
     e["created_at"] = now_utc().isoformat()
     await db.events.insert_one(e)
+    # Assigned here rather than at first sale so the code is visible in the admin before
+    # anything is sold, and stays put if the title is edited afterwards.
+    e["event_code"] = await ensure_event_code(e)
     return {**{k: v for k, v in e.items() if k != "_id"}}
 
 
@@ -3238,7 +3448,7 @@ async def admin_update_event(event_id: str, body: EventPatchIn, user=Depends(req
         patch.pop("waves", None)
     else:
         # Dumped from the models rather than taken from `patch`, so wave defaults (`tier`,
-        # `access_from`) materialise instead of vanishing under `exclude_unset`.
+        # `access_until`) materialise instead of vanishing under `exclude_unset`.
         existing = await db.events.find_one({"event_id": event_id}, {"_id": 0})
         by_id = {w["wave_id"]: w for w in (existing.get("waves", []) if existing else [])}
         new_waves = []
@@ -3612,6 +3822,145 @@ async def admin_list_tickets(
             "event": events.get(t["event_id"], {}),
             "buyer": users.get(t["user_id"], {}),
         } for t in tickets],
+    }
+
+
+# ---------- Transactions: what gets declared ----------
+#
+# Two views of the same rows, both filtered exactly like the stats screen so a number
+# checked there can be found here.
+#
+#   the CSV      — one line per ticket, for handing over or importing.
+#   the summary  — tickets x price per tier, and the serial range each tier occupies.
+#
+# The serial range is the reason serials are allocated per event and per type: a tier
+# whose numbers run 0001-0150 unbroken is a claim an auditor can verify by counting.
+
+
+async def _fiscal_tickets(event_id, date_from, date_to, status):
+    """The ticket rows a fiscal view is built from, plus the events they belong to."""
+    q = {**_created_range(date_from, date_to), **_ticket_status_filter(status),
+         **_event_filter(event_id)}
+    tickets = await db.tickets.find(q, {"_id": 0}).sort("created_at", 1).to_list(50000)
+    events = {e["event_id"]: e for e in await db.events.find(
+        {"event_id": {"$in": list({t["event_id"] for t in tickets})}},
+        {"_id": 0, "event_id": 1, "title": 1, "event_code": 1, "starts_at": 1, "waves": 1},
+    ).to_list(500)}
+    return tickets, events
+
+
+def _wave_of(event: dict, wave_id: str) -> dict:
+    return next((w for w in (event or {}).get("waves", []) if w.get("wave_id") == wave_id), {})
+
+
+def _csv_safe(value) -> str:
+    """Neutralize spreadsheet formula injection. A cell opening with =, +, - or @ is
+    executed on open by Excel and Sheets, and these rows carry authored text."""
+    s = "" if value is None else str(value)
+    return "'" + s if s[:1] in ("=", "+", "-", "@") else s
+
+
+@api.get("/admin/transactions.csv")
+async def admin_transactions_csv(
+    event_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    status: Optional[str] = None,
+    user=Depends(require_admin),
+):
+    """One row per ticket, for declaring sold tickets."""
+    from fastapi.responses import PlainTextResponse
+
+    tickets, events = await _fiscal_tickets(event_id, date_from, date_to, status)
+    buyers = {u["user_id"]: u for u in await db.users.find(
+        {"user_id": {"$in": list({t["user_id"] for t in tickets})}},
+        {"_id": 0, "user_id": 1, "email": 1}).to_list(20000)}
+
+    buf = io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    w.writerow(["serial", "event_code", "event", "event_starts_at", "ticket_type",
+                "tier", "price_ron", "status", "issued_at", "scanned_at", "buyer_email",
+                "reservation_id"])
+    for t in tickets:
+        ev = events.get(t["event_id"], {})
+        wave = _wave_of(ev, t.get("wave_id"))
+        w.writerow([
+            _csv_safe(t.get("serial", "")),
+            _csv_safe(t.get("event_code") or ev.get("event_code", "")),
+            _csv_safe(ev.get("title", "")),
+            ev.get("starts_at", ""),
+            _csv_safe(t.get("wave_name") or wave.get("name", "")),
+            _csv_safe(t.get("tier") or wave.get("tier", "")),
+            f"{float(t.get('price_ron') or 0):.2f}",
+            t.get("status", ""),
+            t.get("created_at", ""),
+            t.get("scanned_at") or "",
+            _csv_safe(buyers.get(t["user_id"], {}).get("email", "")),
+            _csv_safe(t.get("reservation_id", "")),
+        ])
+    return PlainTextResponse(
+        buf.getvalue(),
+        headers={"Content-Disposition": "attachment; filename=transactions.csv"},
+    )
+
+
+@api.get("/admin/transactions/summary")
+async def admin_transactions_summary(
+    event_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    status: Optional[str] = None,
+    user=Depends(require_admin),
+):
+    """Tickets x price per tier, and the serial range each tier occupies.
+
+    Grouped by (event, ticket type, PRICE) rather than by tier alone. A tier whose price
+    changed mid-sale would otherwise report one line whose count times whose price equals
+    nothing that was ever charged — and a total nobody can reconcile is worse than no
+    total. Each line multiplies out exactly.
+    """
+    tickets, events = await _fiscal_tickets(event_id, date_from, date_to, status)
+
+    groups = {}
+    for t in tickets:
+        ev = events.get(t["event_id"], {})
+        wave = _wave_of(ev, t.get("wave_id"))
+        price = round(float(t.get("price_ron") or 0), 2)
+        key = (t["event_id"], t.get("type_code") or "", price)
+        g = groups.setdefault(key, {
+            "event_id": t["event_id"],
+            "event": ev.get("title", ""),
+            "event_code": t.get("event_code") or ev.get("event_code", ""),
+            "type_code": t.get("type_code") or "",
+            "ticket_type": t.get("wave_name") or wave.get("name", ""),
+            "tier": t.get("tier") or wave.get("tier", ""),
+            "unit_price_ron": price,
+            "tickets_sold": 0,
+            "serials": [],
+        })
+        g["tickets_sold"] += 1
+        if t.get("serial"):
+            g["serials"].append(t["serial"])
+
+    lines = []
+    for g in groups.values():
+        serials = sorted(g.pop("serials"))
+        g["serial_first"] = serials[0] if serials else ""
+        g["serial_last"] = serials[-1] if serials else ""
+        # Tickets issued before serials existed have none, and saying so is better than
+        # printing a range that silently covers fewer tickets than the count beside it.
+        g["serials_present"] = len(serials)
+        g["total_ron"] = round(g["tickets_sold"] * g["unit_price_ron"], 2)
+        lines.append(g)
+
+    lines.sort(key=lambda l: (l["event"], l["type_code"], l["unit_price_ron"]))
+    return {
+        "filters": {"event_id": event_id, "date_from": date_from, "date_to": date_to, "status": status},
+        "generated_at": now_utc().isoformat(),
+        "lines": lines,
+        "tickets_sold": sum(l["tickets_sold"] for l in lines),
+        "total_ron": round(sum(l["total_ron"] for l in lines), 2),
+        "serials_missing": sum(l["tickets_sold"] - l["serials_present"] for l in lines),
     }
 
 
@@ -4429,7 +4778,7 @@ async def security_headers(request: Request, call_next):
 # 6: custom_fonts gained its unique (family, weight, style) index — without the bump an
 #    already-initialised database never runs init_indexes again and the upload route's
 #    replace-on-conflict guarantee would rest on nothing.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 async def init_app():
@@ -4527,6 +4876,11 @@ async def init_indexes():
         await db.gallery.create_index([("album_id", 1), ("sort_order", 1)])
         # Albums. The slug is the public address of an album page, so uniqueness is
         # enforced by the database and not only by _unique_album_slug.
+        # A fiscal serial that repeats is unfixable after the fact — the tickets are out.
+        # The unique index is the backstop behind the atomic counter in next_serial.
+        await db.tickets.create_index("serial", unique=True, partialFilterExpression={"serial": {"$type": "string"}})
+        await db.tickets.create_index([("event_id", 1), ("type_code", 1)])
+        await db.events.create_index("event_code", unique=True, partialFilterExpression={"event_code": {"$type": "string"}})
         await db.albums.create_index("album_id", unique=True)
         await db.albums.create_index("slug", unique=True)
         await db.albums.create_index([("event_id", 1), ("sort_order", 1)])
@@ -4552,6 +4906,11 @@ async def init_indexes():
         logger.info("Indexes ensured")
     except Exception:
         logger.exception("init_indexes failed")
+
+    try:
+        await migrate_access_until()
+    except Exception:
+        logger.exception("migrate_access_until failed")
 
     try:
         # Order matters: ordering is assigned per album, so the albums have to exist and
@@ -4623,6 +4982,27 @@ async def migrate_session_token_hashes():
             dropped += 1
     if migrated or dropped:
         logger.info("Session tokens hashed at rest: %d migrated, %d dropped", migrated, dropped)
+
+
+async def migrate_access_until():
+    """Rename the wave field `access_from` to `access_until`.
+
+    The old field stored the moment a tier's holders could START entering, and nothing
+    anywhere read it — not the door, not the event page, not the ticket. It is now the
+    opposite end of the window, `access_until`, and the door does read it.
+
+    Because the old value was never enforced, carrying it across would silently turn a
+    "doors open for VIPs at 21:00" into "VIPs are refused after 21:00" — the exact
+    inversion of what whoever typed it meant. So the key is dropped rather than renamed,
+    and the field starts empty for every existing wave. An empty cut-off is no cut-off,
+    which is precisely how these events have always behaved.
+    """
+    result = await db.events.update_many(
+        {"waves.access_from": {"$exists": True}},
+        {"$unset": {"waves.$[].access_from": ""}},
+    )
+    if result.modified_count:
+        logger.info("Dropped the unenforced access_from from %d event(s)", result.modified_count)
 
 
 async def migrate_gallery_albums():

@@ -50,7 +50,7 @@ def _make_event(max_per_user: int = 4, wave_capacity: int = 100) -> dict:
             "wave_id": wave_id, "name": "GENERAL", "price_ron": 100.0,
             "capacity": wave_capacity, "available": wave_capacity,
             "starts_at": _iso(days=-1), "ends_at": _iso(days=30),
-            "tier": "general", "access_from": None,
+            "tier": "general", "access_until": None,
         }],
         "created_at": _iso(),
     }

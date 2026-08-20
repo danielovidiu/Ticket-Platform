@@ -83,6 +83,8 @@ admin  POST   /api/admin/special-links
 admin  DELETE /api/admin/special-links/{link_id}
 admin  GET    /api/admin/stats
 admin  GET    /api/admin/tickets
+admin  GET    /api/admin/transactions.csv
+admin  GET    /api/admin/transactions/summary
 admin  POST   /api/admin/tickets/{ticket_id}/refund
 editor POST   /api/admin/uploads
 admin  GET    /api/admin/users

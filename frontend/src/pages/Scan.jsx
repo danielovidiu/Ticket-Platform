@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { http } from "../api";
 import { useAuth, startLogin } from "../auth";
-import { Check, X, Ban, Camera, Zap, ZapOff } from "lucide-react";
+import { Check, X, Ban, Camera, Zap, ZapOff, Clock } from "lucide-react";
 import { useOfflineScanQueue, useQrCamera } from "../hooks/useScanner";
 
 export default function Scan() {
@@ -50,6 +50,29 @@ export default function Scan() {
    * the reason in place — a door decision that half-worked must say so on the screen
    * someone is already looking at.
    */
+  /**
+   * Let in a guest whose ticket is past its tier's access cut-off.
+   *
+   * The server hands back `needs_override` instead of a verdict for exactly this case:
+   * the guest paid, they are late, and that is a judgement somebody at the door makes
+   * rather than a rule the software applies. Sending the same scan again with
+   * `override` records who made the call.
+   */
+  const admitAnyway = async () => {
+    if (!navigator.onLine) return { error: "NO CONNECTION — CANNOT OVERRIDE" };
+    try {
+      const { data } = await http.post("/scan", {
+        qr_code: result?.ticket?.qr_code,
+        override: true,
+        override_reason: "admitted after access expiry",
+      });
+      setResult(data);
+      return {};
+    } catch (e) {
+      return { error: e.response?.data?.detail || "ERROR" };
+    }
+  };
+
   const deny = async (reason) => {
     // Scans queue offline; denials deliberately do not. A denial that silently vanished
     // into a queue would tell staff the person was denied when they were not, and the
@@ -154,7 +177,7 @@ export default function Scan() {
       {/* Outside the space-y-6 column on purpose: that utility puts a top margin on every
           child after the first, and a margin still displaces a position:fixed element —
           it sat 24px low and hung off the bottom of the screen. */}
-      {result && <ScanResult result={result} onNext={nextTicket} onDeny={deny} />}
+      {result && <ScanResult result={result} onNext={nextTicket} onDeny={deny} onAdmit={admitAnyway} />}
     </div>
   );
 }
@@ -171,7 +194,7 @@ export default function Scan() {
 // Exported for its tests. The rest of this page needs a camera, a session and a network;
 // the verdict overlay needs none of those, and it is the part where a wrong render costs
 // somebody their entry — so it is the part worth testing directly.
-export function ScanResult({ result, onNext, onDeny }) {
+export function ScanResult({ result, onNext, onDeny, onAdmit }) {
   // Asking for a reason inline rather than through confirm() + prompt(): two native
   // dialogs in a row on a phone, at a door, in the dark, is the worst version of this.
   const [denying, setDenying] = useState(false);
@@ -179,10 +202,21 @@ export function ScanResult({ result, onNext, onDeny }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
+  const admit = async () => {
+    setBusy(true);
+    setError(null);
+    const { error: err } = await onAdmit();
+    setBusy(false);
+    if (err) setError(err);
+  };
+
   // A denial is not a bad ticket, so it gets its own verdict rather than reusing INVALID
   // — staff need to see that the decision they just made is the one that landed.
+  // An expired ticket is neither valid nor invalid until someone decides, so it gets a
+  // third colour rather than borrowing the red that means "turn this person away".
   const tone = result.denied ? "bg-ink text-page"
     : result.valid ? "bg-ok text-page"
+    : result.needs_override ? "bg-ink-2 text-page"
     : "bg-brand text-ink";
 
   const confirmDeny = async () => {
@@ -212,6 +246,15 @@ export function ScanResult({ result, onNext, onDeny }) {
           <div className="font-display text-5xl sm:text-7xl uppercase font-black tracking-tighter mt-4">VALID</div>
           {result.event && <div className="font-mono-x uppercase mt-2 break-words max-w-full">{result.event.title}</div>}
           {result.offline && <div className="font-mono-x text-xs mt-2 opacity-70">QUEUED — WILL SYNC WHEN ONLINE</div>}
+        </>
+      ) : result.needs_override ? (
+        <>
+          <Clock size={96} className="shrink-0" />
+          <div className="font-display text-5xl sm:text-7xl uppercase font-black tracking-tighter mt-4">LATE</div>
+          <div className="font-mono-x uppercase mt-2 text-lg break-words max-w-full">
+            {result.wave_name || "This tier"} closed at {new Date(result.access_until).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+          </div>
+          <div className="font-mono-x text-xs mt-2 opacity-80">TICKET IS OTHERWISE VALID — YOUR CALL</div>
         </>
       ) : (
         <>
@@ -243,6 +286,29 @@ export function ScanResult({ result, onNext, onDeny }) {
                   className="w-full px-6 py-3 mt-2 font-mono-x uppercase tracking-[0.2em] text-xs opacity-80">
             KEEP ADMITTED
           </button>
+        </div>
+      ) : result.needs_override ? (
+        // The whole point of this verdict is that the software will not choose. Two
+        // equally weighted buttons, no default, and no NEXT TICKET escape — walking away
+        // from the screen would leave the guest neither admitted nor recorded as refused.
+        <div className="w-full max-w-sm mt-10" data-testid="override-panel">
+          {error && (
+            <div data-testid="override-error"
+                 className="mb-3 border border-current/40 p-2 font-mono-x text-[11px] uppercase tracking-[0.15em]">
+              {error}
+            </div>
+          )}
+          <button onClick={admit} disabled={busy} data-testid="override-admit"
+                  className="border-2 border-current w-full px-6 py-5 font-mono-x uppercase tracking-[0.2em] text-base font-bold disabled:opacity-50">
+            {busy ? "ADMITTING…" : "ADMIT ANYWAY"}
+          </button>
+          <button onClick={() => setDenying(true)} disabled={busy} data-testid="override-reject"
+                  className="border-2 border-current w-full px-6 py-5 mt-3 font-mono-x uppercase tracking-[0.2em] text-base font-bold disabled:opacity-50">
+            REFUSE ENTRY
+          </button>
+          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] mt-3 opacity-70 text-center">
+            Whichever you choose is recorded against you
+          </div>
         </div>
       ) : (
         <>

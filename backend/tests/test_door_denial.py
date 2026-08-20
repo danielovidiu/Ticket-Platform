@@ -125,15 +125,27 @@ class TestDenyEntry:
         assert second.json()["ok"] is True
         assert _stored(t["qr_code"])["deny_reason"] == "Intoxicated"
 
-    def test_cannot_deny_an_unscanned_ticket(self, door_headers, event):
-        """Denial reverses an admission, so there has to be one."""
+    def test_an_unscanned_ticket_can_be_refused(self, door_headers, event):
+        """Denial no longer requires an admission to reverse.
+
+        It used to: the button only appeared on a valid verdict, and a valid verdict had
+        already marked the ticket `used`. Then tiers gained an access cut-off, and a
+        ticket past it is handed back to the door as a decision rather than admitted — so
+        at the moment it is refused it has never been marked used. Refusing from `issued`
+        is what makes that decision recordable at all; without it the reject half of the
+        prompt would have had nowhere to write.
+        """
         _h, uid, _e = mint_user()
         t = _give_ticket(event["event_id"], uid, status="issued")
 
-        r = _deny(door_headers, t["qr_code"])
-        assert r.json()["ok"] is False
-        assert "ISSUED" in r.json()["reason"]
-        assert _stored(t["qr_code"])["status"] == "issued"
+        r = _deny(door_headers, t["qr_code"], "Arrived after access closed")
+        assert r.json()["ok"] is True
+        stored = _stored(t["qr_code"])
+        assert stored["status"] == "denied"
+        assert stored["deny_reason"] == "Arrived after access closed"
+        # Still terminal: scan_ticket only admits `issued`, so a refused guest cannot
+        # rescan their way in.
+        assert _scan(door_headers, t["qr_code"]).json()["valid"] is False
 
     def test_cannot_deny_a_refunded_ticket(self, door_headers, event):
         _h, uid, _e = mint_user()

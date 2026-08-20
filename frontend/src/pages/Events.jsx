@@ -40,7 +40,11 @@ export default function Events() {
             </div>
             <div className="col-span-6 md:col-span-2 font-mono-x text-xs text-ink-3 uppercase">{[e.venue, e.city].filter(Boolean).join(", ")}</div>
             <div className="col-span-6 md:col-span-2 font-mono-x text-xs text-right text-ink-2">
-              {tab === "upcoming" ? (e.total_available > 0 ? `${e.total_available} LEFT` : "SOLD OUT") : "ARCHIVED"}
+              {/* Same rule as the event page: sold out and nearly-gone are worth saying,
+                  the exact count is not published. */}
+              {tab === "upcoming"
+                ? (e.total_available <= 0 ? "SOLD OUT" : e.total_available < 10 ? "ONLY A FEW LEFT" : "ON SALE")
+                : "ARCHIVED"}
             </div>
           </Link>
         ))}

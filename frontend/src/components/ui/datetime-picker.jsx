@@ -5,7 +5,16 @@ import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { Calendar } from "./calendar";
 
 /** Button that opens a calendar + time popover; stores/returns an ISO string
- * to match the backend's `starts_at`/`ends_at`/`doors_open_at` fields. */
+ * to match the backend's `starts_at`/`ends_at`/`doors_open_at` fields.
+ *
+ * The popover is sized and layered deliberately. Inside a tier card these pickers sit in
+ * a four-column grid, and the panel was inheriting that narrow column: the calendar grid
+ * was clipped and the time input sat below the fold of the popover, so setting a tier's
+ * sale window meant scrolling inside a box most people did not realise scrolled. It now
+ * states its own width, floats above the form rather than inside its stacking context,
+ * and shows the chosen value in full at the top so the time is readable without hunting
+ * for the input that set it.
+ */
 export function DateTimePicker({ value, onChange, placeholder = "Pick date & time" }) {
   const date = value ? new Date(value) : undefined;
   const [open, setOpen] = useState(false);
@@ -27,17 +36,39 @@ export function DateTimePicker({ value, onChange, placeholder = "Pick date & tim
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type="button" className="input-x w-full flex items-center justify-between gap-2 text-left min-w-0">
-          <span className={`truncate ${date ? "" : "text-ink-4"}`}>
-            {date ? format(date, "d MMM yyyy, HH:mm") : placeholder}
+        <button type="button" data-testid="datetime-trigger"
+                className="input-x w-full flex items-center justify-between gap-2 text-left min-w-0">
+          {/* Two lines rather than one truncated one: in a narrow column the single line
+              cut the time off, which is the half most often being checked. */}
+          <span className={`min-w-0 ${date ? "" : "text-ink-4"}`}>
+            {date ? (
+              <>
+                <span className="block truncate">{format(date, "d MMM yyyy")}</span>
+                <span className="block font-mono-x text-[10px] tracking-[0.2em] text-ink-3">{format(date, "HH:mm")}</span>
+              </>
+            ) : placeholder}
           </span>
           <CalendarIcon size={14} className="text-ink-4 shrink-0" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-auto p-0 bg-surface border-ink/20 text-ink">
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        collisionPadding={12}
+        data-testid="datetime-popover"
+        // z-50 keeps it over the event form's own overlay; the explicit width stops the
+        // calendar being squeezed into the grid column the trigger happens to sit in.
+        className="z-50 w-[19rem] max-w-[calc(100vw-1.5rem)] p-0 bg-surface border border-ink/20 text-ink shadow-2xl"
+      >
+        <div className="px-3 py-2 border-b border-ink/10 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-3"
+             data-testid="datetime-readout">
+          {date ? format(date, "EEE d MMM yyyy · HH:mm") : "No date set"}
+        </div>
         <Calendar mode="single" selected={date} onSelect={setDatePart} initialFocus />
-        <div className="p-3 border-t border-ink/10">
-          <input type="time" value={date ? format(date, "HH:mm") : ""} onChange={(e) => setTimePart(e.target.value)} className="input-x w-full" />
+        <div className="p-3 border-t border-ink/10 flex items-center gap-2">
+          <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 shrink-0">Time</span>
+          <input type="time" value={date ? format(date, "HH:mm") : ""} data-testid="datetime-time"
+                 onChange={(e) => setTimePart(e.target.value)} className="input-x flex-1 !py-1.5" />
         </div>
       </PopoverContent>
     </Popover>

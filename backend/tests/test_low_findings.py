@@ -41,7 +41,7 @@ def _event(starts_in_days=7, capacity=10):
         "waves": [{"wave_id": wave_id, "name": "GENERAL", "price_ron": 100.0,
                    "capacity": capacity, "available": capacity - 2,
                    "starts_at": _iso(days=-1), "ends_at": _iso(days=30),
-                   "tier": "general", "access_from": None}],
+                   "tier": "general", "access_until": None}],
     })
     return event_id, wave_id
 
@@ -218,7 +218,7 @@ class TestRefundOnlyGivesBackWhatWasHeld:
             "waves": [{"wave_id": wave_id, "name": "GENERAL", "price_ron": 100.0,
                        "capacity": capacity, "available": available,
                        "starts_at": _iso(days=-1), "ends_at": _iso(days=30),
-                       "tier": "general", "access_from": None}],
+                       "tier": "general", "access_until": None}],
         })
         return event_id, wave_id
 
@@ -291,7 +291,7 @@ class TestAnOverCountDoesNotSurviveAnEdit:
             "waves": [{"wave_id": wave_id, "name": "GENERAL", "price_ron": 100.0,
                        "capacity": capacity, "available": available,
                        "starts_at": _iso(days=-1), "ends_at": _iso(days=30),
-                       "tier": "general", "access_from": None}],
+                       "tier": "general", "access_until": None}],
         })
         return event_id, wave_id
 
