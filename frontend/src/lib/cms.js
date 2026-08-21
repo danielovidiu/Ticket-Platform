@@ -21,9 +21,17 @@ const NON_GOOGLE = new Set(["Clash Display", "Manrope", "IBM Plex Mono"]);
  * The half of a palette that has to change when the page flips, per mode.
  *
  * Switching mode in the CMS rewrites exactly these and leaves `accent` and `accentFg`
- * alone: those are the brand pair, and they survive a flip because the accent is always
- * used as a fill with accentFg printed on it, so its legibility never depended on the
- * page colour.
+ * alone, so that a customer who has set their own brand colour still has it after a
+ * flip. That is a deliberate trade, NOT a safety property — and this comment used to
+ * claim otherwise, on the grounds that the accent "is always used as a fill with
+ * accentFg printed on it". It is not: `text-brand` resolves to --accent and is used as
+ * a text colour in around forty places, including order and ticket statuses and upload
+ * errors. An accent tuned for a dark page can therefore land below AA on a light one —
+ * the stock #FF3333 reads 12.8:1 on #050505 and 3.64:1 on #FFFFFF.
+ *
+ * Two things cover that rather than clobbering the customer's colour here: the Light
+ * preset in themePresets.js ships a red that passes on white, and the theme editor
+ * warns live on any pairing under AA (see lib/contrast.js).
  *
  * `success` is here rather than with the brand colours because it is drawn AS text. The
  * default acid yellow measures 1.13:1 on white — invisible — so a light theme needs its
