@@ -12,7 +12,7 @@
  * which palette they are looking at, so a false positive is a lie about the state of
  * the document.
  */
-import { THEME_PRESETS, presetIdFor, presetPatch } from "./themePresets";
+import { THEME_PRESETS, presetIdFor, presetPatch, themeChoicePatch } from "./themePresets";
 import { luminance, contrastRatio as contrast } from "./contrast";
 
 describe.each(THEME_PRESETS)("$label", ({ theme }) => {
@@ -83,7 +83,7 @@ describe("presetIdFor", () => {
   });
 
   test("flipping mode alone does not leave you on the preset", () => {
-    // setMode keeps the accent and swaps neutrals, which is neither preset.
+    // A mode choice keeps the accent and swaps neutrals, which is neither preset.
     expect(presetIdFor({ ...presetPatch("dark"), mode: "light" })).toBeNull();
   });
 
@@ -108,5 +108,55 @@ describe("presetPatch", () => {
     const patch = presetPatch("supersanity");
     expect(Object.keys(patch).sort()).toEqual(
       ["button_style", "colors", "fonts", "mode", "radius", "spacing"]);
+  });
+});
+
+describe("themeChoicePatch", () => {
+  /* The dropdown holds two kinds of entry and they behave differently on purpose.
+     This is the branch that decides which, so it is the thing worth pinning. */
+
+  test("Dark and Light keep the customer's own accent and fonts", () => {
+    // The whole reason mode entries do not replace the document: a whitelabel
+    // deployment must not be repainted by someone toggling light and dark.
+    const mine = { ...presetPatch("dark").colors, accent: "#00E5FF", accentFg: "#001014" };
+    const patch = themeChoicePatch("light", mine);
+    expect(patch.colors.accent).toBe("#00E5FF");
+    expect(patch.colors.accentFg).toBe("#001014");
+    expect(patch.fonts).toBeUndefined();
+  });
+
+  test("Dark and Light still swap the neutrals", () => {
+    const patch = themeChoicePatch("light", presetPatch("dark").colors);
+    expect(patch.colors.bg).toBe("#FFFFFF");
+    expect(patch.colors.text).toBe("#09090B");
+    expect(patch.mode).toBe("light");
+  });
+
+  test("Supersanity replaces the palette, fonts and spacing", () => {
+    const mine = { ...presetPatch("dark").colors, accent: "#00E5FF" };
+    const patch = themeChoicePatch("supersanity", mine);
+    expect(patch.colors.accent).toBe("#FF1F6C");
+    expect(patch.colors.bg).toBe("#0D0C0A");
+    expect(patch.fonts.display).toBe("Archivo");
+    expect(patch.spacing.sectionY).toBe("7rem");
+  });
+
+  test("Supersanity stores its own id as the mode, so the dropdown reads it back", () => {
+    expect(themeChoicePatch("supersanity", {}).mode).toBe("supersanity");
+  });
+
+  test("that mode is treated as dark by everything downstream", () => {
+    // applyTheme: `mode === "light" ? "light" : "dark"`. The backend asks the same
+    // question. Both must land on dark for a theme that is dark.
+    const mode = themeChoicePatch("supersanity", {}).mode;
+    expect(mode).not.toBe("light");
+  });
+
+  test("an unknown id patches nothing rather than half-applying", () => {
+    expect(themeChoicePatch("berghain", {})).toBeNull();
+  });
+
+  test("survives an empty starting palette", () => {
+    expect(themeChoicePatch("dark", undefined).colors.bg).toBe("#050505");
   });
 });

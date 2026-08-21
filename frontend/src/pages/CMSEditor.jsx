@@ -4,8 +4,8 @@ import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home } from "lucide-react";
 import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize } from "../components/blocks";
-import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme, MODE_NEUTRALS } from "../lib/cms";
-import { THEME_PRESETS, presetIdFor, presetPatch } from "../lib/themePresets";
+import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
+import { THEME_PRESETS, presetIdFor, themeChoicePatch } from "../lib/themePresets";
 import { failingPairs, AA_TEXT } from "../lib/contrast";
 import { applyCustomFonts } from "../lib/fonts";
 import { FormatToolbar } from "../lib/richText";
@@ -1085,59 +1085,39 @@ function PageMetaEditor({ page, onChange }) {
   );
 }
 
-function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsChanged }) {
+/* Exported for its test. The theme dropdown is the one control an editor uses to pick
+   a whole look, and it is worth asserting against the rendered <select> rather than
+   against the data behind it. */
+export function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsChanged }) {
   const setColor = (k, v) => onChange({ colors: { ...(theme.colors || {}), [k]: v } });
-  /** Mode is not a third state the colours are read through — it rewrites them.
-   *
-   * The alternative, a `light` flag that components branch on, means every colour needs
-   * two values and every new component has to remember to handle both. Swapping the five
-   * neutrals instead keeps one palette, and spreading the existing colours first is what
-   * carries the artist's accent, accent text and success colour across the flip. */
-  const setMode = (mode) => {
-    const n = MODE_NEUTRALS[mode] || MODE_NEUTRALS.dark;
-    onChange({ mode, colors: { ...(theme.colors || {}), ...n } });
-  };
   const setFont = async (k, v) => {
     await onChange({ fonts: { ...(theme.fonts || {}), [k]: v } });
     // `in_use` is derived from the theme server-side, so picking a font is exactly the
     // moment it goes stale — and it is the flag that warns before a delete. Refetch.
     onFontsChanged().catch(() => {});
   };
-  /** A preset replaces the palette wholesale, so it goes through onChange once rather
-   *  than as a run of setColor calls — one autosave, one undo, one live repaint. */
-  const activePreset = presetIdFor(theme);
+  /** Choosing a theme.
+   *
+   * Dark and Light rewrite the five neutrals and keep the accent and fonts, which is
+   * what they have always done: the alternative, a `light` flag components branch on,
+   * means every colour needs two values and every new component has to remember both.
+   * A named theme like Supersanity replaces the document instead. themeChoicePatch
+   * owns that branch; this just applies whatever it returns, in one onChange so the
+   * change is one autosave, one undo and one live repaint. */
+  const activeTheme = theme.mode || "dark";
+  const matchesExactly = presetIdFor(theme);
   const contrastWarnings = failingPairs(theme.colors);
-  const applyPreset = async (id) => {
-    const patch = presetPatch(id);
+  const chooseTheme = async (id) => {
+    const patch = themeChoicePatch(id, theme.colors);
     if (!patch) return;
     await onChange(patch);
     // Same reason as setFont: `in_use` is derived from the theme server-side, and a
-    // preset can swap all three families at once.
+    // named theme can swap all three families at once.
     onFontsChanged().catch(() => {});
   };
   return (
     <div className="space-y-4">
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Preset</div>
-      <div className="grid grid-cols-3 gap-1" data-testid="theme-presets">
-        {THEME_PRESETS.map((p) => (
-          <button key={p.id} onClick={() => applyPreset(p.id)} data-testid={`preset-${p.id}`}
-                  aria-pressed={activePreset === p.id}
-                  title={p.note}
-                  className={`py-2 px-1 text-[10px] uppercase tracking-[0.15em] font-mono-x border transition-colors ${
-                    activePreset === p.id
-                      ? "bg-ink text-page border-ink"
-                      : "border-ink/20 text-ink-3 hover:border-ink/50 hover:text-ink"}`}>
-            {p.label}
-          </button>
-        ))}
-      </div>
-      <div className="font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
-        {activePreset
-          ? THEME_PRESETS.find((p) => p.id === activePreset).note
-          : "Custom — edited away from every preset"}
-      </div>
-
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Colors</div>
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Colors</div>
       {[["bg", "Background"], ["surface", "Surface"], ["text", "Text"], ["textMuted", "Text muted"], ["accent", "Accent"], ["accentFg", "Accent text"], ["success", "Success"]].map(([k, label]) => (
         <label key={k} className="block">
           <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">{label}</div>
@@ -1183,14 +1163,16 @@ function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsChanged }
         </select>
       </label>
       <label className="block">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Mode</div>
-        <select value={theme.mode || "dark"} data-testid="theme-mode-select"
-                onChange={(e) => setMode(e.target.value)} className="input-x !py-2 !text-sm">
-          <option value="dark">Dark</option>
-          <option value="light">Light</option>
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Theme</div>
+        <select value={activeTheme} data-testid="theme-mode-select"
+                onChange={(e) => chooseTheme(e.target.value)} className="input-x !py-2 !text-sm">
+          {THEME_PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>{p.label}</option>
+          ))}
         </select>
         <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
-          Swaps the neutral colours above · keeps your accent
+          {THEME_PRESETS.find((p) => p.id === activeTheme)?.note}
+          {matchesExactly === null && " · edited"}
         </div>
       </label>
 
