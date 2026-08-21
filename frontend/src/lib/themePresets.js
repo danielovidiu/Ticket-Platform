@@ -1,17 +1,29 @@
 /**
- * Complete theme documents the CMS editor can apply in one click.
+ * The themes offered by the one dropdown in CMS -> Theme, in the order they appear.
  *
- * A preset is not a new axis in the theme model — it is just a saved value for the
- * document that already exists, so applying one is an ordinary edit that autosaves,
- * versions and publishes like any other. Nothing here needs a backend change: the
- * server's `_theme_css` reads the same eight colours, three fonts and two spacing
- * values that `applyTheme` does.
+ * There is deliberately no second control. Dark and Light have always lived in that
+ * select, and Supersanity sits in the same list, because "which theme is this site"
+ * is one question — asking it in two widgets is how an editor ends up with a palette
+ * that half-matches two different things.
  *
- * `mode` stays a separate control. It is the light/dark polarity switch — it rewrites
- * the five neutrals and flips `data-theme` for the handful of effects that are not
- * colours — whereas a preset decides the whole palette including which mode it is in.
- * Picking "Supersanity" therefore sets mode to dark as part of the preset; flipping
- * mode afterwards keeps the accent and lands you on "Custom".
+ * The list holds two kinds of entry, and the difference is what selecting one does:
+ *
+ *   kind: "mode"  Dark and Light. They rewrite the five neutrals and leave the accent
+ *                 and the fonts alone, so a customer who has set their own brand red
+ *                 still has it after switching. This is the long-standing behaviour,
+ *                 and changing it would quietly repaint every whitelabel deployment.
+ *
+ *   kind: "full"  Supersanity. A named, designed theme, so selecting it applies the
+ *                 whole document — palette, fonts and spacing. Picking a theme by name
+ *                 and getting someone else's accent would be the wrong answer.
+ *
+ * `mode` is what the select binds to and what the server stores, so a named theme puts
+ * its own id there. Both readers of that field already cope with a third value:
+ * applyTheme treats anything that is not "light" as dark, and the backend's
+ * `_theme_css` only ever asks whether it equals "light".
+ *
+ * Nothing here needs a backend change — `_theme_css` reads the same eight colours,
+ * three fonts and two spacing values that `applyTheme` does.
  */
 import { MODE_NEUTRALS } from "./cms";
 
@@ -51,7 +63,8 @@ export const THEME_PRESETS = [
   {
     id: "dark",
     label: "Dark",
-    note: "The stock palette. Acid red on near-black.",
+    kind: "mode",
+    note: "Swaps the neutral colours. Keeps your accent and fonts.",
     theme: {
       ...STRUCTURE,
       mode: "dark",
@@ -63,7 +76,8 @@ export const THEME_PRESETS = [
   {
     id: "light",
     label: "Light",
-    note: "The stock palette flipped. Darker red so it still reads on white.",
+    kind: "mode",
+    note: "Swaps the neutral colours. Keeps your accent and fonts.",
     theme: {
       ...STRUCTURE,
       mode: "light",
@@ -75,10 +89,14 @@ export const THEME_PRESETS = [
   {
     id: "supersanity",
     label: "Supersanity",
-    note: "Warm vault black, concrete surfaces, poster pink. One grotesque throughout.",
+    kind: "full",
+    note: "Replaces the whole palette, fonts and spacing.",
     theme: {
       ...STRUCTURE,
-      mode: "dark",
+      /* Its own id, not "dark". This is what the select binds to, and it is how the
+         dropdown still reads "Supersanity" after a reload. Everything downstream
+         treats a non-"light" mode as dark, which is what this is. */
+      mode: "supersanity",
       colors: {
         /* Neither Tresor's pure #000 nor Berghain's neutral #141414: the reference
            posters' blur fields are warm, so the ground carries a little red and
@@ -144,12 +162,30 @@ export function presetIdFor(theme) {
   return match ? match.id : null;
 }
 
-/** The patch that applies a preset. Colours, fonts and spacing are replaced whole
- *  rather than merged: a preset half-overlaid on the previous palette is exactly the
- *  incoherent state the presets exist to avoid. */
+/** The patch that applies a preset in full. Colours, fonts and spacing are replaced
+ *  whole rather than merged: a preset half-overlaid on the previous palette is exactly
+ *  the incoherent state a named theme exists to avoid. */
 export function presetPatch(id) {
   const preset = THEME_PRESETS.find((p) => p.id === id);
   if (!preset) return null;
   const { colors, fonts, spacing, ...rest } = preset.theme;
   return { ...rest, colors: { ...colors }, fonts: { ...fonts }, spacing: { ...spacing } };
+}
+
+/**
+ * The patch for choosing `id` in the theme dropdown, given the palette already there.
+ *
+ * This is where the two kinds diverge, and it lives here rather than in the component
+ * so the branch is testable: a "mode" entry swaps neutrals over whatever the customer
+ * has, a "full" entry replaces the document. Returns null for an id that is not on the
+ * list, so a stale value cannot half-apply.
+ */
+export function themeChoicePatch(id, currentColors) {
+  const preset = THEME_PRESETS.find((p) => p.id === id);
+  if (!preset) return null;
+  if (preset.kind === "full") return presetPatch(id);
+  return {
+    mode: preset.theme.mode,
+    colors: { ...(currentColors || {}), ...MODE_NEUTRALS[preset.theme.mode] },
+  };
 }
