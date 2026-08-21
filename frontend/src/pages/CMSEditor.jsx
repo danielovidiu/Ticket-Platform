@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home } from "lucide-react";
 import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme, MODE_NEUTRALS } from "../lib/cms";
+import { THEME_PRESETS, presetIdFor, presetPatch } from "../lib/themePresets";
+import { failingPairs, AA_TEXT } from "../lib/contrast";
 import { applyCustomFonts } from "../lib/fonts";
 import { FormatToolbar } from "../lib/richText";
 import ImageField from "../components/ImageField";
@@ -1101,9 +1103,41 @@ function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsChanged }
     // moment it goes stale — and it is the flag that warns before a delete. Refetch.
     onFontsChanged().catch(() => {});
   };
+  /** A preset replaces the palette wholesale, so it goes through onChange once rather
+   *  than as a run of setColor calls — one autosave, one undo, one live repaint. */
+  const activePreset = presetIdFor(theme);
+  const contrastWarnings = failingPairs(theme.colors);
+  const applyPreset = async (id) => {
+    const patch = presetPatch(id);
+    if (!patch) return;
+    await onChange(patch);
+    // Same reason as setFont: `in_use` is derived from the theme server-side, and a
+    // preset can swap all three families at once.
+    onFontsChanged().catch(() => {});
+  };
   return (
     <div className="space-y-4">
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Colors</div>
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Preset</div>
+      <div className="grid grid-cols-3 gap-1" data-testid="theme-presets">
+        {THEME_PRESETS.map((p) => (
+          <button key={p.id} onClick={() => applyPreset(p.id)} data-testid={`preset-${p.id}`}
+                  aria-pressed={activePreset === p.id}
+                  title={p.note}
+                  className={`py-2 px-1 text-[10px] uppercase tracking-[0.15em] font-mono-x border transition-colors ${
+                    activePreset === p.id
+                      ? "bg-ink text-page border-ink"
+                      : "border-ink/20 text-ink-3 hover:border-ink/50 hover:text-ink"}`}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <div className="font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
+        {activePreset
+          ? THEME_PRESETS.find((p) => p.id === activePreset).note
+          : "Custom — edited away from every preset"}
+      </div>
+
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Colors</div>
       {[["bg", "Background"], ["surface", "Surface"], ["text", "Text"], ["textMuted", "Text muted"], ["accent", "Accent"], ["accentFg", "Accent text"], ["success", "Success"]].map(([k, label]) => (
         <label key={k} className="block">
           <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">{label}</div>
@@ -1113,6 +1147,19 @@ function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsChanged }
           </div>
         </label>
       ))}
+
+      {/* Mode flips keep the accent so a customer's brand colour survives them, which
+          means a red picked on the dark theme can land below AA on the light one. That
+          is caught here rather than by overwriting their colour. */}
+      {contrastWarnings.length > 0 && (
+        <div data-testid="contrast-warnings"
+             className="border border-brand px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.15em] leading-relaxed">
+          <div className="text-brand mb-1">Below AA ({AA_TEXT}:1)</div>
+          {contrastWarnings.map((w) => (
+            <div key={w.label} className="text-ink-3">{w.label} &middot; {w.ratio.toFixed(2)}:1</div>
+          ))}
+        </div>
+      )}
 
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Fonts</div>
       {[["display", "Display / headings"], ["body", "Body"], ["mono", "Mono / labels"]].map(([k, label]) => (
