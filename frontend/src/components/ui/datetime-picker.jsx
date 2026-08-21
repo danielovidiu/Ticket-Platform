@@ -39,14 +39,16 @@ export function DateTimePicker({ value, onChange, placeholder = "Pick date & tim
         <button type="button" data-testid="datetime-trigger"
                 className="input-x w-full flex items-center justify-between gap-2 text-left min-w-0">
           {/* Two lines rather than one truncated one: in a narrow column the single line
-              cut the time off, which is the half most often being checked. */}
+              cut the time off, which is the half most often being checked.
+              Both lines are always rendered, even with nothing chosen. An empty field
+              used to draw one line and a filled one two, so Starts, Ends and Doors sat
+              side by side at different heights whenever one of them was blank — which
+              Doors usually is. */}
           <span className={`min-w-0 ${date ? "" : "text-ink-4"}`}>
-            {date ? (
-              <>
-                <span className="block truncate">{format(date, "d MMM yyyy")}</span>
-                <span className="block font-mono-x text-[10px] tracking-[0.2em] text-ink-3">{format(date, "HH:mm")}</span>
-              </>
-            ) : placeholder}
+            <span className="block truncate">{date ? format(date, "d MMM yyyy") : placeholder}</span>
+            <span className="block font-mono-x text-[10px] tracking-[0.2em] text-ink-3">
+              {date ? format(date, "HH:mm") : "--:--"}
+            </span>
           </span>
           <CalendarIcon size={14} className="text-ink-4 shrink-0" />
         </button>
@@ -60,10 +62,9 @@ export function DateTimePicker({ value, onChange, placeholder = "Pick date & tim
         // calendar being squeezed into the grid column the trigger happens to sit in.
         className="z-50 w-[19rem] max-w-[calc(100vw-1.5rem)] p-0 bg-surface border border-ink/20 text-ink shadow-2xl"
       >
-        <div className="px-3 py-2 border-b border-ink/10 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-3"
-             data-testid="datetime-readout">
-          {date ? format(date, "EEE d MMM yyyy · HH:mm") : "No date set"}
-        </div>
+        {/* No readout row. It restated "EEE d MMM yyyy · HH:mm" directly above a calendar
+            with that day already highlighted and a time input holding that time, so it
+            was the third copy of the same fact and the only one nobody could act on. */}
         {/* defaultMonth, or the calendar opens on the current month even when the field
             already holds a date — someone checking a sale window set for December was
             shown August and had to page back to see what they came to look at. */}

@@ -35,11 +35,19 @@ function Calendar({
   className,
   classNames,
   showOutsideDays = true,
+  /* Every month renders six week rows, padded with the neighbouring months' days.
+   *
+   * Without it a month spans four rows (February 2026) to six (August 2026), so the
+   * popover changed height as you paged through it and the buttons under the grid
+   * moved out from under the cursor. Paying for two rows of grey filler is the cheaper
+   * side of that trade. Needs showOutsideDays to have anything to pad with. */
+  fixedWeeks = true,
   ...props
 }) {
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
+      fixedWeeks={fixedWeeks}
       className={cn("p-3", className)}
       classNames={{
         // Relative, because v10 renders `nav` as a SIBLING of the month rather than

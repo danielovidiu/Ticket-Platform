@@ -15,6 +15,11 @@ import { Calendar } from "./calendar";
  */
 const JUNE = new Date(2026, 5, 15, 12, 0, 0); // local noon: no date shift from the clock
 
+/* A month spans four week rows (February 2026 starts on a Sunday and has 28 days) to
+   six (August 2026). Left alone, the popover changed height as you paged through it. */
+const FEB = new Date(2026, 1, 15, 12, 0, 0);
+const AUG = new Date(2026, 7, 15, 12, 0, 0);
+
 describe("Calendar", () => {
   it("renders a month grid, seven weekday headers, and both nav buttons", () => {
     const { container } = render(<Calendar mode="single" month={JUNE} onSelect={() => {}} />);
@@ -68,5 +73,35 @@ describe("Calendar", () => {
     const today = container.querySelector("[data-today]");
     expect(today).toBeTruthy();
     expect(today.textContent.trim()).toBe(String(new Date().getDate()));
+  });
+});
+
+describe("month height", () => {
+  const weekRows = (month) => {
+    const { container } = render(<Calendar mode="single" month={month} onSelect={() => {}} />);
+    return container.querySelectorAll("tbody tr").length;
+  };
+
+  it("renders six week rows for a month that only needs four", () => {
+    // February 2026: Sun 1st, 28 days — exactly four weeks of its own.
+    expect(weekRows(FEB)).toBe(6);
+  });
+
+  it("renders six week rows for a month that needs six", () => {
+    expect(weekRows(AUG)).toBe(6);
+  });
+
+  it("gives every month in a year the same number of rows", () => {
+    const counts = new Set(
+      Array.from({ length: 12 }, (_, m) => weekRows(new Date(2026, m, 15, 12, 0, 0)))
+    );
+    expect([...counts]).toEqual([6]);
+  });
+
+  it("can be turned off, for a caller that wants the tight grid", () => {
+    const { container } = render(
+      <Calendar mode="single" month={FEB} fixedWeeks={false} onSelect={() => {}} />
+    );
+    expect(container.querySelectorAll("tbody tr").length).toBeLessThan(6);
   });
 });
