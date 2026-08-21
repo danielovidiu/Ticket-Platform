@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { http, API } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
@@ -339,30 +339,48 @@ function Events() {
  * disagree with it. A tier at zero says SOLD OUT rather than "0 left", because those
  * read very differently at a glance and only one of them is news.
  */
-function TierSales({ waves }) {
+/* Exported for TierSales.test.jsx. Its alignment is structural — one grid, a
+   content-sized count column — and that is worth asserting directly. */
+export function TierSales({ waves }) {
   const tiers = waves || [];
   if (!tiers.length) {
     return <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-5 lg:text-right">No tiers</div>;
   }
+  /* One grid over every tier, not a flex row per tier.
+   *
+   * Each tier used to be its own flex line, so the three columns only lined up by
+   * coincidence — and the count sat in a fixed w-28 that its own content did not fit:
+   * "88/100 · 12 left" is eighteen mono characters at 0.15em tracking, which wrapped
+   * inside the box and pushed "left" onto a second line. That is what made the rows
+   * different heights and the numbers look ragged.
+   *
+   * A single grid gives all rows the same three columns, and an `auto` last column
+   * sizes itself to the widest count across the whole list, so nothing wraps and every
+   * row ends on the same edge. The bar column disappears on a phone via `hidden`, which
+   * removes it from the grid flow rather than leaving an empty cell behind.
+   */
   return (
-    <div className="min-w-0 space-y-1" data-testid="tier-sales">
+    <div className="min-w-0 grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_5rem_auto] items-center gap-x-3 gap-y-1.5"
+         data-testid="tier-sales">
       {tiers.map((w) => {
         const capacity = w.capacity ?? 0;
         const left = Math.max(0, w.available ?? capacity);
         const sold = Math.max(0, capacity - left);
         const pct = capacity ? Math.round((sold / capacity) * 100) : 0;
         return (
-          <div key={w.wave_id || w.name} className="flex items-center gap-3 text-xs min-w-0">
-            <span className="font-mono-x uppercase tracking-[0.15em] text-ink-2 truncate flex-1 min-w-0">{w.name}</span>
+          <Fragment key={w.wave_id || w.name}>
+            <span className="font-mono-x text-xs uppercase tracking-[0.15em] text-ink-2 truncate">{w.name}</span>
             {/* A bar earns its place here: twelve events in a list is a lot of numbers to
                 compare, and relative fill is readable without reading any of them. */}
-            <span className="hidden sm:block w-20 h-1.5 bg-ink/10 shrink-0" aria-hidden="true">
+            <span className="hidden sm:block w-full h-1.5 bg-ink/10" aria-hidden="true">
               <span className="block h-full bg-brand" style={{ width: `${pct}%` }} />
             </span>
-            <span className="font-mono-x text-[10px] uppercase tracking-[0.15em] text-ink-4 shrink-0 w-28 text-right">
+            {/* nowrap is the fix; tabular-nums is what keeps the counts in a column
+                rather than jittering with the width of each digit. */}
+            <span className="font-mono-x text-[10px] uppercase tracking-[0.15em] text-ink-4 whitespace-nowrap tabular-nums text-right">
               {sold}/{capacity} · {left === 0 ? <span className="text-brand">sold out</span> : `${left} left`}
             </span>
-          </div>
+          </Fragment>
         );
       })}
     </div>
