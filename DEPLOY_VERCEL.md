@@ -82,8 +82,9 @@ Set these on the project (**Settings → Environment Variables**), not in a comm
 | `TRUSTED_IP_HEADER` | `x-vercel-forwarded-for` | Makes the rate limiter work. Vercel sets this header itself and discards any client copy |
 | `INITIAL_ADMIN_EMAIL` | your address | The only way an account becomes admin. Without it nobody can reach the admin UI |
 | `REQUIRE_PHONE` | *(blank)* | Set to `1` to make the phone number mandatory at signup. Blank = collected but optional; name and surname are always required |
-| `APP_ENV` | `development` | See the warning below |
-| `LOCAL_FAKE_PAYMENTS` | `1` | See the warning below |
+| `APP_ENV` | `development` | Leave it. It does **not** gate payments, and `production` additionally makes an explicit `CORS_ORIGINS` mandatory — see the warning below |
+| `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET` | `sk_…`, `whsec_…` | Both, to take payments. Without them the app starts only in simulator mode — see the warning below |
+| `LOCAL_FAKE_PAYMENTS`, `I_ACCEPT_FREE_TICKETS_IN_PUBLIC` | `1`, `1` | Simulator mode, for a deployment that sells nothing. **Both** are required here — the first on its own is refused. See the warning below |
 | `BLOB_READ_WRITE_TOKEN` | *(injected)* | Added automatically when the Blob store is connected |
 | `RESEND_API_KEY`, `MAIL_FROM` | **effectively required in production** | Without them, mail lands in the `outbox` collection instead of being sent — see below. An SMTP backend exists but is the wrong fit for serverless |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | optional, **Production scope only** | Google sign-in. All three or none — see below |
@@ -184,20 +185,64 @@ result is in your inbox, or in Resend's own **Logs** tab, which shows delivery, 
 rejection per message. If the mail never appears and Resend's log is empty, the key was
 not picked up and the message is sitting in `outbox`.
 
-### ⚠️ This deployment runs the fake payment simulator
+### ⚠️ Payments: the simulator, and getting off it
 
-`APP_ENV=production` requires a real Stripe `sk_...` key, so a deployment without Stripe
-has to run as `development`, and that means `LOCAL_FAKE_PAYMENTS=1`. In that mode
-`/api/payments/status/{id}` and `/api/webhook/stripe` finalize orders **with no
-authentication and no signature check**: anyone who can reach the URL can issue
-themselves real tickets and a real invoice for free (SECURITY_AUDIT.md, finding C1).
+Payment mode is not gated on `APP_ENV`. It is gated on `_is_public_deployment()`, and
+Vercel sets `VERCEL=1` itself — so **every deployment here counts as public** whatever
+`APP_ENV` says. That leaves two supported states:
 
-So until Stripe is wired up, put the deployment behind
-**Settings → Deployment Protection → Vercel Authentication**, which requires a Vercel
-account on the team to load any page. Switching to real payments later is three
-variables — `APP_ENV=production`, `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET` — plus
-removing `LOCAL_FAKE_PAYMENTS`; the app refuses to boot if you get that combination
-half-right.
+* **`STRIPE_API_KEY` is an `sk_...` key.** Real Stripe. `STRIPE_WEBHOOK_SECRET` is then
+  mandatory and the app refuses to start without it. An `sk_test_...` key is fine and
+  takes the same path — the check is the `sk_` prefix, not the word "live". A
+  restricted `rk_...` key does **not** pass it.
+* **No key.** The app refuses to start at all, unless you opt in to the simulator with
+  **both** `LOCAL_FAKE_PAYMENTS=1` **and** `I_ACCEPT_FREE_TICKETS_IN_PUBLIC=1`.
+  `LOCAL_FAKE_PAYMENTS=1` on its own is refused, because this host is public.
+
+In simulator mode `/api/payments/status/{id}` and `/api/webhook/stripe` finalize orders
+**with no authentication and no signature check**: anyone who can reach the URL can
+issue themselves real tickets and a real invoice for free (SECURITY_AUDIT.md, finding
+C1). A deployment running it belongs behind **Settings → Deployment Protection →
+Vercel Authentication**, which requires a Vercel account on the team to load any page.
+
+Switching to real payments is **four** changes:
+
+1. Add `STRIPE_API_KEY` (`sk_...`).
+2. Add `STRIPE_WEBHOOK_SECRET` (`whsec_...`), from an endpoint registered against
+   `https://<your-domain>/api/webhook/stripe`.
+3. Delete `LOCAL_FAKE_PAYMENTS`.
+4. Delete `I_ACCEPT_FREE_TICKETS_IN_PUBLIC`. **This is the one that gets forgotten.**
+   Left set, a later typo in the Stripe key — anything not starting `sk_` — stops being
+   a startup failure and quietly selects the simulator again, which is the whole
+   condition the guard exists to prevent.
+
+Add the two Stripe variables **before** deleting the two simulator ones: with all four
+absent the app raises on startup rather than falling back, so a deploy landing between
+the halves fails outright.
+
+Leave `APP_ENV` alone. It buys nothing here — the hardening it gates is already on via
+`VERCEL=1` — and `production` additionally makes an explicit `CORS_ORIGINS` mandatory,
+which is one more way to fail to boot.
+
+Note that turning Vercel Authentication **on** blocks Stripe too: its webhook POSTs get
+the login challenge, so payments never finalize and reservations expire as if abandoned.
+Once real payments are in, C1 is closed and the protection has served its purpose.
+
+Verify from outside afterwards — `/api/health` withholds the mode deliberately:
+
+```bash
+curl -s -X POST https://<your-domain>/api/webhook/stripe \
+  -H 'content-type: application/json' --data 'not-json'
+```
+
+`{"detail":"Invalid signature"}` is Stripe mode. `{"detail":"Invalid payload"}` is still
+the simulator.
+
+**If you used a Stripe sandbox.** Sandboxes are isolated environments with their own
+keys, webhook endpoints and data. If the endpoint was created inside one, the API key
+has to come from that same sandbox. A mismatched pair reports no error anywhere — the
+Checkout Sessions are simply created in one environment and the endpoint listens in
+another, and every order hangs as pending until it expires.
 
 ## 4. Deploy
 
