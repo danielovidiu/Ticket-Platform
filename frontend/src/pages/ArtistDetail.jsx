@@ -33,7 +33,7 @@ export function Bio({ text }) {
   );
 }
 
-/** One tile, used for both Supersanity projects and gallery albums. */
+/** One tile in the gallery strip below an artist's identity block. */
 function Tile({ to, image, title, meta }) {
   const inner = (
     <>
@@ -50,7 +50,7 @@ function Tile({ to, image, title, meta }) {
     </>
   );
   const cls = "group block border border-ink/10";
-  // Projects have no page of their own to link to — there is no /projects/:slug route.
+  // `to` is optional: a tile without a destination still renders, as a plain div.
   return to ? <Link to={to} className={cls}>{inner}</Link> : <div className={cls}>{inner}</div>;
 }
 
@@ -78,7 +78,6 @@ export default function ArtistDetail() {
     .sort(([a1], [b1]) => a1.localeCompare(b1));
   const links = [...known, ...unknown];
   const disciplines = a.disciplines || [];
-  const projects = a.projects || [];
   const albums = a.albums || [];
   const hasOther = a.other_project_name || a.other_project_url;
 
@@ -133,19 +132,8 @@ export default function ArtistDetail() {
         </div>
       </div>
 
-      {/* Supersanity work and the galleries sit below the fold, full width — they are
-          the body of evidence, not part of the identity block above. */}
-      {projects.length > 0 && (
-        <section className="mt-20" data-testid="artist-projects">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4 hairline-b pb-3">Supersanity work</div>
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-            {projects.map((p) => (
-              <Tile key={p.project_id} image={p.image_url} title={p.title} meta={p.year || null} />
-            ))}
-          </div>
-        </section>
-      )}
-
+      {/* The galleries sit below the fold, full width — they are the body of evidence,
+          not part of the identity block above. */}
       {albums.length > 0 && (
         <section className="mt-20" data-testid="artist-albums">
           <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4 hairline-b pb-3">Gallery</div>

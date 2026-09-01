@@ -32,7 +32,9 @@ CORE_NAV_ITEMS = [
     ("core-events", "Events", "/events", 3),
     ("core-shop", "Shop", "/shop", 4),
     ("core-artists", "Artists", "/artists", 5),
-    ("core-archive", "Archive", "/archive", 6),
+    # No Archive. It showed the projects grid and a past-events list; projects are
+    # retired, and past events have been reachable from the Events page's own tabs since
+    # the All/Past tabs landed. See migrate_drop_archive_page.
     ("core-gallery", "Gallery", "/gallery", 7),
 ]
 
@@ -92,7 +94,7 @@ def sniff_font_format(data: bytes):
 # test_page_slugs.py reads that file and fails if a route is added without landing here.
 RESERVED_SLUGS = frozenset({
     # Built-in sections
-    "events", "shop", "artists", "archive", "gallery", "cart", "checkout",
+    "events", "shop", "artists", "gallery", "cart", "checkout",
     "my-tickets", "my-orders", "settings", "newsletter",
     # Account and auth
     "login", "complete-profile", "verify", "reset-password",

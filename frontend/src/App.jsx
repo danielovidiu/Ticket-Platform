@@ -13,7 +13,6 @@ import CheckoutSuccess from "./pages/CheckoutSuccess";
 import MyTickets from "./pages/MyTickets";
 import Artists from "./pages/Artists";
 import ArtistDetail from "./pages/ArtistDetail";
-import Archive from "./pages/Archive";
 import Gallery from "./pages/Gallery";
 import AlbumPage from "./pages/AlbumPage";
 import Shop from "./pages/Shop";
@@ -99,7 +98,6 @@ function AppRouter() {
         <Route path="/my-tickets" element={<MyTickets />} />
         <Route path="/artists" element={<Artists />} />
         <Route path="/artists/:slug" element={<ArtistDetail />} />
-        <Route path="/archive" element={<Archive />} />
         <Route path="/gallery" element={<Gallery />} />
         {/* One album per slug. This used to be the single sitewide gallery's own
             address, which redirected any slug but its configured one. */}

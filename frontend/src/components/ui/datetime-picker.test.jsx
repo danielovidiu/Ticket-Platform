@@ -70,3 +70,60 @@ describe("the popover", () => {
     expect(within(popover).getByTestId("datetime-time")).toHaveValue("20:00");
   });
 });
+
+/* The date-only mode.
+ *
+ * Every date field in the admin used to be one of two different things: this popover, or
+ * a native <input type="date"> rendering the operating system's own picker — a different
+ * typeface, a different palette and a different set of controls, inside an admin that is
+ * otherwise deliberately austere. They share this calendar now. What they do not share
+ * is a time: a gallery album is filed under a day, and offering an hour to set would be
+ * inventing a precision the field does not have.
+ */
+describe("date-only mode", () => {
+  test("draws one line, with no time under it", () => {
+    render(<DateTimePicker mode="date" value="2026-08-15" onChange={() => {}} />);
+    const lines = screen.getByTestId("datetime-trigger").querySelectorAll("span.block");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe("15 Aug 2026");
+  });
+
+  test("reads a bare day in local time, so it does not render as the day before", () => {
+    // `new Date("2026-08-01")` is UTC midnight — the 31st of July for anyone west of
+    // Greenwich. The same trap the album date label had to sidestep.
+    render(<DateTimePicker mode="date" value="2026-08-01" onChange={() => {}} />);
+    expect(screen.getByTestId("datetime-trigger").textContent).toMatch(/1 Aug 2026/);
+  });
+
+  test("offers no time input in the popover", async () => {
+    const user = userEvent.setup();
+    render(<DateTimePicker mode="date" value="2026-08-15" onChange={() => {}} />);
+    await user.click(screen.getByTestId("datetime-trigger"));
+
+    const popover = await screen.findByTestId("datetime-popover");
+    expect(within(popover).getByRole("grid")).toBeInTheDocument();
+    expect(within(popover).queryByTestId("datetime-time")).toBeNull();
+  });
+
+  test("emits a plain day rather than a timestamp", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<DateTimePicker mode="date" value="2026-08-15" onChange={onChange} />);
+    await user.click(screen.getByTestId("datetime-trigger"));
+    await user.click(await screen.findByRole("button", { name: /August 20th, 2026/i }));
+
+    expect(onChange).toHaveBeenCalledWith("2026-08-20");
+  });
+
+  test("an empty field says so instead of showing a blank box", () => {
+    render(<DateTimePicker mode="date" value="" placeholder="No date" onChange={() => {}} />);
+    expect(screen.getByTestId("datetime-trigger").textContent).toBe("No date");
+  });
+
+  test("the full mode still carries its time row", () => {
+    // The two modes have to stay distinguishable; this is the half that would rot first.
+    render(<DateTimePicker value={OCT} onChange={() => {}} />);
+    const lines = screen.getByTestId("datetime-trigger").querySelectorAll("span.block");
+    expect(lines).toHaveLength(2);
+  });
+});

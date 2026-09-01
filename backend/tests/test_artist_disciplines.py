@@ -1,6 +1,6 @@
 """
 The artist record's second half: a managed discipline vocabulary, hand-picked galleries,
-an outside project link, and the artist<->project edge.
+and an outside project link.
 
 Covers:
   * The discipline vocabulary is a setting, not a constant — it is read per request, and
@@ -15,9 +15,6 @@ Covers:
     until somebody types "dj rosa".
   * An artist's hand-picked albums are intersected with the SAME visibility rule the
     Gallery page runs on, so linking a draft event's album does not publish it.
-  * `project_ids` is a write-through onto `projects.artist_ids`: absent leaves the links
-    alone, [] clears them, and deleting an artist takes their id out of every project
-    and event that named them.
 """
 import uuid
 
@@ -29,7 +26,6 @@ from support import API, db, mint_user, TIMEOUT
 pytestmark = pytest.mark.xdist_group("artists")
 
 _artist_ids: list = []
-_project_ids: list = []
 _event_ids: list = []
 _album_ids: list = []
 
@@ -45,8 +41,6 @@ def _cleanup():
     yield
     if _artist_ids:
         db.artists.delete_many({"artist_id": {"$in": _artist_ids}})
-    if _project_ids:
-        db.projects.delete_many({"project_id": {"$in": _project_ids}})
     if _event_ids:
         db.events.delete_many({"event_id": {"$in": _event_ids}})
     if _album_ids:
@@ -65,17 +59,6 @@ def _mk_artist(admin, **fields):
     a = r.json()
     _artist_ids.append(a["artist_id"])
     return a
-
-
-def _mk_project(admin, **fields):
-    body = {"title": f"PYTEST PRJ {uuid.uuid4().hex[:6]}",
-            "slug": f"pytest-prj-{uuid.uuid4().hex[:8]}"}
-    body.update(fields)
-    r = requests.post(f"{API}/admin/projects", json=body, headers=admin, timeout=TIMEOUT)
-    assert r.status_code == 200, r.text
-    p = r.json()
-    _project_ids.append(p["project_id"])
-    return p
 
 
 def _mk_album(*, event_id=None, with_item=True):
@@ -259,108 +242,3 @@ class TestPickedGalleries:
         a = _mk_artist(admin, album_ids=[album_id])
         got = requests.get(f"{API}/artists/{a['slug']}", timeout=TIMEOUT).json()
         assert got["albums"] == []
-
-
-# --- the artist <-> project edge ------------------------------------------------------
-
-class TestProjectLinks:
-    def test_an_artist_can_be_added_to_several_projects(self, admin):
-        p1, p2 = _mk_project(admin), _mk_project(admin)
-        a = _mk_artist(admin, project_ids=[p1["project_id"], p2["project_id"]])
-
-        got = requests.get(f"{API}/artists/{a['slug']}", timeout=TIMEOUT).json()
-        assert {p["project_id"] for p in got["projects"]} == {p1["project_id"], p2["project_id"]}
-
-    def test_project_ids_is_not_stored_on_the_artist(self, admin):
-        """It is an edge on the project, and duplicating it would let the two disagree."""
-        p = _mk_project(admin)
-        a = _mk_artist(admin, project_ids=[p["project_id"]])
-        assert "project_ids" not in db.artists.find_one({"artist_id": a["artist_id"]})
-
-    def test_patching_the_list_removes_the_links_it_leaves_out(self, admin):
-        p1, p2 = _mk_project(admin), _mk_project(admin)
-        a = _mk_artist(admin, project_ids=[p1["project_id"], p2["project_id"]])
-
-        requests.patch(f"{API}/admin/artists/{a['artist_id']}",
-                       json={"project_ids": [p2["project_id"]]}, headers=admin, timeout=TIMEOUT)
-
-        got = requests.get(f"{API}/artists/{a['slug']}", timeout=TIMEOUT).json()
-        assert [p["project_id"] for p in got["projects"]] == [p2["project_id"]]
-
-    def test_an_absent_list_leaves_the_links_alone(self, admin):
-        """Absent means "not editing that", or every unrelated patch would unlink."""
-        p = _mk_project(admin)
-        a = _mk_artist(admin, project_ids=[p["project_id"]])
-
-        requests.patch(f"{API}/admin/artists/{a['artist_id']}",
-                       json={"name": "RENAMED"}, headers=admin, timeout=TIMEOUT)
-
-        got = requests.get(f"{API}/artists/{a['slug']}", timeout=TIMEOUT).json()
-        assert [p["project_id"] for p in got["projects"]] == [p["project_id"]]
-
-    def test_an_empty_list_clears_them(self, admin):
-        p = _mk_project(admin)
-        a = _mk_artist(admin, project_ids=[p["project_id"]])
-
-        requests.patch(f"{API}/admin/artists/{a['artist_id']}",
-                       json={"project_ids": []}, headers=admin, timeout=TIMEOUT)
-
-        got = requests.get(f"{API}/artists/{a['slug']}", timeout=TIMEOUT).json()
-        assert got["projects"] == []
-
-    def test_editing_one_artist_does_not_disturb_another(self, admin):
-        """$addToSet/$pull rather than rewriting the array — the property that makes two
-        admins editing two artists at once safe."""
-        p = _mk_project(admin)
-        first = _mk_artist(admin, project_ids=[p["project_id"]])
-        second = _mk_artist(admin, project_ids=[p["project_id"]])
-
-        ids = db.projects.find_one({"project_id": p["project_id"]})["artist_ids"]
-        assert {first["artist_id"], second["artist_id"]} <= set(ids)
-
-    def test_the_admin_list_reports_the_links_back(self, admin):
-        p = _mk_project(admin)
-        a = _mk_artist(admin, project_ids=[p["project_id"]])
-        rows = requests.get(f"{API}/admin/artists", headers=admin, timeout=TIMEOUT).json()
-        row = next(r for r in rows if r["artist_id"] == a["artist_id"])
-        assert row["project_ids"] == [p["project_id"]]
-
-    def test_deleting_an_artist_takes_their_id_out_of_projects_and_events(self, admin):
-        p = _mk_project(admin)
-        event_id = _mk_event(published=True)
-        a = _mk_artist(admin, project_ids=[p["project_id"]])
-        db.events.update_one({"event_id": event_id},
-                             {"$push": {"artist_ids": a["artist_id"]}})
-
-        requests.delete(f"{API}/admin/artists/{a['artist_id']}", headers=admin, timeout=TIMEOUT)
-
-        assert a["artist_id"] not in db.projects.find_one(
-            {"project_id": p["project_id"]})["artist_ids"]
-        assert a["artist_id"] not in db.events.find_one(
-            {"event_id": event_id})["artist_ids"]
-
-
-class TestProjectPatch:
-    def test_a_project_can_be_edited_at_all(self, admin):
-        """It could not before: projects were create-and-delete only, so an artist list
-        set at creation was permanent."""
-        p = _mk_project(admin)
-        r = requests.patch(f"{API}/admin/projects/{p['project_id']}",
-                           json={"title": "RETITLED"}, headers=admin, timeout=TIMEOUT)
-        assert r.status_code == 200, r.text
-        assert r.json()["title"] == "RETITLED"
-
-    def test_artists_can_be_set_from_the_project_side(self, admin):
-        a = _mk_artist(admin)
-        p = _mk_project(admin)
-        requests.patch(f"{API}/admin/projects/{p['project_id']}",
-                       json={"artist_ids": [a["artist_id"]]}, headers=admin, timeout=TIMEOUT)
-
-        got = requests.get(f"{API}/artists/{a['slug']}", timeout=TIMEOUT).json()
-        assert [x["project_id"] for x in got["projects"]] == [p["project_id"]]
-
-    def test_it_needs_admin(self, admin):
-        p = _mk_project(admin)
-        r = requests.patch(f"{API}/admin/projects/{p['project_id']}",
-                           json={"title": "nope"}, timeout=TIMEOUT)
-        assert r.status_code in (401, 403)
