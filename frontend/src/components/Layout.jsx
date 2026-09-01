@@ -235,6 +235,13 @@ const Header = ({ cmsNav, navFailed, site }) => {
  * rather than collapsing, because it sits at the bottom of every page and a layout that
  * changes height after load pushes whatever the reader was looking at.
  */
+// No margin above it. `mt-24` put 96px between the last block and the footer — the same
+// kind of gap the flush-blocks pass removed from between every other pair of blocks:
+// spacing decided by a component rather than by the person composing the page. The page
+// ends where its last block ends, and the hairline is the join.
+//
+// The footer's own `py-14` stays. That is its internal breathing room rather than space
+// between it and the page, the same call as the hero's text inset.
 const Footer = ({ site }) => {
   const s = site || {};
   const pages = s.pages || [];
@@ -246,7 +253,7 @@ const Footer = ({ site }) => {
     .filter(Boolean);
 
   return (
-    <footer className="hairline mt-24">
+    <footer className="hairline">
       {/* Two columns before four: at md, quarter-width columns are narrower than
           the wordmark itself, which then spills into its neighbour. */}
       <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-14 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
