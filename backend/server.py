@@ -30,6 +30,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 from pydantic import BaseModel, Field
 from models_base import ApiModel, LONG_TEXT, MAX_JSON_DOC_BYTES
+import password_policy
 from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -1512,8 +1513,13 @@ async def register(body: RegisterIn, request: Request, response: Response):
     if not _valid_email(email):
         raise HTTPException(400, "Enter a valid email address")
     phone = _validate_phone(body.phone)
-    if len(body.password) < 8:
-        raise HTTPException(400, "Password must be at least 8 characters")
+    # One shared policy with the reset path. Two copies of `len(pw) < 8` is how the two
+    # ends of the same rule drift apart, and the drift nobody notices is the one where
+    # signup accepts what reset would refuse.
+    bad = await password_policy.validate(
+        body.password, email=email, name=f"{first_name} {last_name}")
+    if bad:
+        raise HTTPException(400, bad)
     if not body.tos_accepted:
         raise HTTPException(400, "You must accept the Terms of Service")
 
@@ -1785,8 +1791,11 @@ async def forgot_password(body: ForgotPasswordIn):
 
 @api.post("/auth/reset-password", dependencies=[Depends(rate_limit("auth_reset", 5, 900))])
 async def reset_password(body: ResetPasswordIn, response: Response):
-    if len(body.new_password) < 8:
-        raise HTTPException(400, "Password must be at least 8 characters")
+    # The rules that need neither the token nor the database run first: a password that
+    # cannot be accepted under any circumstances should not cost a token read.
+    problems = password_policy.local_problems(body.new_password)
+    if problems:
+        raise HTTPException(400, password_policy.message(problems))
     try:
         claims = read_token("pwd-reset", body.token)
     except jwt.PyJWTError:
@@ -1797,6 +1806,15 @@ async def reset_password(body: ResetPasswordIn, response: Response):
     if not u or not u.get("password_hash") or \
             not secrets.compare_digest(_password_fingerprint(u["password_hash"]), claims.get("ph") or ""):
         raise HTTPException(400, "This reset link is invalid or has expired")
+    # The account is known now, so the rules that depend on it can run — the name/email
+    # similarity check, and the breach lookup. Still BEFORE the update, which is what
+    # actually burns the token: a refusal here leaves the link usable, which is the
+    # difference between "try again" and "request another email and hope it arrives".
+    bad = await password_policy.validate(
+        body.new_password, email=u.get("email", ""),
+        name=" ".join(filter(None, [u.get("first_name"), u.get("last_name")])))
+    if bad:
+        raise HTTPException(400, bad)
     await db.users.update_one(
         {"user_id": u["user_id"]},
         {"$set": {"password_hash": await hash_password_async(body.new_password)}},

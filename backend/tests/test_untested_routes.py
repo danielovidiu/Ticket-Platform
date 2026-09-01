@@ -88,7 +88,7 @@ def password_user():
     """An account with a real password, plus the live session a reset has to invalidate."""
     headers, user_id, email = mint_user()
     db.users.update_one({"user_id": user_id},
-                        {"$set": {"password_hash": _hash("original-passw0rd")}})
+                        {"$set": {"password_hash": _hash("original-Passw0rd-9")}})
     yield {"headers": headers, "user_id": user_id, "email": email}
     db.outbox.delete_many({"to": email})
 
@@ -185,12 +185,12 @@ class TestResetPassword:
 
     async def test_a_valid_token_changes_the_password(self, handler, password_user):
         status, _ = await _reset(handler, _mint_reset_token(password_user["user_id"]),
-                                 "brand-new-passw0rd")
+                                 "brand-new-Passw0rd-9")
         assert status == 200
 
         stored = _stored_hash(password_user["user_id"])
-        assert _verifies("brand-new-passw0rd", stored), "the new password does not verify"
-        assert not _verifies("original-passw0rd", stored), "the old password still works"
+        assert _verifies("brand-new-Passw0rd-9", stored), "the new password does not verify"
+        assert not _verifies("original-Passw0rd-9", stored), "the old password still works"
 
     async def test_the_token_is_single_use(self, handler, password_user):
         """Not by recording spent tokens — the token carries the tail of the hash it was
@@ -198,11 +198,11 @@ class TestResetPassword:
         pinning: that is exactly the kind of cleverness a refactor drops quietly."""
         token = _mint_reset_token(password_user["user_id"])
 
-        assert (await _reset(handler, token, "first-new-passw0rd"))[0] == 200
-        status, _ = await _reset(handler, token, "second-new-passw0rd")
+        assert (await _reset(handler, token, "first-new-Passw0rd-9"))[0] == 200
+        status, _ = await _reset(handler, token, "second-new-Passw0rd-9")
         assert status == 400
 
-        assert _verifies("first-new-passw0rd", _stored_hash(password_user["user_id"])), \
+        assert _verifies("first-new-Passw0rd-9", _stored_hash(password_user["user_id"])), \
             "the replayed token took effect"
 
     async def test_an_older_token_dies_when_a_newer_one_is_used(self, handler, password_user):
@@ -210,22 +210,22 @@ class TestResetPassword:
         older = _mint_reset_token(password_user["user_id"])
         newer = _mint_reset_token(password_user["user_id"])
 
-        assert (await _reset(handler, newer, "newer-passw0rd"))[0] == 200
-        assert (await _reset(handler, older, "older-passw0rd"))[0] == 400
-        assert _verifies("newer-passw0rd", _stored_hash(password_user["user_id"]))
+        assert (await _reset(handler, newer, "newer-Passw0rd-9"))[0] == 200
+        assert (await _reset(handler, older, "older-Passw0rd-9"))[0] == 400
+        assert _verifies("newer-Passw0rd-9", _stored_hash(password_user["user_id"]))
 
     async def test_a_garbage_token_is_refused(self, handler, password_user):
-        status, _ = await _reset(handler, "not-a-real-token", "brand-new-passw0rd")
+        status, _ = await _reset(handler, "not-a-real-token", "brand-new-Passw0rd-9")
         assert status == 400
-        assert _verifies("original-passw0rd", _stored_hash(password_user["user_id"]))
+        assert _verifies("original-Passw0rd-9", _stored_hash(password_user["user_id"]))
 
     async def test_a_token_for_another_purpose_is_refused(self, handler, password_user):
         """Signed by the same key — the audience claim is what separates them. Without
         that check a verification link would double as a password reset."""
         wrong = server.make_token("email-verify", password_user["user_id"])
-        status, _ = await _reset(handler, wrong, "brand-new-passw0rd")
+        status, _ = await _reset(handler, wrong, "brand-new-Passw0rd-9")
         assert status == 400
-        assert _verifies("original-passw0rd", _stored_hash(password_user["user_id"]))
+        assert _verifies("original-Passw0rd-9", _stored_hash(password_user["user_id"]))
 
     async def test_an_expired_token_is_refused(self, handler, password_user):
         import jwt as _jwt
@@ -236,9 +236,9 @@ class TestResetPassword:
              "exp": datetime.now(timezone.utc) - timedelta(hours=2),
              "jti": uuid.uuid4().hex},
             server.SESSION_SECRET, algorithm="HS256")
-        status, _ = await _reset(handler, expired, "brand-new-passw0rd")
+        status, _ = await _reset(handler, expired, "brand-new-Passw0rd-9")
         assert status == 400
-        assert _verifies("original-passw0rd", _stored_hash(password_user["user_id"]))
+        assert _verifies("original-Passw0rd-9", _stored_hash(password_user["user_id"]))
 
     async def test_a_short_password_does_not_burn_the_token(self, handler, password_user):
         """Order matters: rejecting the length after consuming the token would strand the
@@ -246,8 +246,8 @@ class TestResetPassword:
         token = _mint_reset_token(password_user["user_id"])
 
         assert (await _reset(handler, token, "sh0rt"))[0] == 400
-        assert _verifies("original-passw0rd", _stored_hash(password_user["user_id"]))
-        assert (await _reset(handler, token, "a-proper-passw0rd"))[0] == 200, \
+        assert _verifies("original-Passw0rd-9", _stored_hash(password_user["user_id"]))
+        assert (await _reset(handler, token, "a-proper-Passw0rd-9"))[0] == 200, \
             "the rejected attempt burned the token"
 
     async def test_reset_logs_every_session_out(self, handler, password_user):
@@ -256,7 +256,7 @@ class TestResetPassword:
             "fixture should have a live session to invalidate"
 
         assert (await _reset(handler, _mint_reset_token(password_user["user_id"]),
-                             "brand-new-passw0rd"))[0] == 200
+                             "brand-new-Passw0rd-9"))[0] == 200
 
         assert db.user_sessions.count_documents({"user_id": password_user["user_id"]}) == 0
         r = requests.get(f"{API}/auth/me", headers=password_user["headers"], timeout=TIMEOUT)
@@ -265,7 +265,7 @@ class TestResetPassword:
     async def test_reset_does_not_log_anybody_else_out(self, handler, password_user):
         bystander_headers, bystander_id, _email = mint_user()
         assert (await _reset(handler, _mint_reset_token(password_user["user_id"]),
-                             "brand-new-passw0rd"))[0] == 200
+                             "brand-new-Passw0rd-9"))[0] == 200
 
         assert db.user_sessions.count_documents({"user_id": bystander_id}) == 1
         r = requests.get(f"{API}/auth/me", headers=bystander_headers, timeout=TIMEOUT)

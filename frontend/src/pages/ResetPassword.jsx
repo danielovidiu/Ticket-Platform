@@ -2,12 +2,15 @@ import { useState } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import { http } from "../api";
 import { toast } from "sonner";
+import PasswordFields from "../components/PasswordFields";
+import { isAcceptable } from "../lib/passwordPolicy";
 
 export default function ResetPassword() {
   const [search] = useSearchParams();
   const navigate = useNavigate();
   const token = search.get("token");
   const [pw, setPw] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
 
@@ -20,9 +23,14 @@ export default function ResetPassword() {
     );
   }
 
+  // The client mirrors the server's rules so the form can answer while someone types.
+  // It is not the authority: the breach lookup needs a network call this cannot make, so
+  // a password can satisfy everything here and still be refused below.
+  const ready = isAcceptable(pw) && pw === confirm && confirm.length > 0;
+
   const submit = async (e) => {
     e.preventDefault();
-    if (pw.length < 8) { toast.error("Password must be at least 8 characters"); return; }
+    if (!ready) return;
     setBusy(true);
     try {
       await http.post("/auth/reset-password", { token, new_password: pw });
@@ -41,9 +49,16 @@ export default function ResetPassword() {
       {done ? (
         <p className="mt-6 text-ink-2 text-sm">Password updated. Redirecting you to sign in…</p>
       ) : (
-        <form onSubmit={submit} className="mt-8 space-y-4">
-          <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="New password" data-testid="reset-password" className="input-x w-full" />
-          <button disabled={busy} data-testid="reset-submit" className="btn-accent w-full">{busy ? "…" : "UPDATE PASSWORD"}</button>
+        <form onSubmit={submit} className="mt-8 space-y-5">
+          <PasswordFields
+            value={pw} onChange={setPw}
+            confirm={confirm} onConfirmChange={setConfirm}
+            testId="reset-password"
+          />
+          <button disabled={busy || !ready} data-testid="reset-submit"
+                  className="btn-accent w-full disabled:opacity-40">
+            {busy ? "…" : "UPDATE PASSWORD"}
+          </button>
         </form>
       )}
     </div>
