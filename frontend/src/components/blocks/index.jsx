@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import DOMPurify from "dompurify";
@@ -759,6 +759,106 @@ function Split({ props }) {
  * the zeroing described on Container: with none, the heading would sit against the edge
  * of its own background image, and a Spacer between blocks could not put it back.
  */
+/** The most of its spare height the photo will use up drifting. Under 1 so the movement
+ *  eases off before it reaches an edge rather than stopping dead against one. */
+const PARALLAX_TRAVEL = 0.8;
+
+/**
+ * The photo behind a band, drifting as the page scrolls.
+ *
+ * NOT `background-attachment: fixed`, which is what this replaces and which was wrong in
+ * two ways that both trace to the same rule: a fixed background's positioning area is
+ * the VIEWPORT, not the element.
+ *
+ *   IT ZOOMED. `cover` sized the photo to cover the viewport's full height while the
+ *   band showed a window 45vh tall, so the image arrived blown up — measured at 1.72x on
+ *   a 981x505 band in a 989x1123 viewport. And it could not be fixed by choosing a
+ *   smaller background-size: a viewport-pinned image MUST cover the viewport, or a band
+ *   sitting anywhere else on screen would show gaps. The zoom was the price of the
+ *   technique, not a mistake in using it.
+ *
+ *   IT WAS INVISIBLE ON PHONES. iOS Safari and most mobile browsers ignore the property
+ *   outright, so the band had to hide the photo below md and collapsed to a flat colour.
+ *
+ * An ordinary <img> sized to cover the band has neither problem. It is drawn slightly
+ * taller than the band and translated by a fraction of the band's progress across the
+ * viewport, which is the drift the effect was for. The overscan is usually free: a photo
+ * wider than the band is already width-limited, so making the box 24% taller does not
+ * scale it at all.
+ */
+function ParallaxPhoto({ src, alt = "" }) {
+  const frameRef = useRef(null);
+  const imgRef = useRef(null);
+  const [drift, setDrift] = useState(0);
+
+  /* The photo is fitted to the band's WIDTH and left at its own aspect, with a floor of
+   * the band's height. A landscape photo in a wide band therefore comes out taller than
+   * it needs to be, and that surplus — not a fixed percentage — is the room it drifts
+   * in. Movement is bought with height the image already had, so the scale never rises
+   * above a plain cover.
+   *
+   * The alternative, drawing it a fixed 24% taller, costs 24% zoom exactly when the band
+   * is too narrow to supply the surplus for free: measured at 1.24x on a 375x365 phone
+   * band. A still photograph correctly framed beats a moving one that is too big, so
+   * where there is no surplus there is no drift. */
+  const measure = useCallback(() => {
+    const el = frameRef.current;
+    const img = imgRef.current;
+    if (!el || !img) return;
+    const r = el.getBoundingClientRect();
+    const vh = window.innerHeight || 0;
+    if (!vh || !r.height) return;
+
+    const surplus = Math.max(0, (img.offsetHeight - r.height) / 2);
+    if (!surplus) { setDrift(0); return; }
+
+    // -1 as the band enters from below, +1 once it has left above. The band's own height
+    // is in the denominator so a tall band drifts across the same span as a short one.
+    const travel = (vh + r.height) / 2;
+    const progress = ((vh / 2) - (r.top + r.height / 2)) / travel;
+    const clamped = Math.max(-1, Math.min(1, progress));
+    setDrift(clamped * surplus * PARALLAX_TRAVEL);
+  }, []);
+
+  useEffect(() => {
+    // Someone who has asked for less motion gets a still photograph, correctly framed —
+    // which is the half of this that matters.
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (reduced?.matches) return undefined;
+
+    let queued = false;
+    const onScroll = () => {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(() => { queued = false; measure(); });
+    };
+    measure();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [measure]);
+
+  return (
+    <div ref={frameRef} className="absolute inset-0 overflow-hidden" data-testid="image-band-fixed">
+      {/* h-auto keeps the photo's own proportions so any surplus height is real rather
+          than invented; min-h-full is the floor that stops a wide panorama leaving a gap,
+          and object-cover crops rather than stretches when that floor is what applies. */}
+      <img
+        ref={imgRef}
+        src={src}
+        alt={alt}
+        onLoad={measure}
+        data-testid="image-band-parallax-img"
+        className="absolute left-0 top-1/2 w-full h-auto min-h-full max-w-none object-cover will-change-transform"
+        style={{ transform: `translate3d(0, calc(-50% + ${drift}px), 0)` }}
+      />
+    </div>
+  );
+}
+
 function ImageBand({ props }) {
   const h = props.height === "short" ? "min-h-[30vh]"
     : props.height === "tall" ? "min-h-[60vh]"
@@ -772,28 +872,15 @@ function ImageBand({ props }) {
   const inner = (
     <div className={`relative overflow-hidden ${h} flex flex-col ${contentY(props, "justify-center")}`} data-testid="image-band">
       {props.image_url && (
-        // Two ways to carry the same photo, because a fixed background is not an <img>.
-        //
-        // `bg-fixed` pins it to the viewport so the band scrolls over a stationary image.
-        // Mobile browsers — iOS Safari in particular — IGNORE background-attachment and
-        // render a badly-cropped, wrongly-scaled still instead.
-        //
-        // This used to hide the fixed variant below md, which meant a phone got NO photo
-        // at all: the band collapsed to a flat colour and the block looked broken rather
-        // than merely less fancy. A phone gets the same photograph now, as an ordinary
-        // <img>, and only the parallax is missing — which is the part of the effect
-        // nobody can see on a phone anyway.
+        // One photograph either way; the toggle only decides whether it moves. See
+        // ParallaxPhoto for why this is no longer a fixed background.
         props.fixed_bg ? (
-          <div className="absolute inset-0" data-testid="image-band-fixed">
-            <img src={mediaUrl(props.image_url)} alt=""
-                 className="md:hidden w-full h-full object-cover"
-                 data-testid="image-band-fixed-fallback" />
-            <div className="absolute inset-0 hidden md:block bg-fixed bg-center bg-cover"
-                 style={{ backgroundImage: `url(${mediaUrl(props.image_url)})` }} />
+          <>
+            <ParallaxPhoto src={mediaUrl(props.image_url)} />
             <div className="absolute inset-0"
                  style={{ backgroundColor: props.overlay_color || "#050505", opacity }}
                  data-testid="image-band-overlay" />
-          </div>
+          </>
         ) : (
           <div className="absolute inset-0">
             <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" />

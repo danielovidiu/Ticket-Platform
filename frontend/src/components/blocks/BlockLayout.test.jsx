@@ -339,31 +339,61 @@ describe("image band, fixed background", () => {
     expect(c.querySelector('[data-testid="image-band-fixed"]')).toBeNull();
   });
 
-  test("set, the desktop layer is a fixed background rather than an img", () => {
+  /* It is an <img> that drifts, not `background-attachment: fixed`, and the reasons are
+   * two bugs that both came from the same rule: a fixed background's positioning area is
+   * the VIEWPORT, not the element.
+   *
+   *   It zoomed — `cover` sized the photo to the viewport's full height while the band
+   *   showed a 45vh window, measured at 1.72x. That could not be tuned away: a
+   *   viewport-pinned image must cover the viewport or bands elsewhere on screen show
+   *   gaps, so the zoom was the price of the technique.
+   *
+   *   It was invisible on phones — mobile browsers ignore the property, so the photo had
+   *   to be hidden below md and the band went flat.
+   */
+  test("set, it is still one photograph, carried by an img", () => {
     const c = band({ image_url: "/x.jpg", fixed_bg: true });
-    const fixed = c.querySelector('[data-testid="image-band-fixed"]');
-    expect(fixed).toBeTruthy();
-    const pinned = fixed.querySelector(".bg-fixed");
-    expect(pinned).toBeTruthy();
-    expect([...pinned.classList]).toContain("md:block");
-    expect([...pinned.classList]).toContain("hidden");
+    const layer = c.querySelector('[data-testid="image-band-fixed"]');
+    expect(layer).toBeTruthy();
+    const img = layer.querySelector('[data-testid="image-band-parallax-img"]');
+    expect(img.tagName).toBe("IMG");
+    expect(img.getAttribute("src")).toContain("/x.jpg");
+    // Nothing left that a mobile browser refuses to honour.
+    expect(layer.querySelector(".bg-fixed")).toBeNull();
   });
 
-  test("a phone gets the photograph, just not the parallax", () => {
-    // background-attachment: fixed is ignored by iOS Safari and most mobile browsers.
-    // This used to be handled by hiding the whole layer below md, which meant a phone
-    // got NO photo — the band collapsed to a flat colour and read as broken rather than
-    // as less fancy. The same image is served as a plain <img> instead.
-    const fixed = band({ image_url: "/x.jpg", fixed_bg: true })
+  test("it is not hidden on phones", () => {
+    const layer = band({ image_url: "/x.jpg", fixed_bg: true })
       .querySelector('[data-testid="image-band-fixed"]');
-    expect([...fixed.classList]).not.toContain("hidden");
+    expect([...layer.classList]).not.toContain("hidden");
+    const img = layer.querySelector('[data-testid="image-band-parallax-img"]');
+    expect([...img.classList]).not.toContain("md:hidden");
+    expect([...img.classList]).not.toContain("hidden");
+  });
 
-    const fallback = fixed.querySelector('[data-testid="image-band-fixed-fallback"]');
-    expect(fallback).toBeTruthy();
-    expect(fallback.tagName).toBe("IMG");
-    expect(fallback.getAttribute("src")).toContain("/x.jpg");
-    // And it steps aside once the real effect is available.
-    expect([...fallback.classList]).toContain("md:hidden");
+  test("the photo keeps its own proportions, with the band height only as a floor", () => {
+    // This is what stops it zooming. Fitted to the band's WIDTH and left at its natural
+    // aspect, any surplus height is real rather than invented — and that surplus, not a
+    // fixed percentage, is the only room it drifts in. `min-h-full` is the floor that
+    // keeps a wide panorama from leaving a gap; object-cover crops rather than stretches
+    // when that floor is what applies.
+    const img = band({ image_url: "/x.jpg", fixed_bg: true })
+      .querySelector('[data-testid="image-band-parallax-img"]');
+    const cls = [...img.classList];
+    expect(cls).toContain("h-auto");
+    expect(cls).toContain("min-h-full");
+    expect(cls).toContain("w-full");
+    expect(cls).toContain("object-cover");
+    // Never a fixed taller box: on a band too narrow to supply surplus for free, drawing
+    // one 24% taller cost 24% zoom — measured at 1.24x on a 375x365 phone band.
+    expect(img.style.height).toBe("");
+  });
+
+  test("it starts centred, so an unscrolled band is framed like a plain cover", () => {
+    const img = band({ image_url: "/x.jpg", fixed_bg: true })
+      .querySelector('[data-testid="image-band-parallax-img"]');
+    expect([...img.classList]).toContain("top-1/2");
+    expect(img.style.transform).toMatch(/calc\(-50% \+ 0px\)/);
   });
 
   test("the overlay still dims it", () => {
