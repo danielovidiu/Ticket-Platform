@@ -40,6 +40,8 @@ editor POST   /api/admin/cms/pages/{page_id}/home
 editor POST   /api/admin/cms/pages/{page_id}/publish
 editor POST   /api/admin/cms/pages/{page_id}/revert/{version_id}
 editor POST   /api/admin/cms/seed-legal
+editor GET    /api/admin/cms/site
+editor PUT    /api/admin/cms/site
 editor GET    /api/admin/cms/theme
 editor PATCH  /api/admin/cms/theme
 editor POST   /api/admin/cms/theme/publish

@@ -127,13 +127,14 @@ class TestTheNavSize:
 
     @staticmethod
     def _set(value):
-        db.cms_theme.update_one({"doc_id": "theme_current"},
-                                {"$set": {"published.nav_size": value}})
+        # A site setting now, not a theme value — it sits with the header's other
+        # control. It still SHIPS in theme.css, because the stylesheet is
+        # render-blocking and the nav has to be the right size in the first paint.
+        db.site_settings.update_one({"_id": "site"}, {"$set": {"nav_size": value}}, upsert=True)
 
     @staticmethod
     def _unset():
-        db.cms_theme.update_one({"doc_id": "theme_current"},
-                                {"$unset": {"published.nav_size": ""}})
+        db.site_settings.update_one({"_id": "site"}, {"$unset": {"nav_size": ""}})
 
     def test_it_is_emitted_as_a_variable(self):
         self._set(18)
@@ -155,7 +156,8 @@ class TestTheNavSize:
             if bad is not None:
                 assert "--nav-size: abc" not in css
 
-    def test_a_theme_saved_before_this_existed_emits_nothing(self):
-        """The class carries an 11px fallback, so an untouched theme renders as it did."""
+    def test_it_falls_back_to_the_shipped_size(self):
+        """Unset means the built-in 11px rather than nothing: the class still carries the
+        same fallback, so the two agree either way."""
         self._unset()
-        assert "--nav-size" not in _css().text
+        assert "--nav-size: 11px;" in _css().text

@@ -93,3 +93,29 @@ describe("the tablet row", () => {
     expect([...nav().classList]).toContain("overflow-x-auto");
   });
 });
+
+/**
+ * Where the page ends.
+ *
+ * The footer carried `mt-24` — 96px between the last block and the footer, which is the
+ * same kind of gap the flush-blocks pass removed from between every other pair of
+ * blocks: spacing decided by a component rather than by whoever composes the page.
+ */
+describe("the join between the page and the footer", () => {
+  const footer = () => header().parentElement.querySelector("footer");
+
+  test("the footer has no margin above it", () => {
+    expect([...footer().classList].some((c) => /^mt-/.test(c))).toBe(false);
+  });
+
+  test("its own padding matches the header's", () => {
+    // Breathing room inside the bar rather than space between it and the page. It was
+    // py-14, which made the footer more than twice the header's height.
+    expect(footer().querySelector(".py-5")).toBeTruthy();
+    expect(footer().querySelector(".py-14")).toBeNull();
+  });
+
+  test("the hairline is still the join", () => {
+    expect([...footer().classList]).toContain("hairline");
+  });
+});

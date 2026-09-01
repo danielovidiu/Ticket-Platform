@@ -128,6 +128,16 @@ export function applyTheme(theme) {
   if (s.sectionY) root.style.setProperty("--section-y", s.sectionY);
   if (s.containerX) root.style.setProperty("--container-x", s.containerX);
   if (theme.radius !== undefined) root.style.setProperty("--radius", `${theme.radius}px`);
+  // The header nav's size. It is a site setting now rather than a theme value, but a
+  // theme published before that move still carries one — and this function's job is to
+  // honour whatever it is handed. Its absence here is why the control read as dead: the
+  // slider wrote to the draft, the preview applied every variable except this one.
+  if (theme.nav_size !== undefined && theme.nav_size !== null) {
+    // `Number(x) || 11` would read 0 as absent and snap it to 11. 0 is a real value an
+    // editor can type; it belongs at the floor, not at the default.
+    const n = Number(theme.nav_size);
+    root.style.setProperty("--nav-size", `${Math.max(8, Math.min(32, Number.isFinite(n) ? n : 11))}px`);
+  }
   // Nothing is written directly onto <body> here. Background, colour and font-family
   // used to be restated as inline styles on top of the variables above, which the rules
   // in index.css already apply — and an inline style is the one form no later stylesheet
@@ -181,6 +191,10 @@ export const BLOCK_DEFAULTS = {
     text_case: "as-typed", full_width: true, cta_label: "", cta_href: "", cta_style: "outline",
   }),
   custom_html: () => ({ html: "<div class=\"p-8 text-center font-mono-x uppercase\">Custom HTML</div>" }),
+  text_panel: () => ({
+    heading: "", content: "Long text goes here. The panel keeps its height and the words\nscroll inside it.",
+    height: 320, width: "normal", align: "center", text_align: "left", full_width: false,
+  }),
   spacer: () => ({ height: "4rem" }),
   split: () => ({ direction: "image-left", image_url: "", eyebrow: "", heading: "", body: "", cta_label: "", cta_href: "", aspect: "1:1" }),
 };
@@ -200,6 +214,7 @@ export const BLOCK_LABELS = {
   image_band: "Image band",
   custom_html: "Custom HTML",
   spacer: "Spacer",
+  text_panel: "Text panel (scrolling)",
   split: "Split (image + text)",
 };
 

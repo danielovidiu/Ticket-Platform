@@ -285,3 +285,108 @@ describe("full width", () => {
     expect(c.querySelector(".px-6")).toBeTruthy();
   });
 });
+
+/**
+ * A background that stays put while the band scrolls over it.
+ *
+ * It is a background-image with `bg-fixed`, not an <img>, because that is the only thing
+ * background-attachment applies to. Mobile browsers — iOS Safari in particular — IGNORE
+ * background-attachment and render a badly-cropped still instead, so the fixed variant
+ * shows NO photo below md rather than a broken version of the effect.
+ */
+describe("image band, fixed background", () => {
+  const band = (over) => draw("image_band", { ...BLOCK_DEFAULTS.image_band(), ...over });
+
+  test("unset, it is still a plain image", () => {
+    const c = band({ image_url: "/x.jpg" });
+    expect(c.querySelector("img")).toBeTruthy();
+    expect(c.querySelector('[data-testid="image-band-fixed"]')).toBeNull();
+  });
+
+  test("set, it becomes a fixed background instead of an img", () => {
+    const c = band({ image_url: "/x.jpg", fixed_bg: true });
+    const fixed = c.querySelector('[data-testid="image-band-fixed"]');
+    expect(fixed).toBeTruthy();
+    expect(c.querySelector("img")).toBeNull();
+    expect(fixed.querySelector(".bg-fixed")).toBeTruthy();
+  });
+
+  test("it is hidden below md, where the effect does not work", () => {
+    const fixed = band({ image_url: "/x.jpg", fixed_bg: true })
+      .querySelector('[data-testid="image-band-fixed"]');
+    expect([...fixed.classList]).toContain("hidden");
+    expect([...fixed.classList]).toContain("md:block");
+  });
+
+  test("the overlay still dims it", () => {
+    const c = band({ image_url: "/x.jpg", fixed_bg: true, overlay_opacity: 70 });
+    expect(c.querySelector('[data-testid="image-band-overlay"]').style.opacity).toBe("0.7");
+  });
+
+  test("no image means no background either way", () => {
+    expect(band({ image_url: "", fixed_bg: true })
+      .querySelector('[data-testid="image-band-fixed"]')).toBeNull();
+  });
+});
+
+/**
+ * The scrolling text panel.
+ *
+ * A box of FIXED height holding text of any length: the page keeps its shape and the
+ * words scroll inside rather than pushing everything below them down. Its scrollbar is
+ * deliberately visible — the blocks that hide theirs have incidental overflow, whereas
+ * here the overflow is the whole feature and a box with no scrollbar looks truncated.
+ */
+describe("text panel", () => {
+  const panel = (over) => draw("text_panel", { ...BLOCK_DEFAULTS.text_panel(), ...over })
+    .querySelector('[data-testid="text-panel"]');
+
+  test("it has a height and scrolls inside it", () => {
+    const el = panel({ height: 400 });
+    expect(el.style.height).toBe("400px");
+    expect([...el.classList]).toContain("overflow-y-auto");
+  });
+
+  test("the height is clamped, and 0 goes to the floor rather than the default", () => {
+    expect(panel({ height: 99999 }).style.height).toBe("1200px");
+    expect(panel({ height: 0 }).style.height).toBe("80px");
+  });
+
+  test("junk falls back rather than reaching the DOM as NaNpx", () => {
+    for (const bad of ["", null, "abc"]) {
+      expect(panel({ height: bad }).style.height).toMatch(/^\d+px$/);
+    }
+  });
+
+  test.each([["narrow", "max-w-[640px]"], ["normal", "max-w-[900px]"], ["wide", "max-w-[1200px]"]])(
+    "width %s caps at %s", (width, cls) => {
+      expect([...panel({ width }).classList]).toContain(cls);
+    });
+
+  test("full width drops the cap entirely", () => {
+    const el = panel({ full_width: true });
+    expect([...el.classList].some((c) => c.startsWith("max-w-"))).toBe(false);
+    expect([...el.classList]).toContain("w-full");
+  });
+
+  test.each([["left", "mr-auto"], ["center", "mx-auto"], ["right", "ml-auto"]])(
+    "panel position %s uses %s", (align, cls) => {
+      expect([...panel({ align }).classList]).toContain(cls);
+    });
+
+  test("where the panel sits and how its text aligns are separate questions", () => {
+    const el = panel({ align: "right", text_align: "center" });
+    expect([...el.classList]).toContain("ml-auto");
+    expect([...el.classList]).toContain("text-center");
+  });
+
+  test("the heading is optional", () => {
+    expect(panel({ heading: "" }).querySelector("h2")).toBeNull();
+    expect(panel({ heading: "Manifesto" }).querySelector("h2")).toHaveTextContent("Manifesto");
+  });
+
+  test("the content renders as rich text", () => {
+    expect(panel({ content: "**bold** words" }).querySelector("strong"))
+      .toHaveTextContent("bold");
+  });
+});

@@ -5083,11 +5083,17 @@ async def security_headers(request: Request, call_next):
 # 6: custom_fonts gained its unique (family, weight, style) index — without the bump an
 #    already-initialised database never runs init_indexes again and the upload route's
 #    replace-on-conflict guarantee would rest on nothing.
-# 9: albums carry their own `date`, and the Gallery grid orders by it instead of by a
-#    hand-written sort_order. Without the bump migrate_album_dates never runs on an
-#    already-initialised database, every album falls back to its creation day, and the
-#    grid silently keeps the old order while the CMS claims it is sorted by date.
-SCHEMA_VERSION = 9
+# 9: pages carry `in_footer`, and the footer reads its links from them instead of having
+#    three hrefs typed into Layout.jsx. Without the bump migrate_footer_pages never runs
+#    on an already-initialised database, and the first deploy renders an EMPTY Legal
+#    column — the pages are all still there, nothing marks them as belonging in it.
+# 10: the header nav's type size moved from the theme document to the site settings, so
+#     it sits with the header's other control instead of under Theme.
+# 11: albums carry their own `date`, and the Gallery grid orders by it instead of by a
+#     hand-written sort_order. Without the bump migrate_album_dates never runs on an
+#     already-initialised database, every album falls back to its creation day, and the
+#     grid silently keeps the old order while the CMS claims it is sorted by date.
+SCHEMA_VERSION = 11
 
 
 async def init_app():
@@ -5239,6 +5245,16 @@ async def init_indexes():
         await migrate_album_dates()
     except Exception:
         logger.exception("migrate_album_dates failed")
+
+    try:
+        await migrate_footer_pages()
+    except Exception:
+        logger.exception("migrate_footer_pages failed")
+
+    try:
+        await migrate_nav_size_to_site_settings()
+    except Exception:
+        logger.exception("migrate_nav_size_to_site_settings failed")
 
     try:
         await migrate_user_names()
@@ -5436,6 +5452,61 @@ async def migrate_album_dates():
     if fixed:
         logger.info("Backfilled a date onto %d album(s)", fixed)
     return fixed
+
+
+async def migrate_nav_size_to_site_settings():
+    """Carry the header nav's type size out of the theme document.
+
+    It was a theme value, which is where typography belongs in the abstract and the last
+    place anyone looked for it — the header's other control sits in the Site pane. The
+    value moves; the CSS variable it produces does not, because it has to arrive in the
+    render-blocking stylesheet or the nav paints at the default and then jumps.
+
+    Only runs when the site settings have no size of their own, so an operator who has
+    already set one in the new place is never overwritten by the old one.
+    """
+    site = await db.site_settings.find_one({"_id": "site"}, {"_id": 0, "nav_size": 1}) or {}
+    if site.get("nav_size") is not None:
+        return 0
+    theme = await db.cms_theme.find_one({"doc_id": "theme_current"}, {"_id": 0}) or {}
+    existing = ((theme.get("published") or {}).get("nav_size")
+                or (theme.get("draft") or {}).get("nav_size"))
+    if existing is None:
+        return 0
+    await db.site_settings.update_one(
+        {"_id": "site"}, {"$set": {"nav_size": int(existing)}}, upsert=True)
+    logger.info("Moved nav_size %s from the theme to the site settings", existing)
+    return 1
+
+
+async def migrate_footer_pages():
+    """Give the footer back the links it used to have hardcoded.
+
+    The three legal pages were seeded with `in_nav=False` and a comment saying they live
+    in the footer — but the footer typed their hrefs into the component instead, so the
+    flag was documentation rather than data. Without this, the first deploy of the
+    CMS-driven footer would render an empty Legal column: the pages exist, nothing marks
+    them as belonging there.
+
+    Only touches rows that have no `in_footer` at all, so an editor who has already
+    decided is never overruled. Keyed on the slugs the seeder creates rather than on
+    "not in the nav", because a page an editor deliberately hid from the nav is not
+    thereby a legal page.
+    """
+    seeded = ("terms", "privacy", "cookie-policy")
+    r = await db.cms_pages.update_many(
+        {"slug": {"$in": list(seeded)}, "in_footer": {"$exists": False}},
+        {"$set": {"in_footer": True, "footer_order": 100}},
+    )
+    # Everything else defaults to "not in the footer", stated rather than left absent so
+    # the field means the same thing on every row.
+    await db.cms_pages.update_many(
+        {"in_footer": {"$exists": False}},
+        {"$set": {"in_footer": False, "footer_order": 100}},
+    )
+    if r.modified_count:
+        logger.info("Marked %d page(s) as footer links", r.modified_count)
+    return r.modified_count
 
 
 async def migrate_gallery_ordering():
