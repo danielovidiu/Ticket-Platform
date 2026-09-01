@@ -162,6 +162,44 @@ const casing = (props) => (props.text_case === undefined ? "uppercase" : props.t
 const CONTENT_Y = { top: "justify-start", middle: "justify-center", bottom: "justify-end" };
 const contentY = (props, fallback) => CONTENT_Y[props.content_y] || fallback;
 
+/** Where the named steps sit on the 0-100 scale that replaced them. */
+const CONTENT_Y_AS_PERCENT = { top: 0, middle: 50, bottom: 100 };
+
+/**
+ * How far down the block its text sits, as a percentage of the block's own height.
+ *
+ * Three named steps could put a hero's words at the top, the middle or the bottom of the
+ * image and nowhere else — and on a photograph the one place they need to go is usually
+ * none of those three, because a face or a horizon is in the way.
+ *
+ * A block that predates the slider takes the position its old step meant, so nothing
+ * moves on upgrade. `fallback` is what a block with neither carries.
+ */
+export function contentOffset(props, fallback = 100) {
+  const raw = Number(props.content_offset);
+  if (Number.isFinite(raw)) return Math.min(100, Math.max(0, raw));
+  const named = CONTENT_Y_AS_PERCENT[props.content_y];
+  return named === undefined ? fallback : named;
+}
+
+/**
+ * Two spacers either side of the content, growing in proportion.
+ *
+ * Absolute positioning with `top: P%` would be the obvious way and it can overflow: at
+ * 100% a block of text taller than its section hangs out of the bottom, and the section
+ * clips it. Flex-grow shares out only the space that is actually free, so the content is
+ * placed proportionally when there is room and simply fills the block when there is not.
+ */
+function VerticalPlacement({ offset, children, testId }) {
+  return (
+    <>
+      <div style={{ flexGrow: offset }} aria-hidden="true" data-testid={testId && `${testId}-space-before`} />
+      {children}
+      <div style={{ flexGrow: 100 - offset }} aria-hidden="true" data-testid={testId && `${testId}-space-after`} />
+    </>
+  );
+}
+
 const overlayMode = (props) => (props.overlay === undefined ? "gradient" : props.overlay === true ? "solid" : props.overlay || "none");
 
 /**
@@ -221,7 +259,10 @@ function Hero({ props }) {
   );
 
   const body = (
-    <Container className="relative pb-16 md:pb-24">
+    // Symmetric padding: the text used to be pinned to the bottom, so only bottom
+    // padding mattered. It can sit anywhere now, and at 0% it would otherwise start
+    // hard against the top edge.
+    <Container className="relative py-16 md:py-24">
       <div className={`flex flex-col ${align}`}>
         {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-3 mb-6`}>{props.eyebrow}</div>}
         {props.heading && (
@@ -243,13 +284,22 @@ function Hero({ props }) {
   // Full frame spans the viewport, as the hero always has. Turned off, the whole block —
   // image included — is held inside the same 1400px frame the Image block's "Full width"
   // toggles against, so the two controls mean the same thing in both places.
+  // 100 = flush with the bottom, which is where the hero has always put its words.
+  const offset = contentOffset(props, 100);
+  const placed = <VerticalPlacement offset={offset} testId="hero">{body}</VerticalPlacement>;
+
   if (fullFrame) {
-    return <section className={`relative overflow-hidden flex flex-col ${contentY(props, "justify-end")}`} style={minHeight} data-testid="hero">{media}{body}</section>;
+    return (
+      <section className="relative overflow-hidden flex flex-col" style={minHeight} data-testid="hero"
+               data-content-offset={offset}>
+        {media}{placed}
+      </section>
+    );
   }
   return (
-    <section data-testid="hero">
-      <div className={`max-w-[1400px] mx-auto relative overflow-hidden flex flex-col ${contentY(props, "justify-end")} border border-ink/10`} style={minHeight}>
-        {media}{body}
+    <section data-testid="hero" data-content-offset={offset}>
+      <div className="max-w-[1400px] mx-auto relative overflow-hidden flex flex-col border border-ink/10" style={minHeight}>
+        {media}{placed}
       </div>
     </section>
   );
@@ -725,12 +775,20 @@ function ImageBand({ props }) {
         // Two ways to carry the same photo, because a fixed background is not an <img>.
         //
         // `bg-fixed` pins it to the viewport so the band scrolls over a stationary image.
-        // Mobile browsers — iOS Safari in particular — IGNORE background-attachment, and
-        // what they render instead is a badly-cropped still. So below md the fixed
-        // variant shows no photo at all rather than a broken version of the effect.
+        // Mobile browsers — iOS Safari in particular — IGNORE background-attachment and
+        // render a badly-cropped, wrongly-scaled still instead.
+        //
+        // This used to hide the fixed variant below md, which meant a phone got NO photo
+        // at all: the band collapsed to a flat colour and the block looked broken rather
+        // than merely less fancy. A phone gets the same photograph now, as an ordinary
+        // <img>, and only the parallax is missing — which is the part of the effect
+        // nobody can see on a phone anyway.
         props.fixed_bg ? (
-          <div className="absolute inset-0 hidden md:block" data-testid="image-band-fixed">
-            <div className="absolute inset-0 bg-fixed bg-center bg-cover"
+          <div className="absolute inset-0" data-testid="image-band-fixed">
+            <img src={mediaUrl(props.image_url)} alt=""
+                 className="md:hidden w-full h-full object-cover"
+                 data-testid="image-band-fixed-fallback" />
+            <div className="absolute inset-0 hidden md:block bg-fixed bg-center bg-cover"
                  style={{ backgroundImage: `url(${mediaUrl(props.image_url)})` }} />
             <div className="absolute inset-0"
                  style={{ backgroundColor: props.overlay_color || "#050505", opacity }}
@@ -745,16 +803,21 @@ function ImageBand({ props }) {
           </div>
         )
       )}
+      {/* No max-w on the text. It was capped at 4xl for the heading and xl for the body,
+          so on a wide band a line broke less than halfway across and the rest of the
+          photograph sat empty beside it — the words looked pasted onto a corner rather
+          than set on the image. The safe area IS the Container's padding; inside it the
+          text is free to use the full measure. */}
       <Container className="relative py-16 md:py-24">
-        <div className={`flex flex-col ${align}`}>
+        <div className={`flex flex-col w-full ${align}`}>
           {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-3 mb-4`}>{props.eyebrow}</div>}
           {props.heading && (
-            <h2 className={`font-display text-4xl md:text-6xl ${upper} tracking-tighter font-bold max-w-4xl whitespace-pre-wrap`}
+            <h2 className={`font-display text-4xl md:text-6xl ${upper} tracking-tighter font-bold w-full whitespace-pre-wrap`}
                 data-testid="image-band-heading">
               {props.heading}
             </h2>
           )}
-          {props.body && <div className="mt-6 max-w-xl">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed text-lg" })}</div>}
+          {props.body && <div className="mt-6 w-full">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed text-lg" })}</div>}
           {props.cta_label && (
             <div className="mt-8">
               <Link to={props.cta_href || "#"} className={props.cta_style === "accent" ? "btn-accent" : "btn-primary"}>{props.cta_label}</Link>
