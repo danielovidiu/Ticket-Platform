@@ -111,7 +111,7 @@ pyyaml==6.0.3
     # via uvicorn
 qrcode==8.2
     # via -r requirements.in
-reportlab==5.0.0
+reportlab==5.0.1
     # via -r requirements.in
 requests==2.34.2
     # via stripe
@@ -119,7 +119,7 @@ starlette==1.6.0
     # via
     #   -r requirements.in
     #   fastapi
-stripe==15.5.0
+stripe==15.5.1
     # via -r requirements.in
 typing-extensions==4.16.0
     # via
@@ -135,7 +135,7 @@ typing-inspection==0.4.4
     #   pydantic
 urllib3==2.7.0
     # via requests
-uvicorn==0.52.3
+uvicorn==0.52.4
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
