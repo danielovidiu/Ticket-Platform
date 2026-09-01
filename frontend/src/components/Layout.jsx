@@ -153,7 +153,13 @@ const Header = ({ cmsNav, navFailed }) => {
   const nav = cmsNav.length ? cmsNav : navFailed ? OFFLINE_NAV : [];
   return (
     <header className="sticky top-0 z-40 bg-page hairline-b">
-      {/* One row, no wrapping. The account actions live behind a dropdown now, so the
+      {/* The nav appears from `md` (768px), not `lg`. At `lg` a tablet held either way up
+          got the phone treatment — a hamburger hiding seven links that had room to sit
+          in the bar, on a device with a pointer and no reason to tap twice for the menu.
+          The bar already scrolls horizontally rather than wrapping, so a long nav degrades
+          by scrolling instead of by disappearing.
+
+          One row, no wrapping. The account actions live behind a dropdown now, so the
           right-hand group is two controls at every role and in both auth states — the
           header can no longer change height or re-wrap when somebody signs in. The nav
           itself still grows with each CMS page, so it scrolls horizontally rather than
@@ -166,7 +172,7 @@ const Header = ({ cmsNav, navFailed }) => {
             should be depends on how many items it holds and how long their labels are,
             both of which an editor changes. 11px is the value it shipped with, so a
             theme saved before this existed renders exactly as it did. */}
-        <nav className="hidden lg:flex items-center gap-x-5 min-w-0 overflow-x-auto no-scrollbar font-mono-x uppercase tracking-[0.18em] text-[length:var(--nav-size,11px)]">
+        <nav className="hidden md:flex items-center gap-x-5 min-w-0 overflow-x-auto no-scrollbar font-mono-x uppercase tracking-[0.18em] text-[length:var(--nav-size,11px)]">
           {nav.map((n) => (
             <NavLink key={n.route} to={n.route} end={n.route === "/"} data-testid={`nav-${n.label.toLowerCase()}`}
               className={({ isActive }) => `whitespace-nowrap ${isActive ? "text-ink" : "text-ink-3 hover:text-ink transition-colors"}`}>
@@ -174,16 +180,16 @@ const Header = ({ cmsNav, navFailed }) => {
             </NavLink>
           ))}
         </nav>
-        <div className="hidden lg:flex items-center gap-2 shrink-0">
+        <div className="hidden md:flex items-center gap-2 shrink-0">
           <CartLink />
           <AccountMenu user={user} logout={logout} />
         </div>
-        <button className="lg:hidden" data-testid="menu-toggle" onClick={() => setOpen((v) => !v)}>
+        <button className="md:hidden" data-testid="menu-toggle" onClick={() => setOpen((v) => !v)}>
           {open ? <X /> : <Menu />}
         </button>
       </div>
       {open && (
-        <div className="lg:hidden hairline-b bg-page">
+        <div className="md:hidden hairline-b bg-page">
           <div className="px-6 py-6 flex flex-col gap-4 font-mono-x uppercase text-[length:max(var(--nav-size,11px),0.875rem)]">
             {nav.map((n) => <NavLink key={n.route} to={n.route} onClick={() => setOpen(false)} className="text-ink-2">{n.label}</NavLink>)}
             <CartLink onNavigate={() => setOpen(false)} />

@@ -166,11 +166,21 @@ describe("hero height", () => {
  * declaration that produces them.
  */
 describe("the container fills its flex parent", () => {
-  test("Container asks for full width before capping it", () => {
-    const c = draw("rich_text");
+  test("the frame asks for full width before capping it", () => {
+    // rich_text uses the 900px reading measure, so this pins a block on the wide one.
+    const c = draw("events_grid");
     const el = c.querySelector(".max-w-\\[1400px\\]");
     expect([...el.classList]).toContain("w-full");
     expect([...el.classList]).toContain("mx-auto");
+  });
+
+  test("the narrow blocks cap at a reading measure, still full width first", () => {
+    // A line of text 1400px wide is one the eye loses its place in.
+    for (const type of ["rich_text", "contact_form", "newsletter"]) {
+      const el = draw(type).querySelector(".max-w-\\[900px\\]");
+      expect(el, `${type} lost its reading measure`).toBeTruthy();
+      expect([...el.classList]).toContain("w-full");
+    }
   });
 
   test.each(["hero", "image_band"])("%s's inner container is full width", (type) => {
@@ -203,5 +213,67 @@ describe("vertical text position", () => {
 
   test("an unknown value falls back rather than dropping the class", () => {
     expect(yClass(draw("hero", { heading: "H", content_y: "sideways" }))).toBe("justify-end");
+  });
+});
+
+/**
+ * Every block can go edge to edge.
+ *
+ * Spacer is the one exception and is asserted as such: it is an empty div with a height,
+ * so contained and edge-to-edge render identically and a toggle would visibly do nothing
+ * — the same bug the hero's overlay boolean had, where the panel offered a control that
+ * changed nothing.
+ */
+describe("full width", () => {
+  // Spacer has no content to frame: it is an empty div with a height, so contained and
+  // edge-to-edge render identically and a toggle would visibly do nothing.
+  const NO_CONTROL = new Set(["spacer"]);
+  // Hero and the image band cap their TEXT even when the block bleeds — the background
+  // spans the viewport, the words stay in the frame so a heading is not 1400px wide on a
+  // desktop. Their toggle is about the block, not about every element inside it.
+  const TEXT_STAYS_FRAMED = new Set(["hero", "image_band"]);
+
+  const types = Object.keys(BLOCK_RENDERERS).filter((t) => !NO_CONTROL.has(t));
+  // The video block renders nothing at all without a source, so there would be no frame
+  // to assert about.
+  const props = (type) => ({ ...BLOCK_DEFAULTS[type](), heading: "H", image_url: "/x.jpg",
+                             url: "https://www.youtube.com/watch?v=abcdefghijk" });
+  const capped = (c) => c.querySelector('[class*="max-w-["]');
+
+  test.each(types)("%s is capped by default", (type) => {
+    const c = draw(type, props(type));
+    // marquee is the exception in the other direction: a ticker is edge-to-edge by
+    // nature, so unset means bleeding and turning it OFF is what caps it.
+    if (type === "marquee") return expect(capped(c)).toBeNull();
+    expect(capped(c), `${type} has no width cap`).toBeTruthy();
+  });
+
+  test.each(types.filter((t) => !TEXT_STAYS_FRAMED.has(t)))(
+    "%s drops its cap when set full width", (type) => {
+      const c = draw(type, { ...props(type), full_width: true });
+      expect(capped(c), `${type} ignored full_width`).toBeNull();
+    });
+
+  test.each([...TEXT_STAYS_FRAMED])(
+    "%s bleeds its background but keeps its text framed", (type) => {
+      const key = type === "hero" ? "full_frame" : "full_width";
+      const c = draw(type, { ...props(type), [key]: true });
+      const section = c.querySelector("section");
+      // The block itself is not capped...
+      expect([...section.classList].some((x) => x.startsWith("max-w-"))).toBe(false);
+      // ...but the words inside it still are.
+      expect(capped(c), `${type} let its text run the full width`).toBeTruthy();
+    });
+
+  test("marquee caps when full_width is switched off", () => {
+    const c = draw("marquee", { ...BLOCK_DEFAULTS.marquee(), full_width: false });
+    expect(capped(c)).toBeTruthy();
+  });
+
+  test("the gutters survive going full width", () => {
+    // They are not spacing between blocks — they keep text off the edge of a phone, and
+    // there is no horizontal spacer to put them back with.
+    const c = draw("events_grid", { ...BLOCK_DEFAULTS.events_grid(), full_width: true });
+    expect(c.querySelector(".px-6")).toBeTruthy();
   });
 });

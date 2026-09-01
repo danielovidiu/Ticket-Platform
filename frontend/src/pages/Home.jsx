@@ -67,7 +67,7 @@ export default function Home() {
             <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">01 — Programme</div>
             <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-3">Upcoming</h2>
           </div>
-          <Link to="/events" className="hidden md:inline btn-primary" data-testid="all-events-link">All events</Link>
+          <Link to="/events" className="btn-primary" data-testid="all-events-link">All events</Link>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {events.slice(0, 4).map((e) => (
@@ -105,7 +105,7 @@ export default function Home() {
             <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">02 — Roster</div>
             <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-3">Artists</h2>
           </div>
-          <Link to="/artists" className="hidden md:inline btn-primary">All artists</Link>
+          <Link to="/artists" className="btn-primary">All artists</Link>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           {artists.slice(0, 6).map((a) => (

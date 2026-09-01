@@ -933,16 +933,20 @@ const FIELDS = {
     // still resolves them, so a hero published under a name keeps its exact height.
     { k: "height_vh", label: "Height (% of screen)", type: "size", unit: "vh" },
   ],
-  rich_text: [{ k: "content", label: "Content (markdown-ish)", type: "textarea", rows: 12, format: true }],
+  rich_text: [
+    { k: "content", label: "Content (markdown-ish)", type: "textarea", rows: 12, format: true },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
+  ],
   image: [
     { k: "image_url", label: "Image", type: "image" },
     { k: "caption", label: "Caption" },
-    { k: "full_width", label: "Full width", type: "checkbox" },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
     { k: "aspect", label: "Aspect ratio", type: "select", options: ["natural", "1:1", "4:3", "3:4", "16:9", "21:9", "3:2", "16:10"] },
   ],
   gallery_grid: [
     { k: "heading", label: "Heading" },
     { k: "limit", label: "Max items", type: "number" },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
   events_grid: [
     { k: "eyebrow", label: "Eyebrow" },
@@ -950,6 +954,7 @@ const FIELDS = {
     { k: "limit", label: "Max events", type: "number" },
     { k: "layout", label: "Layout", type: "select", options: ["grid-1", "grid-2", "grid-3"] },
     { k: "card_aspect", label: "Card aspect", type: "select", options: ["1:1", "4:3", "16:9", "16:10", "3:2", "3:4"] },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
   artists_grid: [
     { k: "eyebrow", label: "Eyebrow" },
@@ -957,8 +962,12 @@ const FIELDS = {
     { k: "limit", label: "Max artists", type: "number" },
     { k: "layout", label: "Layout", type: "select", options: ["grid-2", "grid-3", "grid-4"] },
     { k: "card_aspect", label: "Card aspect", type: "select", options: ["1:1", "4:3", "3:4", "16:10"] },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
-  marquee: [{ k: "items", label: "Fallback items (used only when there are no upcoming events)", type: "list" }],
+  marquee: [
+    { k: "items", label: "Fallback items (used only when there are no upcoming events)", type: "list" },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox", fallback: true },
+  ],
   cta_banner: [
     { k: "image_url", label: "Image", type: "image" },
     { k: "eyebrow", label: "Eyebrow" },
@@ -968,15 +977,18 @@ const FIELDS = {
     { k: "cta_href", label: "Button link" },
     { k: "cta_style", label: "Button style", type: "select", options: ["outline", "accent"], fallback: "outline" },
     { k: "text_case", label: "Text case", type: "select", options: ["as-typed", "uppercase"], fallback: "uppercase" },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
   contact_form: [
     { k: "heading", label: "Heading" },
     { k: "success_message", label: "Success message", type: "textarea", rows: 2 },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
   newsletter: [
     { k: "heading", label: "Heading" },
     { k: "body", label: "Body", type: "textarea", format: true },
     { k: "cta_label", label: "Button label" },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
   video: [
     { k: "url", label: "YouTube / Vimeo / SoundCloud / Bandcamp URL" },
@@ -995,6 +1007,7 @@ const FIELDS = {
       // means the default for what is playing — a playlist gets more room than a track.
       when: (v) => /soundcloud\.com|bandcamp\.com/i.test(v.url || "") },
     { k: "caption", label: "Caption" },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
   image_band: [
     { k: "image_url", label: "Background image", type: "image" },
@@ -1012,7 +1025,10 @@ const FIELDS = {
     { k: "height", label: "Height", type: "select", options: ["short", "medium", "tall"], fallback: "medium" },
     { k: "full_width", label: "Full width (edge to edge)", type: "checkbox", fallback: true },
   ],
-  custom_html: [{ k: "html", label: "HTML", type: "textarea", rows: 10 }],
+  custom_html: [
+    { k: "html", label: "HTML", type: "textarea", rows: 10 },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
+  ],
   spacer: [{ k: "height", label: "Height (e.g. 4rem, 120px)" }],
   split: [
     { k: "direction", label: "Direction", type: "select", options: ["image-left", "image-right"] },
@@ -1023,6 +1039,7 @@ const FIELDS = {
     { k: "body", label: "Body", type: "textarea", format: true },
     { k: "cta_label", label: "CTA label" },
     { k: "cta_href", label: "CTA link" },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
 };
 
