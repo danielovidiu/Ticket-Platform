@@ -239,3 +239,86 @@ describe("audio providers", () => {
     }
   });
 });
+
+/**
+ * SoundCloud's own embed code.
+ *
+ * The Share/Embed dialog points its player at `api.soundcloud.com`, not at the page you
+ * were looking at, and it writes the id as a URN — `soundcloud:playlists:123`, itself
+ * percent-encoded inside an already-encoded query parameter. The first version of this
+ * parser only accepted `soundcloud.com` in that parameter, so the exact string SoundCloud
+ * hands an editor was refused while the undocumented page URL worked.
+ *
+ * The property being defended has not moved: the parameter is still never passed through.
+ * Only the resource type and a numeric id survive, and the URN is rebuilt from them.
+ */
+describe("soundcloud embed-code URLs", () => {
+  const REAL = "https://w.soundcloud.com/player/?url=https%3A//api.soundcloud.com/playlists/"
+    + "soundcloud%253Aplaylists%253A1084330825&color=%23ff5500&auto_play=false"
+    + "&hide_related=false&show_comments=true&show_user=true&show_reposts=false"
+    + "&show_teaser=true&visual=true";
+
+  const param = (u) => decodeURIComponent(new URL(resolveEmbed(u).src).searchParams.get("url"));
+
+  test("the string SoundCloud actually gives you resolves", () => {
+    const e = resolveEmbed(REAL);
+    expect(e).not.toBeNull();
+    expect(new URL(e.src).hostname).toBe("w.soundcloud.com");
+    expect(param(REAL)).toBe("https://api.soundcloud.com/playlists/soundcloud:playlists:1084330825");
+  });
+
+  test("their player options do not survive — only ours are emitted", () => {
+    // color, auto_play, show_comments etc. are the author's string; we set our own.
+    const q = new URL(resolveEmbed(REAL).src).searchParams;
+    expect(q.get("color")).toBeNull();
+    expect(q.get("auto_play")).toBeNull();
+    expect([...q.keys()].sort()).toEqual(["show_comments", "url", "visual"]);
+  });
+
+  test("a bare api URL works in both id forms", () => {
+    expect(param("https://api.soundcloud.com/playlists/1084330825"))
+      .toBe("https://api.soundcloud.com/playlists/1084330825");
+    expect(param("https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A55"))
+      .toBe("https://api.soundcloud.com/tracks/soundcloud:tracks:55");
+  });
+
+  test("a URN naming a different resource than its path is refused", () => {
+    expect(resolveEmbed("https://api.soundcloud.com/playlists/soundcloud%3Atracks%3A5")).toBeNull();
+  });
+
+  test("anything that is not a playlist or a track is refused", () => {
+    expect(resolveEmbed("https://api.soundcloud.com/users/123")).toBeNull();
+    expect(resolveEmbed("https://api.soundcloud.com/playlists")).toBeNull();
+    expect(resolveEmbed("https://api.soundcloud.com/playlists/../../evil")).toBeNull();
+    expect(resolveEmbed("https://api.soundcloud.com/playlists/abc")).toBeNull();
+  });
+
+  test("a lookalike api host is still not soundcloud", () => {
+    expect(resolveEmbed("https://api.soundcloud.com.evil.example/playlists/1")).toBeNull();
+  });
+});
+
+describe("track vs playlist", () => {
+  const kind = (u) => resolveEmbed(u)?.kind;
+
+  test("a set is a playlist, a track is a track", () => {
+    expect(kind("https://soundcloud.com/artist/sets/a-playlist")).toBe("playlist");
+    expect(kind("https://soundcloud.com/artist/a-track")).toBe("track");
+  });
+
+  test("the api form is classified from its resource type", () => {
+    expect(kind("https://api.soundcloud.com/playlists/1")).toBe("playlist");
+    expect(kind("https://api.soundcloud.com/tracks/1")).toBe("track");
+  });
+
+  test("bandcamp says which it is too", () => {
+    expect(kind("https://bandcamp.com/EmbeddedPlayer/album=1/")).toBe("playlist");
+    expect(kind("https://bandcamp.com/EmbeddedPlayer/track=1/")).toBe("track");
+  });
+
+  test("a three-segment path that is not a set is refused", () => {
+    // soundcloud.com/artist/sets/x is a playlist; anything else three deep is not a page
+    // the player can render.
+    expect(resolveEmbed("https://soundcloud.com/artist/notsets/x")).toBeNull();
+  });
+});

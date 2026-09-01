@@ -37,6 +37,9 @@ const YOUTUBE_INPUT_HOSTS = new Set([
 const VIMEO_INPUT_HOSTS = new Set(["vimeo.com", "player.vimeo.com"]);
 const SOUNDCLOUD_INPUT_HOSTS = new Set([
   "soundcloud.com", "m.soundcloud.com", "on.soundcloud.com", "w.soundcloud.com",
+  // The API host is not a page anyone browses, but it is what SoundCloud's own embed
+  // code points its player at, so it arrives pasted more often than the page URL does.
+  "api.soundcloud.com",
 ]);
 
 // A SoundCloud path segment: what appears in soundcloud.com/<artist>/<track>. Anything
@@ -127,33 +130,63 @@ export function resolveEmbed(raw) {
   }
 
   if (SOUNDCLOUD_INPUT_HOSTS.has(host)) {
-    // The player takes the public track/playlist page as a query parameter. That is the
-    // one place in this module where author input reaches the emitted string, so it is
-    // NOT passed through: the path is validated segment by segment and a canonical
-    // soundcloud.com URL is rebuilt from the parts that survived. The frame host stays
-    // w.soundcloud.com either way, so even a malformed parameter cannot change what is
-    // framed — only what SoundCloud shows inside it.
-    let path = parts;
-    if (host === "w.soundcloud.com") {
-      // Already an embed URL: take the url= parameter and re-validate it as input.
-      const inner = url.searchParams.get("url");
-      if (!inner) return null;
-      let innerUrl;
-      try { innerUrl = new URL(inner); } catch { return null; }
-      if (innerUrl.hostname.toLowerCase().replace(/^www\./, "") !== "soundcloud.com") return null;
-      path = segments(innerUrl.pathname);
-    }
-    // artist/track, or artist/sets/playlist. One segment is a bare profile, which the
-    // player renders as an empty box, so it is refused rather than framed.
-    if (path.length < 2 || path.length > 3) return null;
-    if (!path.every((seg) => SOUNDCLOUD_SEGMENT.test(seg))) return null;
+    // The player takes its target as a query parameter, which is the one place in this
+    // module where author input reaches the emitted string. It is never passed through:
+    // whichever shape arrives, the pieces are validated and the parameter is rebuilt
+    // from what survived. The frame host stays w.soundcloud.com regardless, so even a
+    // malformed parameter cannot change WHAT is framed — only what SoundCloud shows
+    // inside it.
+    let target = null;
+    let kind = "track";
+    let inner = url;
 
-    const target = `https://soundcloud.com/${path.join("/")}`;
+    if (host === "w.soundcloud.com") {
+      // Already an embed URL — the shape SoundCloud's own Share/Embed dialog hands you.
+      // Take its url= parameter and re-validate it as if it had been pasted directly.
+      const raw = url.searchParams.get("url");
+      if (!raw) return null;
+      try { inner = new URL(raw); } catch { return null; }
+    }
+
+    const innerHost = inner.hostname.toLowerCase().replace(/^www\./, "");
+
+    if (innerHost === "api.soundcloud.com") {
+      // The API form, which is what the Share/Embed dialog produces:
+      //   api.soundcloud.com/playlists/1084330825
+      //   api.soundcloud.com/playlists/soundcloud%3Aplaylists%3A1084330825
+      // Only the resource type and its numeric id are kept, and the URN is rebuilt in
+      // whichever of the two forms it arrived in — some content resolves under one and
+      // not the other, so the shape is preserved while its contents are not trusted.
+      const seg = segments(inner.pathname);
+      if (seg.length !== 2) return null;
+      if (seg[0] !== "playlists" && seg[0] !== "tracks") return null;
+      kind = seg[0] === "playlists" ? "playlist" : "track";
+
+      const decoded = decodeURIComponent(seg[1]);
+      const plain = decoded.match(/^(\d{1,20})$/);
+      const urn = decoded.match(/^soundcloud:(playlists|tracks):(\d{1,20})$/);
+      if (plain) target = `https://api.soundcloud.com/${seg[0]}/${plain[1]}`;
+      else if (urn && urn[1] === seg[0]) target = `https://api.soundcloud.com/${seg[0]}/soundcloud:${urn[1]}:${urn[2]}`;
+      else return null;
+    } else if (innerHost === "soundcloud.com") {
+      // The human-facing page: artist/track, or artist/sets/playlist. One segment is a
+      // bare profile, which the player renders as an empty box, so it is refused rather
+      // than framed.
+      const path = segments(inner.pathname);
+      if (path.length < 2 || path.length > 3) return null;
+      if (!path.every((seg) => SOUNDCLOUD_SEGMENT.test(seg))) return null;
+      if (path.length === 3 && path[1] !== "sets") return null;
+      kind = path.length === 3 ? "playlist" : "track";
+      target = `https://soundcloud.com/${path.join("/")}`;
+    } else {
+      return null;
+    }
+
     const src = new URL("https://w.soundcloud.com/player/");
     src.searchParams.set("url", target);
     src.searchParams.set("visual", "false");
     src.searchParams.set("show_comments", "false");
-    return { src: src.toString(), provider: "soundcloud" };
+    return { src: src.toString(), provider: "soundcloud", kind };
   }
 
   if (host === "bandcamp.com" || host.endsWith(".bandcamp.com")) {
@@ -168,6 +201,7 @@ export function resolveEmbed(raw) {
       src: `https://bandcamp.com/EmbeddedPlayer/${kind}=${id}/size=large/bgcol=333333/`
          + "linkcol=ffffff/tracklist=false/transparent=true/",
       provider: "bandcamp",
+      kind: kind === "album" ? "playlist" : "track",
     };
   }
 

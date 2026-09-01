@@ -990,6 +990,10 @@ const FIELDS = {
       // Hidden rather than left visible: a control that looks editable and changes
       // nothing is the same bug the hero's overlay boolean had.
       when: (v) => !/soundcloud\.com|bandcamp\.com/i.test(v.url || "") },
+    { k: "embed_height", label: "Player height (px)",
+      // The mirror of the rule above: only audio embeds are sized by height, and blank
+      // means the default for what is playing — a playlist gets more room than a track.
+      when: (v) => /soundcloud\.com|bandcamp\.com/i.test(v.url || "") },
     { k: "caption", label: "Caption" },
   ],
   image_band: [
