@@ -626,6 +626,52 @@ function CustomHTML({ props }) {
   return <section><Frame full={props.full_width}><div dangerouslySetInnerHTML={{ __html: safe }} /></Frame></section>;
 }
 
+/**
+ * A text panel that scrolls inside itself.
+ *
+ * The point is a box of a FIXED height holding text of any length: a manifesto, a long
+ * credit list, terms nobody reads in full. The page keeps its shape and the words scroll
+ * within the panel rather than pushing everything below them down the page.
+ *
+ * Its own scrollbar is deliberate and not hidden. The blocks that hide theirs — the nav,
+ * the marquee — are ones where the overflow is incidental; here the overflow IS the
+ * feature, and a scrollable box with no visible scrollbar is a box that looks truncated.
+ *
+ * Width is a choice rather than a consequence: narrow for a reading measure, normal for
+ * the page frame, full to the edges. `align` moves the panel within its frame, which is
+ * a different question from how the text inside it is aligned.
+ */
+const PANEL_WIDTHS = { narrow: "max-w-[640px]", normal: "max-w-[900px]", wide: "max-w-[1200px]" };
+const PANEL_PLACE = { left: "mr-auto", center: "mx-auto", right: "ml-auto" };
+
+function TextPanel({ props }) {
+  // Validated before clamping, the way heroHeight does. `clampPx("abc")` is NaN, the
+  // browser drops the style, and the panel silently loses its height — taking the
+  // scrolling that is the entire point of the block with it.
+  const raw = Number(props.height);
+  const height = Number.isFinite(raw) ? clampPx(raw, { min: 80, max: 1200 }) : 320;
+  const width = props.full_width ? "w-full" : (PANEL_WIDTHS[props.width] || PANEL_WIDTHS.normal);
+  const place = PANEL_PLACE[props.align] || PANEL_PLACE.center;
+  const textAlign = props.text_align === "center" ? "text-center"
+    : props.text_align === "right" ? "text-right" : "text-left";
+
+  return (
+    <section>
+      <Frame full={props.full_width}>
+        <div className={`${width} ${place} ${textAlign} overflow-y-auto border border-ink/10 p-6`}
+             style={{ height }} data-testid="text-panel">
+          {props.heading && (
+            <h2 className="font-display text-2xl md:text-3xl uppercase tracking-tighter font-bold mb-4">
+              {props.heading}
+            </h2>
+          )}
+          {renderRich(props.content, { paraClassName: "text-ink-2 leading-relaxed mt-4 first:mt-0" })}
+        </div>
+      </Frame>
+    </section>
+  );
+}
+
 function Spacer({ props }) { return <div style={{ height: props.height || "4rem" }} />; }
 
 function Split({ props }) {
@@ -676,12 +722,28 @@ function ImageBand({ props }) {
   const inner = (
     <div className={`relative overflow-hidden ${h} flex flex-col ${contentY(props, "justify-center")}`} data-testid="image-band">
       {props.image_url && (
-        <div className="absolute inset-0">
-          <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" />
-          <div className="absolute inset-0"
-               style={{ backgroundColor: props.overlay_color || "#050505", opacity }}
-               data-testid="image-band-overlay" />
-        </div>
+        // Two ways to carry the same photo, because a fixed background is not an <img>.
+        //
+        // `bg-fixed` pins it to the viewport so the band scrolls over a stationary image.
+        // Mobile browsers — iOS Safari in particular — IGNORE background-attachment, and
+        // what they render instead is a badly-cropped still. So below md the fixed
+        // variant shows no photo at all rather than a broken version of the effect.
+        props.fixed_bg ? (
+          <div className="absolute inset-0 hidden md:block" data-testid="image-band-fixed">
+            <div className="absolute inset-0 bg-fixed bg-center bg-cover"
+                 style={{ backgroundImage: `url(${mediaUrl(props.image_url)})` }} />
+            <div className="absolute inset-0"
+                 style={{ backgroundColor: props.overlay_color || "#050505", opacity }}
+                 data-testid="image-band-overlay" />
+          </div>
+        ) : (
+          <div className="absolute inset-0">
+            <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" />
+            <div className="absolute inset-0"
+                 style={{ backgroundColor: props.overlay_color || "#050505", opacity }}
+                 data-testid="image-band-overlay" />
+          </div>
+        )
       )}
       <Container className="relative py-16 md:py-24">
         <div className={`flex flex-col ${align}`}>
@@ -722,6 +784,7 @@ export const BLOCK_RENDERERS = {
   newsletter: Newsletter,
   video: VideoEmbed,
   image_band: ImageBand,
+  text_panel: TextPanel,
   custom_html: CustomHTML,
   spacer: Spacer,
   split: Split,

@@ -1119,6 +1119,10 @@ const FIELDS = {
   ],
   image_band: [
     { k: "image_url", label: "Background image", type: "image" },
+    { k: "fixed_bg", label: "Fixed background (photo stays put as you scroll)", type: "checkbox",
+      // Desktop only: mobile browsers ignore background-attachment, so the fixed variant
+      // shows no photo below md rather than a broken version of the effect.
+      when: (v) => !!v.image_url },
     { k: "overlay_color", label: "Overlay colour", type: "color", fallback: "#050505" },
     { k: "overlay_opacity", label: "Overlay opacity", type: "range", min: 0, max: 100, fallback: 50 },
     { k: "eyebrow", label: "Eyebrow" },
@@ -1135,6 +1139,16 @@ const FIELDS = {
   ],
   custom_html: [
     { k: "html", label: "HTML", type: "textarea", rows: 10 },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
+  ],
+  text_panel: [
+    { k: "heading", label: "Heading" },
+    { k: "content", label: "Content (markdown-ish)", type: "textarea", rows: 10, format: true },
+    { k: "height", label: "Panel height (px)", type: "size", unit: "px",
+      limits: { min: 80, max: 1200, fallback: 320 } },
+    { k: "width", label: "Width", type: "select", options: ["narrow", "normal", "wide"], fallback: "normal" },
+    { k: "align", label: "Panel position", type: "select", options: ["left", "center", "right"], fallback: "center" },
+    { k: "text_align", label: "Text align", type: "select", options: ["left", "center", "right"], fallback: "left" },
     { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
   spacer: [{ k: "height", label: "Height (e.g. 4rem, 120px)" }],
@@ -1272,8 +1286,14 @@ function PropsEditor({ block, onChange }) {
               <SizeField
                 value={v[f.k]} testId={testId} onCommit={commitField(f.k)}
                 unit={f.unit || "px"}
-                limits={f.breakpoint ? HERO_SIZE_LIMITS[f.breakpoint] : HERO_HEIGHT_LIMITS}
-                current={f.breakpoint ? heroHeadingSize(v)[f.breakpoint] : heroHeight(v)}
+                // Three shapes share this control: the hero's heading sizes (per
+                // breakpoint), the hero's height (vh), and anything that just names its
+                // own bounds. Without the last case a panel height in px would silently
+                // borrow the hero's 10-100vh limits.
+                limits={f.limits || (f.breakpoint ? HERO_SIZE_LIMITS[f.breakpoint] : HERO_HEIGHT_LIMITS)}
+                current={f.limits
+                  ? (Number(v[f.k]) || f.limits.fallback)
+                  : (f.breakpoint ? heroHeadingSize(v)[f.breakpoint] : heroHeight(v))}
               />
             ) : f.type === "range" ? (
               <div className="flex items-center gap-3">

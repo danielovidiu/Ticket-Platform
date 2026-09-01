@@ -191,6 +191,10 @@ export const BLOCK_DEFAULTS = {
     text_case: "as-typed", full_width: true, cta_label: "", cta_href: "", cta_style: "outline",
   }),
   custom_html: () => ({ html: "<div class=\"p-8 text-center font-mono-x uppercase\">Custom HTML</div>" }),
+  text_panel: () => ({
+    heading: "", content: "Long text goes here. The panel keeps its height and the words\nscroll inside it.",
+    height: 320, width: "normal", align: "center", text_align: "left", full_width: false,
+  }),
   spacer: () => ({ height: "4rem" }),
   split: () => ({ direction: "image-left", image_url: "", eyebrow: "", heading: "", body: "", cta_label: "", cta_href: "", aspect: "1:1" }),
 };
@@ -210,6 +214,7 @@ export const BLOCK_LABELS = {
   image_band: "Image band",
   custom_html: "Custom HTML",
   spacer: "Spacer",
+  text_panel: "Text panel (scrolling)",
   split: "Split (image + text)",
 };
 
