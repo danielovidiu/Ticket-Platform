@@ -12,6 +12,7 @@ import { FormatToolbar } from "../lib/richText";
 import ImageField from "../components/ImageField";
 import VideoField from "../components/VideoField";
 import FontPicker from "../components/FontPicker";
+import { SOCIAL_PLATFORMS } from "../lib/social";
 import FontManager from "../components/FontManager";
 import { navChanged } from "../lib/nav";
 import { useAutosave, useDebouncedField } from "../lib/useAutosave";
@@ -734,7 +735,13 @@ export default function CMSEditor() {
             {rightTab === "versions" && page && (
               <VersionList page={page} onRevert={revert} />
             )}
-            {rightTab === "site" && <EventsSettingsEditor />}
+            {rightTab === "site" && (
+              <div className="space-y-6">
+                <SiteContentEditor />
+                <div className="pt-2 border-t border-ink/10" />
+                <EventsSettingsEditor />
+              </div>
+            )}
           </div>
         </aside>
       </div>
@@ -832,6 +839,107 @@ function ListField({ value, onCommit }) {
   return (
     <textarea rows={5} value={local} onChange={(e) => onChange(e.target.value)} onBlur={flush}
               {...RAW_TEXT_PROPS} className="input-x !py-2 !text-sm font-mono-x" />
+  );
+}
+
+/**
+ * The site's own words: both wordmarks, and everything the footer says apart from its
+ * links. The links are CMS pages, ticked with "Show in footer" on the page itself, so
+ * they cannot point at a page that does not exist.
+ *
+ * Saves on blur rather than through the draft/publish cycle the pages and theme use:
+ * there is no preview of a footer to review, and a two-step publish for eight fields
+ * reads as ceremony.
+ */
+function SiteContentEditor() {
+  const [state, setState] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    http.get("/admin/cms/site").then((r) => {
+      setState(r.data);
+      if (r.data?.nav_size) {
+        document.documentElement.style.setProperty("--nav-size", `${r.data.nav_size}px`);
+      }
+    }).catch(() => {});
+  }, []);
+
+  if (!state) return <div className="text-[11px] text-ink-4 font-mono-x uppercase tracking-[0.2em]">Loading…</div>;
+
+  const save = async (patch) => {
+    const next = { ...state, ...patch };
+    setState(next);
+    setBusy(true);
+    try {
+      const { social, pages, ...rest } = next;
+      const { data } = await http.put("/admin/cms/site", { ...rest, social: social || {} });
+      setState(data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed");
+    } finally { setBusy(false); }
+  };
+
+  const Field = ({ label, k, hint }) => (
+    <label className="block">
+      <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">{label}</div>
+      <TextField value={state[k] || ""} onCommit={(v) => save({ [k]: v })} testId={`site-${k}`} />
+      {hint && <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5">{hint}</div>}
+    </label>
+  );
+
+  return (
+    <div className="space-y-4" data-testid="site-content">
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Wordmarks</div>
+      <Field label="Header" k="header_wordmark" />
+      <Field label="Footer" k="wordmark" hint="Separate on purpose — one need not follow the other" />
+      <label className="block">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">
+          Menu text size: {state.nav_size ?? 11}px
+        </div>
+        <input type="range" min="8" max="32" value={state.nav_size ?? 11} data-testid="site-nav-size"
+               onChange={(e) => {
+                 const px = Number(e.target.value);
+                 // Painted immediately as well as saved. The size reaches visitors through
+                 // the render-blocking stylesheet, which this already-loaded page will not
+                 // re-fetch — so without this the slider moves, the value saves, and the
+                 // header does not budge until a reload. That is exactly how the previous
+                 // version of this control read as broken.
+                 document.documentElement.style.setProperty("--nav-size", `${px}px`);
+                 save({ nav_size: px });
+               }} className="w-full" />
+        <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
+          The header nav. The phone menu follows it up but never below its own size.
+        </div>
+      </label>
+
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Footer</div>
+      <label className="block">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Description</div>
+        <TextareaField value={state.description || ""} rows={3} testId="site-description" onCommit={(v) => save({ description: v })} />
+      </label>
+      <Field label="Legal column heading" k="legal_heading" />
+      <Field label="Contact column heading" k="contact_heading" />
+      <Field label="Contact email" k="contact_email" />
+      <Field label="Copyright name" k="copyright_name" hint="The year is always the current one" />
+
+      <div className="pt-2 text-[10px] text-ink-4 leading-relaxed" data-testid="site-footer-pages">
+        Footer links: {(state.pages || []).map((p) => p.label).join(" · ") || "none yet"}.
+        <br />Chosen per page with “Show in footer”. A page in the footer is kept out of
+        the main navigation.
+      </div>
+
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Social</div>
+      <div className="space-y-2">
+        {SOCIAL_PLATFORMS.map((pl) => (
+          <label key={pl.key} className="block">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">{pl.label}</div>
+            <TextField value={state.social?.[pl.key] || ""} testId={`site-social-${pl.key}`}
+                       onCommit={(v) => save({ social: { ...(state.social || {}), [pl.key]: v } })} />
+          </label>
+        ))}
+      </div>
+      {busy && <div className="font-mono-x text-[9px] uppercase tracking-[0.2em] text-ink-5">Saving…</div>}
+    </div>
   );
 }
 
@@ -1198,7 +1306,15 @@ function PageMetaEditor({ page, onChange }) {
         <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Nav label</div>
         <TextField value={page.nav_label || page.title || ""} onCommit={(val) => onChange({ nav_label: val })} testId="cms-page-nav-label" />
       </label>
-      <label className="block flex items-center gap-2 mt-2"><input type="checkbox" checked={!!page.in_nav} onChange={(e) => onChange({ in_nav: e.target.checked })} /> <span className="text-xs text-ink-2">Show in main navigation</span></label>
+      {/* A page is in the top nav or in the footer, never both — the server enforces it,
+          and these mirror that so the panel does not show an impossible state for the
+          moment between the click and the response. */}
+      <label className="block flex items-center gap-2 mt-2"><input type="checkbox" checked={!!page.in_nav}
+        onChange={(e) => onChange(e.target.checked ? { in_nav: true, in_footer: false } : { in_nav: false })} />
+        <span className="text-xs text-ink-2">Show in main navigation</span></label>
+      <label className="block flex items-center gap-2"><input type="checkbox" checked={!!page.in_footer} data-testid="cms-page-in-footer"
+        onChange={(e) => onChange(e.target.checked ? { in_footer: true, in_nav: false } : { in_footer: false })} />
+        <span className="text-xs text-ink-2">Show in footer</span></label>
       <div className="pt-3 text-xs text-ink-4">
         Slug: <span className="font-mono-x">/p/{page.slug}</span> (immutable)<br />
         Tip: click any block in the preview to edit its properties here.
@@ -1268,17 +1384,6 @@ export function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsCh
         <FontPicker key={k} label={label} value={theme.fonts?.[k] || ""} custom={customFonts}
                     testId={`font-${k}`} onChange={(v) => setFont(k, v)} />
       ))}
-
-      <label className="block">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">
-          Menu text size: {theme.nav_size ?? 11}px
-        </div>
-        <input type="range" min="8" max="32" value={theme.nav_size ?? 11} data-testid="theme-nav-size"
-               onChange={(e) => onChange({ nav_size: Number(e.target.value) })} className="w-full" />
-        <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
-          The header nav. The phone menu follows it up but never below its own size.
-        </div>
-      </label>
 
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Your fonts</div>
       <FontManager fonts={customFonts} onChanged={onFontsChanged} />

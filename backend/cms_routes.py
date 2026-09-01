@@ -243,13 +243,51 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         nav_label: Optional[str] = None
         nav_order: int = 100
         in_nav: bool = True
+        # A page belongs to the top nav or to the footer, never both — see
+        # `_apply_placement`. The seeded legal pages were already in_nav=False with a
+        # comment saying they live in the footer; this is that comment made real.
+        in_footer: bool = False
+        footer_order: int = 100
 
     class PagePatch(ApiModel):
         title: Optional[str] = None
         nav_label: Optional[str] = None
         nav_order: Optional[int] = None
         in_nav: Optional[bool] = None
+        in_footer: Optional[bool] = None
+        footer_order: Optional[int] = None
         draft: Optional[dict] = None  # {blocks: [...]}
+
+    def _apply_placement(patch: dict, current: dict) -> dict:
+        """Keep `in_nav` and `in_footer` mutually exclusive.
+
+        A page is in the top nav or in the footer, not both: the footer is where the
+        pages that are not part of the journey go — terms, privacy, cookies — and
+        listing one in both places is how a nav ends up with eleven items nobody reads.
+
+        Applied to whichever flag the request SET, so ticking either one unticks the
+        other rather than refusing the edit. Refusing would mean an editor has to know
+        the rule before they can act on it.
+        """
+        if patch.get("in_footer") is True:
+            patch["in_nav"] = False
+        elif patch.get("in_nav") is True:
+            patch["in_footer"] = False
+        return patch
+
+    class SiteSettingsIn(ApiModel):
+        """The site's own words: the two wordmarks, and everything the footer says apart
+        from its links — those are CMS pages."""
+        header_wordmark: str = ""
+        nav_size: Optional[int] = None
+        wordmark: str = ""
+        description: str = ""
+        legal_heading: str = ""
+        contact_heading: str = ""
+        contact_email: str = ""
+        copyright_name: str = ""
+        # Keyed by platform, same vocabulary the artist form uses.
+        social: dict = {}
 
     class ReorderIn(ApiModel):
         order: List[str]  # page_ids in desired nav order
@@ -436,6 +474,10 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         """The published theme, as the stylesheet the document links in <head>."""
         t = await db.cms_theme.find_one({"doc_id": "theme_current"}, {"_id": 0})
         theme = (t or {}).get("published") or _default_theme()
+        # Merged in rather than read from the theme document: the value is a site setting
+        # now, but it has to reach the browser through the render-blocking stylesheet or
+        # the nav paints at the default size and then jumps.
+        theme = {**theme, "nav_size": (await _site_settings())["nav_size"]}
         fonts = await _fonts_sorted()
         css = _theme_css(theme, fonts)
 
@@ -470,6 +512,79 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         instead of following whatever order Mongo happens to return.
         """
         return [_font_public(f) for f in await _fonts_sorted()]
+
+    # ---------- Footer ----------
+    #
+    # The footer used to be typed into Layout.jsx: a wordmark, a sentence, three links,
+    # an address and a copyright line. All of it is content, none of it was editable, and
+    # the three links pointed at CMS pages by hardcoded href — so renaming or unpublishing
+    # one of those pages left the footer pointing at a 404 with nothing to say so.
+    #
+    # The links are pages now, chosen with `in_footer`. The rest is one settings document.
+
+    SITE_DEFAULTS = {
+        # Two fields on purpose rather than one shared value: the header and the footer
+        # say the same thing today, and nothing should force them to say it forever.
+        "header_wordmark": "SUPERSANITY",
+        # The header nav's type size. It lived in the theme document, which is where
+        # typography belongs in the abstract and the last place anyone looked for it.
+        "nav_size": 11,
+        "wordmark": "SUPERSANITY",
+        "description": "A Bucharest music & performance collective. "
+                       "Programming, artists, box office — one door.",
+        "legal_heading": "Legal",
+        "contact_heading": "Contact",
+        "contact_email": "bookings@supersanity.collective",
+        "copyright_name": "Supersanity",
+        "social": {},
+    }
+
+    async def _site_settings() -> dict:
+        doc = await db.site_settings.find_one({"_id": "site"}, {"_id": 0}) or {}
+        merged = dict(SITE_DEFAULTS)
+        merged.update({k: v for k, v in doc.items() if k in SITE_DEFAULTS and v is not None})
+        merged["social"] = {k: v for k, v in (merged.get("social") or {}).items() if v}
+        return merged
+
+    async def _footer_pages() -> list:
+        """The pages the footer links to, in order. Published only, and never core rows —
+        a core row is a React route with no blocks, and the footer is for authored pages."""
+        cursor = db.cms_pages.find(
+            {"in_footer": True, "kind": {"$ne": "core"}, "published": {"$ne": None}},
+            {"_id": 0, "slug": 1, "title": 1, "nav_label": 1, "footer_order": 1},
+        ).sort([("footer_order", 1), ("title", 1)])
+        return [
+            {"slug": p["slug"], "label": p.get("nav_label") or p.get("title") or p["slug"]}
+            for p in await cursor.to_list(50)
+        ]
+
+    @api.get("/cms/site")
+    async def get_site():
+        """Public: every visitor's footer, in one request."""
+        return {**await _site_settings(), "pages": await _footer_pages()}
+
+    @api.get("/admin/cms/site")
+    async def admin_get_site(user=Depends(require_admin_or_editor)):
+        return {**await _site_settings(), "pages": await _footer_pages()}
+
+    @api.put("/admin/cms/site")
+    async def admin_put_site(body: SiteSettingsIn, user=Depends(require_admin_or_editor)):
+        patch = body.model_dump()
+        # Blank means "use the built-in", not "show nothing": a footer with an empty
+        # wordmark and no copyright reads as broken rather than as deliberate.
+        cleaned = {k: (v.strip() if isinstance(v, str) else v) for k, v in patch.items()}
+        cleaned = {k: v for k, v in cleaned.items() if v not in ("", None)}
+        cleaned["social"] = {k: str(v).strip() for k, v in (patch.get("social") or {}).items()
+                             if str(v or "").strip()}
+        # Clamped here as well as in the stylesheet: a nav at 200px pushes the header off
+        # the page, and the CMS that would undo it is reached through that header.
+        if patch.get("nav_size") is not None:
+            try:
+                cleaned["nav_size"] = max(8, min(32, int(patch["nav_size"])))
+            except (TypeError, ValueError):
+                cleaned.pop("nav_size", None)
+        await db.site_settings.update_one({"_id": "site"}, {"$set": cleaned}, upsert=True)
+        return {**await _site_settings(), "pages": await _footer_pages()}
 
     # ---------- Events page settings ----------
     #
@@ -591,13 +706,17 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         if await db.cms_pages.find_one({"slug": slug}):
             raise HTTPException(400, "Slug already exists")
         body.slug = slug
+        placement = _apply_placement(
+            {"in_nav": body.in_nav, "in_footer": body.in_footer}, {})
         doc = {
             "page_id": new_id("pg"),
             "slug": body.slug,
             "title": body.title,
             "nav_label": body.nav_label or body.title,
             "nav_order": body.nav_order,
-            "in_nav": body.in_nav,
+            "in_nav": placement["in_nav"],
+            "in_footer": placement["in_footer"],
+            "footer_order": body.footer_order,
             "draft": {"blocks": []},
             "published": None,
             "versions": [],
@@ -612,6 +731,10 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
     async def admin_update_page(page_id: str, body: PagePatch, user=Depends(require_admin_or_editor)):
         _refuse_oversized(body.draft, "This page")
         upd = {k: v for k, v in body.model_dump().items() if v is not None}
+        # Ticking one placement unticks the other, rather than refusing the edit — an
+        # editor should not have to know the rule before they are allowed to act on it.
+        current = await db.cms_pages.find_one({"page_id": page_id}, {"_id": 0, "in_nav": 1, "in_footer": 1})
+        upd = _apply_placement(upd, current or {})
         # Clean HTML on the way in, not only on the way out (audit M10). The React
         # renderer still runs DOMPurify, but this is what keeps live payloads out of the
         # database and out of every consumer that is not that one component.

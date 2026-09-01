@@ -160,3 +160,50 @@ describe("themeChoicePatch", () => {
     expect(themeChoicePatch("dark", undefined).colors.bg).toBe("#050505");
   });
 });
+
+/**
+ * The nav size reaching the document.
+ *
+ * `applyTheme` sets every variable the live preview needs. It did not set `--nav-size`,
+ * which is why the Theme pane's "Menu text size" slider read as a dead control: it wrote
+ * to the draft, the preview applied everything except that one variable, and the header
+ * did not move. Publishing would have fixed it on the next load — but nobody gets that
+ * far past a slider that appears to do nothing.
+ */
+import { applyTheme } from "./cms";
+
+describe("applyTheme and the nav size", () => {
+  const navSize = () => document.documentElement.style.getPropertyValue("--nav-size");
+
+  beforeEach(() => document.documentElement.style.removeProperty("--nav-size"));
+
+  test("a theme carrying a size applies it", () => {
+    applyTheme({ colors: {}, fonts: {}, nav_size: 18 });
+    expect(navSize()).toBe("18px");
+  });
+
+  test("it is clamped the same way the stylesheet clamps it", () => {
+    applyTheme({ colors: {}, fonts: {}, nav_size: 900 });
+    expect(navSize()).toBe("32px");
+    applyTheme({ colors: {}, fonts: {}, nav_size: 1 });
+    expect(navSize()).toBe("8px");
+  });
+
+  test("0 is clamped, not read as absent", () => {
+    applyTheme({ colors: {}, fonts: {}, nav_size: 0 });
+    expect(navSize()).toBe("8px");
+  });
+
+  test("a theme without one leaves the variable alone", () => {
+    // The value lives in the site settings now; a theme that does not carry one must not
+    // stamp a default over what the stylesheet already set.
+    document.documentElement.style.setProperty("--nav-size", "14px");
+    applyTheme({ colors: {}, fonts: {} });
+    expect(navSize()).toBe("14px");
+  });
+
+  test("junk does not reach the DOM as NaNpx", () => {
+    applyTheme({ colors: {}, fonts: {}, nav_size: "abc" });
+    expect(navSize()).toBe("11px");
+  });
+});

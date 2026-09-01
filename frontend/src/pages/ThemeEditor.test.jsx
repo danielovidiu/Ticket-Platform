@@ -89,38 +89,11 @@ describe("the contrast warning", () => {
 });
 
 /**
- * The menu text size.
+ * The menu text size used to be tested here.
  *
- * A theme value rather than a fixed class, because how big the nav should be depends on
- * how many items it holds and how long their labels are — both an editor's decision. The
- * control has to show the shipped 11px for a theme saved before it existed, or an editor
- * sees a slider at some arbitrary position and cannot tell what the site is doing.
+ * It moved to the Site pane, beside the header wordmark — it is a header control, and
+ * Theme was the last place anyone looked for it. Its coverage moved with it: the storing
+ * and clamping are in `backend/tests/test_cms_footer.py`, and the part that was actually
+ * broken — `applyTheme` never setting `--nav-size`, so the slider looked dead — is
+ * pinned in `lib/themePresets.test.js`.
  */
-describe("menu text size", () => {
-  const slider = (theme) => draw(theme).getByTestId("theme-nav-size");
-
-  test("a theme without the field reads as the 11px it shipped with", () => {
-    expect(slider({ colors: {}, fonts: {} })).toHaveValue("11");
-  });
-
-  test("a stored value is what the control shows", () => {
-    expect(slider({ colors: {}, fonts: {}, nav_size: 20 })).toHaveValue("20");
-  });
-
-  test("0 is a real value, not an absent one", () => {
-    // `||` would read 0 as "unset" and snap the control back to 11.
-    expect(slider({ colors: {}, fonts: {}, nav_size: 0 })).toHaveValue("8"); // clamped by min
-  });
-
-  test("moving it reports a number, not the input's string", () => {
-    const { getByTestId, onChange } = draw({ colors: {}, fonts: {} });
-    fireEvent.change(getByTestId("theme-nav-size"), { target: { value: "16" } });
-    expect(onChange).toHaveBeenCalledWith({ nav_size: 16 });
-  });
-
-  test("the range is bounded where the stylesheet clamps", () => {
-    const el = slider({ colors: {}, fonts: {} });
-    expect(el).toHaveAttribute("min", "8");
-    expect(el).toHaveAttribute("max", "32");
-  });
-});
