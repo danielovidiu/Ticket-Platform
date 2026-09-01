@@ -1287,13 +1287,11 @@ class ResendVerifyIn(ApiModel):
     email: str
 
 
-# Ceilings for the list fields on artists and projects. Not editorial limits — the point
-# is the same one models_base.py makes for strings: "arbitrarily many" should be
-# impossible, without telling an editor how to do their job.
+# Ceilings for the list fields on an artist. Not editorial limits — the point is the
+# same one models_base.py makes for strings: "arbitrarily many" should be impossible,
+# without telling an editor how to do their job.
 MAX_DISCIPLINES = 24
 MAX_ARTIST_ALBUMS = 60
-MAX_ARTIST_PROJECTS = 60
-MAX_PROJECT_ARTISTS = 60
 
 
 class ArtistIn(ApiModel):
@@ -1310,12 +1308,9 @@ class ArtistIn(ApiModel):
     # can appear in the album for a night they did not headline, and one event may have
     # several albums, so the link is its own decision.
     album_ids: List[str] = Field(default_factory=list, max_length=MAX_ARTIST_ALBUMS)
-    # Supersanity projects this artist belongs to. Not stored here — the edge lives on
-    # `projects.artist_ids`, and this field is the write-through the artist form posts.
-    # Absent means "leave the project links alone"; [] means "remove them all".
-    project_ids: Optional[List[str]] = Field(default=None, max_length=MAX_ARTIST_PROJECTS)
-    # One outside project, kept deliberately apart from the Supersanity work above so
-    # the artist page can mark the two differently.
+    # One outside project of the artist's own — their band, their label, their studio.
+    # This is NOT the retired `projects` collection: that was a Supersanity-side record
+    # with its own page furniture, and this is a name and a link the artist gives us.
     other_project_name: str = ""
     other_project_url: str = ""
 
@@ -1324,16 +1319,6 @@ class DisciplinesIn(ApiModel):
     """The whole vocabulary, replaced wholesale — it is a short ordered list an admin
     edits as one thing, not a set of rows each with an id of its own."""
     disciplines: List[str] = Field(default_factory=list, max_length=MAX_DISCIPLINES)
-
-
-class ProjectIn(ApiModel):
-    title: str
-    slug: str
-    description: str = Field(default="", max_length=LONG_TEXT)
-    year: Optional[int] = None
-    image_url: str = ""
-    artist_ids: List[str] = []
-    is_past: bool = False
 
 
 class WaveIn(ApiModel):
@@ -1428,25 +1413,8 @@ class ArtistPatchIn(ApiModel):
     links: Optional[dict] = None
     disciplines: Optional[List[str]] = Field(default=None, max_length=MAX_DISCIPLINES)
     album_ids: Optional[List[str]] = Field(default=None, max_length=MAX_ARTIST_ALBUMS)
-    project_ids: Optional[List[str]] = Field(default=None, max_length=MAX_ARTIST_PROJECTS)
     other_project_name: Optional[str] = None
     other_project_url: Optional[str] = None
-
-
-class ProjectPatchIn(ApiModel):
-    """Partial update for a project. Same bargain as `EventPatchIn`.
-
-    Projects were create-and-delete only until now, which meant a project's artist list
-    could never be corrected after the fact — the one thing the artist<->project link
-    most needs to be able to change.
-    """
-    title: Optional[str] = None
-    slug: Optional[str] = None
-    description: Optional[str] = Field(default=None, max_length=LONG_TEXT)
-    year: Optional[int] = None
-    image_url: Optional[str] = None
-    artist_ids: Optional[List[str]] = Field(default=None, max_length=MAX_PROJECT_ARTISTS)
-    is_past: Optional[bool] = None
 
 
 class EventNoticeIn(ApiModel):
@@ -2235,9 +2203,9 @@ async def list_artists():
 async def get_artist(slug: str):
     """One artist, with everything their page renders already attached.
 
-    Albums and projects are resolved here rather than fetched separately by the client:
-    the page draws them in one pass, and three round trips to paint one screen is three
-    chances to paint half of it.
+    Albums are resolved here rather than fetched separately by the client: the page
+    draws them in one pass, and two round trips to paint one screen is two chances to
+    paint half of it.
     """
     a = await db.artists.find_one({"slug": slug}, {"_id": 0})
     if not a:
@@ -2252,18 +2220,7 @@ async def get_artist(slug: str):
             {"$and": [{"album_id": {"$in": album_ids}}, await _public_album_query()]}
         ) if al["count"]
     ] if album_ids else []
-
-    # Supersanity work. The edge lives on the project, so this reads from that side.
-    a["projects"] = await db.projects.find(
-        {"artist_ids": a["artist_id"]}, {"_id": 0}
-    ).sort([("year", -1), ("title", 1)]).to_list(MAX_ARTIST_PROJECTS)
     return a
-
-
-@api.get("/projects")
-async def list_projects():
-    items = await db.projects.find({}, {"_id": 0}).sort("year", -1).to_list(200)
-    return items
 
 
 @api.get("/events")
@@ -4260,25 +4217,6 @@ async def admin_refund_ticket(ticket_id: str, user=Depends(require_admin)):
     return {"ok": True, "ticket": await db.tickets.find_one({"ticket_id": ticket_id}, {"_id": 0})}
 
 
-async def _sync_artist_projects(artist_id: str, project_ids: List[str]) -> None:
-    """Make `projects.artist_ids` name exactly this set of projects for one artist.
-
-    Two targeted updates rather than rewriting whole arrays: `$addToSet` on the projects
-    that should list this artist, `$pull` on the ones that should not. Two admins editing
-    two different artists at the same moment therefore cannot overwrite each other — a
-    read-modify-write of `artist_ids` would drop one of them silently.
-    """
-    wanted = [pid for pid in dict.fromkeys(project_ids) if pid]
-    if wanted:
-        await db.projects.update_many(
-            {"project_id": {"$in": wanted}}, {"$addToSet": {"artist_ids": artist_id}}
-        )
-    await db.projects.update_many(
-        {"project_id": {"$nin": wanted}, "artist_ids": artist_id},
-        {"$pull": {"artist_ids": artist_id}},
-    )
-
-
 def _sort_artist_disciplines(payload: dict) -> None:
     """A-Z, in place. The multiselect stores them in the order they were clicked, which
     is nobody's idea of an order by the time it reaches the artist's page. Canonicalised
@@ -4310,21 +4248,8 @@ async def admin_set_disciplines(body: DisciplinesIn, user=Depends(require_admin)
 
 @api.get("/admin/artists")
 async def admin_list_artists(user=Depends(require_admin)):
-    """Every artist, each carrying the project ids it is linked from.
-
-    `project_ids` is not a stored field — the edge lives on `projects.artist_ids`. The
-    form needs it to render its picker, so it is resolved here rather than making the
-    admin fetch every project and invert the relation client-side.
-    """
-    artists = await db.artists.find({}, {"_id": 0}).to_list(500)
-    projects = await db.projects.find(
-        {}, {"_id": 0, "project_id": 1, "artist_ids": 1}
-    ).to_list(500)
-    for a in artists:
-        a["project_ids"] = [
-            p["project_id"] for p in projects if a["artist_id"] in (p.get("artist_ids") or [])
-        ]
-    return artists
+    """Every artist."""
+    return await db.artists.find({}, {"_id": 0}).to_list(500)
 
 
 @api.post("/admin/artists")
@@ -4332,13 +4257,9 @@ async def admin_create_artist(body: ArtistIn, user=Depends(require_admin)):
     a = body.model_dump()
     _check_artist_payload(a)
     _sort_artist_disciplines(a)
-    # Write-through, not a column: the artist document never stores this.
-    project_ids = a.pop("project_ids", None) or []
     a["artist_id"] = new_id("art")
     a["created_at"] = now_utc().isoformat()
     await db.artists.insert_one(a)
-    if project_ids:
-        await _sync_artist_projects(a["artist_id"], project_ids)
     return {k: v for k, v in a.items() if k != "_id"}
 
 
@@ -4349,57 +4270,17 @@ async def admin_update_artist(artist_id: str, body: ArtistPatchIn, user=Depends(
     patch = body.model_dump(exclude_unset=True)
     _check_artist_payload(patch)
     _sort_artist_disciplines(patch)
-    # Absent means "leave the project links alone"; [] means "remove them all". Popping
-    # it here is what keeps it out of the `$set` — it is an edge, not a field.
-    project_ids = patch.pop("project_ids", None)
     if patch:
         await db.artists.update_one({"artist_id": artist_id}, {"$set": patch})
-    if project_ids is not None:
-        await _sync_artist_projects(artist_id, project_ids)
     return await db.artists.find_one({"artist_id": artist_id}, {"_id": 0})
 
 
 @api.delete("/admin/artists/{artist_id}")
 async def admin_delete_artist(artist_id: str, user=Depends(require_admin)):
     await db.artists.delete_one({"artist_id": artist_id})
-    # Otherwise the id lingers in every project that named them, and the project page
-    # renders a credit for an artist who no longer exists.
-    await db.projects.update_many(
-        {"artist_ids": artist_id}, {"$pull": {"artist_ids": artist_id}}
-    )
     await db.events.update_many(
         {"artist_ids": artist_id}, {"$pull": {"artist_ids": artist_id}}
     )
-    return {"ok": True}
-
-
-@api.get("/admin/projects")
-async def admin_list_projects(user=Depends(require_admin)):
-    return await db.projects.find({}, {"_id": 0}).to_list(500)
-
-
-@api.post("/admin/projects")
-async def admin_create_project(body: ProjectIn, user=Depends(require_admin)):
-    p = body.model_dump()
-    p["project_id"] = new_id("prj")
-    p["created_at"] = now_utc().isoformat()
-    await db.projects.insert_one(p)
-    return {k: v for k, v in p.items() if k != "_id"}
-
-
-@api.patch("/admin/projects/{project_id}")
-async def admin_update_project(project_id: str, body: ProjectPatchIn, user=Depends(require_admin)):
-    """Projects were create-and-delete only, so an artist list set at creation could
-    never be corrected. This is the other half of the artist<->project link."""
-    patch = body.model_dump(exclude_unset=True)
-    if patch:
-        await db.projects.update_one({"project_id": project_id}, {"$set": patch})
-    return await db.projects.find_one({"project_id": project_id}, {"_id": 0})
-
-
-@api.delete("/admin/projects/{project_id}")
-async def admin_delete_project(project_id: str, user=Depends(require_admin)):
-    await db.projects.delete_one({"project_id": project_id})
     return {"ok": True}
 
 
@@ -4883,18 +4764,6 @@ async def seed_demo(user=Depends(require_admin)):
           "links": {}, "created_at": now_utc().isoformat()}
     await db.artists.insert_many([a1, a2, a3])
 
-    p1 = {"project_id": new_id("prj"), "title": "BLACK ROOM · WINTER 2023", "slug": "black-room-2023",
-          "description": "48h continuous programme across four Bucharest venues.",
-          "year": 2023, "image_url": "https://images.unsplash.com/photo-1687511844598-165c1fc387cc?crop=entropy&cs=srgb&fm=jpg&q=85",
-          "artist_ids": [a1["artist_id"], a2["artist_id"]], "is_past": True,
-          "created_at": now_utc().isoformat()}
-    p2 = {"project_id": new_id("prj"), "title": "CORPUS · SUMMER RESIDENCY", "slug": "corpus-2024",
-          "description": "Cross-disciplinary residency with dancers, producers and light artists.",
-          "year": 2024, "image_url": "https://images.unsplash.com/photo-1593408995262-1d8933c37afc?crop=entropy&cs=srgb&fm=jpg&q=85",
-          "artist_ids": [a3["artist_id"]], "is_past": True,
-          "created_at": now_utc().isoformat()}
-    await db.projects.insert_many([p1, p2])
-
     # Gallery. Two albums, neither attached to an event — which is the ordinary case now,
     # and the one the seed should demonstrate. Linking one to an event is a later edit.
     alb1 = {"album_id": new_id("alb"), "title": "FIELD NOTES", "slug": "field-notes",
@@ -5165,7 +5034,17 @@ async def security_headers(request: Request, call_next):
 #     bump migrate_wave_tier_ids never runs, every existing tier stays unnumbered, and
 #     they all sort last together — which is the order they were already in, right up
 #     until someone saves an event and one tier gets a number.
-SCHEMA_VERSION = 12
+# 13: Archive is retired. Without the bump migrate_drop_archive_page never runs on an
+#     already-seeded database, its cms_pages row survives, and the header goes on
+#     offering a nav link to a route that no longer exists.
+#
+#     NEVER let two branches claim one number. This one and 12 were developed in
+#     parallel and both wanted 12. The marker is compared for EQUALITY, not order, so
+#     whichever deployed second would have found `current == marker`, skipped setup
+#     entirely and run NONE of its migrations. That is not hypothetical — it happened on
+#     the dev database while these were being written, and the symptom was an Archive
+#     link that would not go away. They merged in order and took one number each.
+SCHEMA_VERSION = 13
 
 
 async def init_app():
@@ -5310,6 +5189,11 @@ async def init_indexes():
         await migrate_gallery_ordering()
     except Exception:
         logger.exception("migrate_gallery_ordering failed")
+
+    try:
+        await migrate_drop_archive_page()
+    except Exception:
+        logger.exception("migrate_drop_archive_page failed")
 
     try:
         # After migrate_gallery_albums: an album has to exist, and know its event, before
@@ -5512,6 +5396,23 @@ async def migrate_gallery_albums():
         )
 
     logger.info("Gallery migrated into %d album(s): %d item(s) filed", len(created), len(legacy))
+
+
+async def migrate_drop_archive_page():
+    """Remove the retired Archive page from the CMS.
+
+    Archive was a core nav row seeded into cms_pages, so taking it out of CORE_NAV_ITEMS
+    is not enough on its own: the row an already-seeded site holds would stay, and the
+    header would keep offering a link to a route that no longer exists.
+
+    Only the seeded core row is deleted, keyed on its slug and its `kind`. A page an
+    editor has authored at that slug is theirs — "archive" is no longer a reserved word,
+    so it is now a name they are allowed to use.
+    """
+    r = await db.cms_pages.delete_many({"slug": "core-archive", "kind": "core"})
+    if r.deleted_count:
+        logger.info("Removed the retired Archive page from the nav")
+    return r.deleted_count
 
 
 async def migrate_album_dates():

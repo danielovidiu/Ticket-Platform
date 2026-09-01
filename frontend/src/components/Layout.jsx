@@ -27,7 +27,6 @@ const OFFLINE_NAV = [
   { route: "/events", label: "Events" },
   { route: "/shop", label: "Shop" },
   { route: "/artists", label: "Artists" },
-  { route: "/archive", label: "Archive" },
   { route: "/gallery", label: "Gallery" },
 ];
 

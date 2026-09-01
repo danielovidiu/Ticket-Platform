@@ -5,8 +5,8 @@ import { http } from "../api";
  *
  * THE PROBLEM THIS SOLVES. The header used to fetch /cms/nav from Layout's useEffect —
  * after mount, after the first paint — and render a hardcoded list of the built-in
- * sections until it answered. So every page load showed Events / Shop / Artists /
- * Archive / Gallery, and then the authored pages appeared a request later. The built-ins
+ * sections until it answered. So every page load showed the built-in sections and then
+ * the authored pages appeared a request later. The built-ins
  * were not "faster"; they were the placeholder, and everything else was the real answer
  * arriving late.
  *

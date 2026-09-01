@@ -14,7 +14,7 @@ import { ShopProducts, ShopOrders, ShopSettings } from "../components/ShopAdmin"
 import { eventStatus, STATUS_CLASS, TICKET_FILTERS, TICKET_STATUS_CLASS } from "../lib/ticketStatus";
 
 const TABS = ["stats", "events", "orders", "transactions", "shop", "shop orders", "shop settings",
-              "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
+              "artists", "discounts", "invites", "users", "gallery", "newsletter"];
 
 export default function Admin() {
   const { user, loading } = useAuth();
@@ -42,7 +42,6 @@ export default function Admin() {
         {tab === "shop orders" && <ShopOrders />}
         {tab === "shop settings" && <ShopSettings />}
         {tab === "artists" && <Artists />}
-        {tab === "projects" && <Projects />}
         {tab === "discounts" && <Discounts />}
         {tab === "invites" && <Invites />}
         {tab === "users" && <Users />}
@@ -187,10 +186,10 @@ function SalesFilters({ f, testId }) {
           selected={f.statuses} onChange={f.setStatuses}
         />
         <Field label="From">
-          <input type="date" value={f.dateFrom} max={f.dateTo || undefined} onChange={(e) => f.setDateFrom(e.target.value)} className="input-x w-full" data-testid={`${testId}-date-from`} />
+          <DateTimePicker mode="date" value={f.dateFrom} placeholder="Any date" onChange={f.setDateFrom} />
         </Field>
         <Field label="To">
-          <input type="date" value={f.dateTo} min={f.dateFrom || undefined} onChange={(e) => f.setDateTo(e.target.value)} className="input-x w-full" data-testid={`${testId}-date-to`} />
+          <DateTimePicker mode="date" value={f.dateTo} placeholder="Any date" onChange={f.setDateTo} />
         </Field>
       </div>
       <div className="flex flex-wrap gap-2 items-center mt-3">
@@ -1117,7 +1116,6 @@ function Artists() {
   const [form, setForm] = useState(null);
   const [disciplines, setDisciplines] = useState([]);
   const [albums, setAlbums] = useState([]);
-  const [projects, setProjects] = useState([]);
   const load = () => http.get("/admin/artists").then((r) => setItems(r.data));
   useEffect(() => {
     load();
@@ -1125,10 +1123,9 @@ function Artists() {
     // reopening the form doesn't re-request a list that has not changed.
     http.get("/admin/artists/disciplines").then((r) => setDisciplines(r.data.disciplines)).catch(() => {});
     http.get("/admin/albums").then((r) => setAlbums(r.data)).catch(() => {});
-    http.get("/admin/projects").then((r) => setProjects(r.data)).catch(() => {});
   }, []);
   const emptyForm = () => ({ name: "", slug: "", bio: "", image_url: "", links: {},
-                             disciplines: [], album_ids: [], project_ids: [],
+                             disciplines: [], album_ids: [],
                              other_project_name: "", other_project_url: "" });
   const save = async () => {
     try {
@@ -1141,8 +1138,6 @@ function Artists() {
         await http.post("/admin/artists", body);
       }
       setForm(null); load();
-      // A project link is stored on the project, so the picker's own list is now stale.
-      http.get("/admin/projects").then((r) => setProjects(r.data)).catch(() => {});
       toast.success("Saved");
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
   };
@@ -1170,12 +1165,12 @@ function Artists() {
         ))}
       </div>
       {form && <ArtistForm form={form} setForm={setForm} onSave={save} onClose={() => setForm(null)}
-                           disciplines={disciplines} albums={albums} projects={projects} />}
+                           disciplines={disciplines} albums={albums} />}
     </div>
   );
 }
 
-function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums, projects }) {
+function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums }) {
   const bioRef = useRef(null);
   const setF = (k, v) => setForm({ ...form, [k]: v });
   const setLink = (k, v) => setForm({ ...form, links: { ...(form.links || {}), [k]: v } });
@@ -1222,12 +1217,6 @@ function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums, proje
             </div>
           </div>
           <div className="col-span-2">
-            <MultiSelect label="Supersanity projects" allLabel="None chosen" testId="artist-projects"
-                         options={projects.map((p) => ({ value: p.project_id, label: p.title }))}
-                         selected={form.project_ids || []}
-                         onChange={setList("project_ids")} />
-          </div>
-          <div className="col-span-2">
             <MultiSelect label="Galleries (albums this artist appears in)"
                          allLabel="None chosen" testId="artist-albums"
                          options={albums.map((a) => ({
@@ -1266,98 +1255,6 @@ function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums, proje
   );
 }
 
-const EMPTY_PROJECT = { title: "", slug: "", description: "", year: new Date().getFullYear(),
-                        image_url: "", artist_ids: [], is_past: true };
-
-/**
- * Projects were create-and-delete only, so an artist list set at creation could never be
- * corrected — and the artist<->project link is the one thing that most needs to change.
- * The form now doubles as the editor, the same way the artist form does.
- */
-function Projects() {
-  const [items, setItems] = useState([]);
-  const [artists, setArtists] = useState([]);
-  const [f, setF] = useState(EMPTY_PROJECT);
-  const descRef = useRef(null);
-  const load = () => http.get("/admin/projects").then((r) => setItems(r.data));
-  useEffect(() => {
-    load();
-    http.get("/admin/artists").then((r) => setArtists(r.data)).catch(() => {});
-  }, []);
-  const save = async () => {
-    try {
-      if (f.project_id) {
-        const body = { ...f };
-        delete body.project_id; delete body.created_at;
-        await http.patch(`/admin/projects/${f.project_id}`, body);
-      } else {
-        await http.post("/admin/projects", f);
-      }
-      setF(EMPTY_PROJECT); load(); toast.success("Saved");
-    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
-  };
-  const del = async (id) => {
-    if (!confirm("Delete?")) return;
-    await http.delete(`/admin/projects/${id}`);
-    if (f.project_id === id) setF(EMPTY_PROJECT);
-    load();
-  };
-  const nameOf = (id) => artists.find((a) => a.artist_id === id)?.name || id;
-  return (
-    <div>
-      <div className="border border-ink/10 p-4 grid grid-cols-2 gap-3" data-testid="project-form">
-        <div className="col-span-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
-          {f.project_id ? `Editing ${f.title}` : "New project"}
-        </div>
-        <input placeholder="Title" value={f.title} onChange={(e) => setF({...f, title: e.target.value})} className="input-x" />
-        <input placeholder="Slug" value={f.slug} onChange={(e) => setF({...f, slug: e.target.value})} className="input-x" />
-        <input type="number" placeholder="Year" value={f.year} onChange={(e) => setF({...f, year: Number(e.target.value)})} className="input-x" />
-        <div className="col-span-2">
-          <ImageField value={f.image_url} onChange={(v) => setF({...f, image_url: v})}
-                      label="Image" testId="project-image" />
-        </div>
-        <div className="col-span-2">
-          <FormatToolbar textareaRef={descRef} value={f.description} onChange={(v) => setF({...f, description: v})} />
-          <textarea ref={descRef} placeholder="Description" value={f.description} onChange={(e) => setF({...f, description: e.target.value})} className="input-x w-full" rows={2} />
-        </div>
-        <div className="col-span-2">
-          <MultiSelect label="Artists" allLabel="None chosen" testId="project-artists"
-                       options={artists.map((a) => ({ value: a.artist_id, label: a.name }))}
-                       selected={f.artist_ids || []}
-                       onChange={(next) => setF((cur) => ({
-                         ...cur,
-                         artist_ids: typeof next === "function" ? next(cur.artist_ids || []) : next,
-                       }))} />
-        </div>
-        <button onClick={save} className={f.project_id ? "btn-accent" : "btn-accent col-span-2"}>
-          {f.project_id ? "SAVE" : "ADD"}
-        </button>
-        {f.project_id && (
-          <button onClick={() => setF(EMPTY_PROJECT)} className="btn-primary">CANCEL</button>
-        )}
-      </div>
-      <div className="mt-4 space-y-2">
-        {items.map((p) => (
-          <div key={p.project_id} className="border border-ink/10 p-3 flex justify-between items-center">
-            <div>
-              <div className="font-display uppercase">{p.title} · <span className="text-ink-4 text-sm">{p.year}</span></div>
-              {(p.artist_ids || []).length > 0 && (
-                <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
-                  {p.artist_ids.map(nameOf).join(" · ")}
-                </div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setF({ ...EMPTY_PROJECT, ...p })} className="btn-primary text-xs">Edit</button>
-              <button onClick={() => del(p.project_id)} className="btn-primary text-xs">Del</button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function Discounts() {
   const [items, setItems] = useState([]);
   const [f, setF] = useState({ code: "", percent_off: 10, max_uses: 0, expires_at: "" });
@@ -1370,17 +1267,41 @@ function Discounts() {
         <input placeholder="CODE" value={f.code} onChange={(e) => setF({...f, code: e.target.value.toUpperCase()})} className="input-x uppercase" />
         <input type="number" placeholder="% off" value={f.percent_off} onChange={(e) => setF({...f, percent_off: Number(e.target.value)})} className="input-x" />
         <input type="number" placeholder="Max uses (0=∞)" value={f.max_uses} onChange={(e) => setF({...f, max_uses: Number(e.target.value)})} className="input-x" />
-        <input placeholder="Expires ISO" value={f.expires_at} onChange={(e) => setF({...f, expires_at: e.target.value})} className="input-x" />
+        {/* Was a bare text box labelled "Expires ISO", which asked an editor to type a
+            timestamp by hand and to know the format. A discount expires at a moment, so
+            this is the full picker rather than the date-only one. */}
+        <DateTimePicker value={f.expires_at} placeholder="Never expires"
+                        onChange={(v) => setF({ ...f, expires_at: v })} />
         <button onClick={save} className="btn-accent col-span-4">ADD</button>
       </div>
-      <div className="mt-4 space-y-2">
-        {items.map((d) => (
-          <div key={d.discount_id} className="border border-ink/10 p-3 flex justify-between font-mono-x text-sm">
-            <span>{d.code} · {d.percent_off}%</span>
-            <span className="text-ink-4">uses {d.uses}/{d.max_uses || "∞"}</span>
-            <button onClick={async () => { await http.delete(`/admin/discounts/${d.discount_id}`); load(); }} className="btn-primary text-xs">Del</button>
-          </div>
-        ))}
+      {/* A run of unlabelled values — "SAVE20 · 15%", "uses 3/100" — reads fine to
+          whoever built it and to nobody else. The headings say which number is which. */}
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full border-collapse" data-testid="discounts-table">
+          <thead>
+            <tr className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 text-left">
+              <th className="hairline-b py-2 pr-3 font-normal">Code</th>
+              <th className="hairline-b py-2 pr-3 font-normal">% off</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Uses</th>
+              <th className="hairline-b py-2 font-normal sr-only">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((d) => (
+              <tr key={d.discount_id} className="font-mono-x text-sm" data-testid={`discount-row-${d.code}`}>
+                <td className="hairline-b py-3 pr-3 uppercase">{d.code}</td>
+                <td className="hairline-b py-3 pr-3">{d.percent_off}%</td>
+                <td className="hairline-b py-3 pr-3 text-ink-4">{d.uses}/{d.max_uses || "∞"}</td>
+                <td className="hairline-b py-3 text-right">
+                  <button onClick={async () => { await http.delete(`/admin/discounts/${d.discount_id}`); load(); }} className="btn-primary text-xs">Del</button>
+                </td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr><td colSpan={4} className="py-4 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">No discount codes yet</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -1402,18 +1323,44 @@ function Invites() {
         <input type="number" placeholder="Cap" value={f.capacity} onChange={(e) => setF({...f, capacity: Number(e.target.value)})} className="input-x" />
         <button onClick={save} className="btn-accent col-span-4">ADD</button>
       </div>
-      <div className="mt-4 space-y-2">
-        {items.map((s) => {
-          const ev = events.find((e) => e.event_id === s.event_id);
-          const url = ev ? `${window.location.origin}/events/${ev.slug}?invite=${s.token}` : `?invite=${s.token}`;
-          return (
-            <div key={s.link_id} className="border border-ink/10 p-3 font-mono-x text-xs space-y-1">
-              <div className="uppercase tracking-[0.2em] text-ink-4">{s.label} · {ron(s.price_ron)} · {s.used}/{s.capacity} used</div>
-              <div className="break-all"><Link to={url.replace(window.location.origin, "")} className="text-ink underline">{url}</Link></div>
-              <button onClick={async () => { await http.delete(`/admin/special-links/${s.link_id}`); load(); }} className="btn-primary text-xs mt-1">Del</button>
-            </div>
-          );
-        })}
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full border-collapse" data-testid="invites-table">
+          <thead>
+            <tr className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 text-left">
+              <th className="hairline-b py-2 pr-3 font-normal">Label</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Event</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Price</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Used</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Link</th>
+              <th className="hairline-b py-2 font-normal sr-only">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((s) => {
+              const ev = events.find((e) => e.event_id === s.event_id);
+              const url = ev ? `${window.location.origin}/events/${ev.slug}?invite=${s.token}` : `?invite=${s.token}`;
+              return (
+                <tr key={s.link_id} className="font-mono-x text-xs" data-testid={`invite-row-${s.link_id}`}>
+                  <td className="hairline-b py-3 pr-3 uppercase tracking-[0.2em]">{s.label}</td>
+                  {/* An invite whose event was deleted still has a row; saying so beats
+                      an empty cell that reads like a rendering fault. */}
+                  <td className="hairline-b py-3 pr-3">{ev ? ev.title : <span className="text-ink-4">— deleted —</span>}</td>
+                  <td className="hairline-b py-3 pr-3">{ron(s.price_ron)}</td>
+                  <td className="hairline-b py-3 pr-3 text-ink-4">{s.used}/{s.capacity}</td>
+                  <td className="hairline-b py-3 pr-3 max-w-[22rem]">
+                    <Link to={url.replace(window.location.origin, "")} className="text-ink underline break-all">{url}</Link>
+                  </td>
+                  <td className="hairline-b py-3 text-right">
+                    <button onClick={async () => { await http.delete(`/admin/special-links/${s.link_id}`); load(); }} className="btn-primary text-xs">Del</button>
+                  </td>
+                </tr>
+              );
+            })}
+            {items.length === 0 && (
+              <tr><td colSpan={6} className="py-4 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">No invite links yet</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -1562,13 +1509,12 @@ function AlbumDetails({ album, events, onSaved, onDeleted }) {
           </select>
         </Field>
         {/* A day, not a moment — an album is filed under the date it documents, and the
-            Gallery grid orders newest first by this. A native date input rather than the
-            DateTimePicker: there is no time to set, and the browser's own picker already
-            navigates years and months. Left blank, the album falls back to the day it
-            was created. */}
+            Gallery grid orders newest first by this. The picker's date-only mode: same
+            calendar as every other date in the admin, minus a time nobody sets here.
+            Left blank, the album falls back to the day it was created. */}
         <Field label="Date">
-          <input type="date" value={draft.date || ""} onChange={(e) => set("date", e.target.value || null)}
-                 className="input-x w-full" data-testid="album-date" />
+          <DateTimePicker mode="date" value={draft.date || ""} placeholder="No date"
+                          onChange={(v) => set("date", v || null)} />
         </Field>
       </div>
       <div className="flex flex-wrap items-center gap-3 mt-3">

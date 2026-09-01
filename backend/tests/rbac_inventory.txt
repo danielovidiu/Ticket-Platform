@@ -71,10 +71,6 @@ editor GET    /api/admin/newsletter.csv
 authed DELETE /api/admin/newsletter/{sub_id}
 admin  GET    /api/admin/orders
 admin  POST   /api/admin/orders/{reservation_id}/refund
-admin  GET    /api/admin/projects
-admin  POST   /api/admin/projects
-admin  DELETE /api/admin/projects/{project_id}
-admin  PATCH  /api/admin/projects/{project_id}
 admin  GET    /api/admin/shop/orders
 admin  PATCH  /api/admin/shop/orders/{order_id}
 admin  GET    /api/admin/shop/products

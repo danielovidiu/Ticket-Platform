@@ -353,7 +353,9 @@ def test_admin_stats_regression():
 
 # ---------- Core nav links (built-in sections, reorderable from the CMS) ----------
 
-CORE_SLUGS = {"core-events", "core-shop", "core-artists", "core-archive", "core-gallery"}
+# Archive was one of these until it was retired — it showed the projects grid and a
+# past-events list, and both of those are gone or reachable elsewhere now.
+CORE_SLUGS = {"core-events", "core-shop", "core-artists", "core-gallery"}
 
 
 def test_core_links_appear_in_public_nav_with_routes():
@@ -421,19 +423,21 @@ def test_core_link_cannot_be_deleted():
 
 
 def test_core_link_can_be_hidden_and_restored():
+    # Was written against core-archive, which no longer exists. Any core link proves the
+    # same thing — that `in_nav` governs them as it does an authored page.
     editor = _b(EDITOR_TOKEN)
     pages = requests.get(f"{API}/admin/cms/pages", headers=editor, timeout=15).json()
-    core = next(p for p in pages if p["slug"] == "core-archive")
+    core = next(p for p in pages if p["slug"] == "core-gallery")
     try:
         requests.patch(f"{API}/admin/cms/pages/{core['page_id']}", json={"in_nav": False},
                        headers=editor, timeout=15)
         slugs = [i["slug"] for i in requests.get(f"{API}/cms/nav", timeout=15).json()]
-        assert "core-archive" not in slugs, slugs
+        assert "core-gallery" not in slugs, slugs
     finally:
         requests.patch(f"{API}/admin/cms/pages/{core['page_id']}", json={"in_nav": True},
                        headers=editor, timeout=15)
     slugs = [i["slug"] for i in requests.get(f"{API}/cms/nav", timeout=15).json()]
-    assert "core-archive" in slugs, slugs
+    assert "core-gallery" in slugs, slugs
 
 
 # ---------- Homepage designation ----------

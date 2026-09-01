@@ -16,13 +16,14 @@ import { SOCIAL_PLATFORMS } from "../lib/social";
 import FontManager from "../components/FontManager";
 import { navChanged } from "../lib/nav";
 import { useAutosave, useDebouncedField } from "../lib/useAutosave";
+import {
+  AUTOSAVE_INTERVAL_MS, anySaverDirty, flushAllSavers,
+  setAutosaveEnabled, useAutosaveEnabled, useSaverRegistry,
+} from "../lib/autosavePolicy";
 
-// Wait this long after the last edit before saving...
-const AUTOSAVE_MS = 1200;
-// ...but never leave work unsaved for longer than this. The debounce alone resets on
-// every keystroke, so someone typing steadily for two minutes had nothing persisted for
-// two minutes.
-const AUTOSAVE_MAX_WAIT_MS = 5000;
+// When the draft is written is autosavePolicy.js's decision now, not this file's — the
+// debounce and ceiling that used to live here were one of five different answers to the
+// same question, and the site settings pane's answer was "on every keystroke".
 // Consecutive edits to the SAME field within this window collapse into one undo entry.
 // Without it every keystroke pushed its own, and the 50-step history held less than a
 // sentence. Must stay above FIELD_MAX_WAIT_MS, or a continuous typing run would outpace
@@ -43,6 +44,11 @@ export default function CMSEditor() {
   const [savedAt, setSavedAt] = useState(null);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
   const [dirty, setDirty] = useState(false);
+  // Bumped when a write finishes with work still outstanding. `dirty` was already true
+  // before the save and is still true after, so it cannot re-arm the interval on its
+  // own and the last thing typed would never be written.
+  const [saveTick, setSaveTick] = useState(0);
+  const autosaveOn = useAutosaveEnabled();
   const [theme, setTheme] = useState(null);
   const [customFonts, setCustomFonts] = useState([]);
   const [showNewPage, setShowNewPage] = useState(false);
@@ -219,18 +225,20 @@ export default function CMSEditor() {
     } finally {
       inFlightRef.current = false;
       if (queuedRef.current) { queuedRef.current = false; saveNow(); }
+      else setSaveTick((t) => t + 1);
     }
   }, []);
 
   // Debounced, but with a ceiling: the plain debounce reset on every keystroke, so
   // continuous typing was never interrupted long enough to trigger a save at all.
   useEffect(() => {
-    if (!dirty) return undefined;
-    const elapsed = dirtySinceRef.current ? Date.now() - dirtySinceRef.current : 0;
-    const wait = Math.max(0, Math.min(AUTOSAVE_MS, AUTOSAVE_MAX_WAIT_MS - elapsed));
-    const t = setTimeout(saveNow, wait);
+    // Same policy as every other surface: off means nothing is scheduled, on means one
+    // write per interval. `revision` stays out of the dependencies deliberately — with
+    // it the timer restarts on every keystroke and a steady typist is never written.
+    if (!autosaveOn || !dirty) return undefined;
+    const t = setTimeout(saveNow, AUTOSAVE_INTERVAL_MS);
     return () => clearTimeout(t);
-  }, [revision, dirty, saveNow]);
+  }, [autosaveOn, dirty, saveNow, saveTick]);
 
   // Last lines of defence for work still sitting in the debounce window.
   useEffect(() => {
@@ -525,19 +533,23 @@ export default function CMSEditor() {
   /** Blocks, metadata and theme save independently; the header reports the one that
    * most needs attention. An error anywhere outranks a save in flight, which outranks
    * "saved". */
-  const anythingPending = dirty || metaSave.dirty || themeSave.dirty || saveState === "error"
-    || metaSave.state === "error" || themeSave.state === "error";
+  // Re-render when a pane joins or leaves the register, so the button below is asking
+  // about the surfaces that are actually on screen.
+  useSaverRegistry();
+  const anythingPending = dirty || metaSave.dirty || themeSave.dirty || anySaverDirty()
+    || saveState === "error" || metaSave.state === "error" || themeSave.state === "error";
 
+  /** Everything, in one press. The register is what makes this cover the site and events
+   *  panes too — panes this component does not otherwise know exist. */
   const saveEverythingNow = useCallback(() => {
     saveNow();
-    metaSave.flush();
-    themeSave.flush();
-  }, [saveNow, metaSave, themeSave]);
+    flushAllSavers();
+  }, [saveNow]);
 
   useEffect(() => {
     flushAllRef.current = saveEverythingNow;
     unsavedRef.current = () =>
-      (!!pageRef.current && pageRef.current.draft !== savedDraftRef.current) || metaSave.dirty || themeSave.dirty;
+      (!!pageRef.current && pageRef.current.draft !== savedDraftRef.current) || anySaverDirty();
   }, [saveEverythingNow, metaSave.dirty, themeSave.dirty]);
 
   const selectedBlock = useMemo(
@@ -583,6 +595,19 @@ export default function CMSEditor() {
           savedAt={savedAt}
           dirty={dirty || metaSave.dirty || themeSave.dirty}
         />
+        {/* Off by default, and per person: it is a working habit, not a property of the
+            site. On, it writes once every AUTOSAVE_INTERVAL_MS of continuous editing —
+            which is the point of an interval over a debounce, and the reason the
+            database is no longer asked to record a sentence one letter at a time. */}
+        <button onClick={() => setAutosaveEnabled(!autosaveOn)}
+                data-testid="autosave-toggle" aria-pressed={autosaveOn}
+                title={autosaveOn
+                  ? `Autosave on — saving every ${Math.round(AUTOSAVE_INTERVAL_MS / 1000)}s`
+                  : "Autosave off — your work is saved when you ask"}
+                className={`!py-1.5 !px-3 !text-xs font-mono-x uppercase tracking-[0.2em] border ${
+                  autosaveOn ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-4 hover:text-ink"}`}>
+          Auto {autosaveOn ? "on" : "off"}
+        </button>
         <button onClick={saveEverythingNow} disabled={!anythingPending} title="Save draft now (⌘S)"
                 data-testid="save-draft-btn" className="btn-primary !py-1.5 !px-3 !text-xs disabled:opacity-30">
           Save now
@@ -851,47 +876,78 @@ function ListField({ value, onCommit }) {
  * there is no preview of a footer to review, and a two-step publish for eight fields
  * reads as ceremony.
  */
+/* Hoisted OUT of SiteContentEditor, and that is the whole bug fix.
+ *
+ * It was declared inside the component body, so every render produced a NEW component
+ * type. React cannot know that two function identities mean the same thing, so it
+ * unmounted the old subtree and mounted a fresh one — on every keystroke. TextField's
+ * debounce lives in state that was thrown away each time, and its unmount effect flushes
+ * whatever was pending, so each character both lost the debounce and forced the flush it
+ * was supposed to prevent. One PUT per letter, and the typing lag that goes with
+ * remounting an input mid-word.
+ *
+ * A component that closes over props belongs outside the thing that renders it. */
+function SiteField({ label, value, onCommit, testId, hint }) {
+  return (
+    <label className="block">
+      <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">{label}</div>
+      <TextField value={value || ""} onCommit={onCommit} testId={testId} />
+      {hint && <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5">{hint}</div>}
+    </label>
+  );
+}
+
 function SiteContentEditor() {
   const [state, setState] = useState(null);
-  const [busy, setBusy] = useState(false);
+  // What the next write should carry, held in a ref so the save reads the newest value at
+  // write time rather than the snapshot current when the timer was armed.
+  const pendingRef = useRef(null);
+
+  const pushToServer = useCallback(async (serialized) => {
+    const { social, pages, ...rest } = JSON.parse(serialized);
+    const { data } = await http.put("/admin/cms/site", { ...rest, social: social || {} });
+    // The server's answer is adopted for the pieces it derives (the footer page list),
+    // but NOT for the fields being typed into: overwriting those mid-sentence is how an
+    // editor loses the end of a word to a reply from a request they started three
+    // characters ago.
+    setState((cur) => ({ ...cur, pages: data.pages }));
+  }, []);
+
+  const siteSave = useAutosave({
+    getPending: () => (pendingRef.current ? JSON.stringify(pendingRef.current) : undefined),
+    save: pushToServer,
+  });
 
   useEffect(() => {
     http.get("/admin/cms/site").then((r) => {
       setState(r.data);
+      pendingRef.current = r.data;
+      siteSave.reset(JSON.stringify(r.data));
       if (r.data?.nav_size) {
         document.documentElement.style.setProperty("--nav-size", `${r.data.nav_size}px`);
       }
     }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!state) return <div className="text-[11px] text-ink-4 font-mono-x uppercase tracking-[0.2em]">Loading…</div>;
 
-  const save = async (patch) => {
-    const next = { ...state, ...patch };
+  /** Apply locally at once; the policy decides when it reaches the server. */
+  const save = (patch) => {
+    const next = { ...(pendingRef.current || state), ...patch };
+    pendingRef.current = next;
     setState(next);
-    setBusy(true);
-    try {
-      const { social, pages, ...rest } = next;
-      const { data } = await http.put("/admin/cms/site", { ...rest, social: social || {} });
-      setState(data);
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Failed");
-    } finally { setBusy(false); }
+    siteSave.bump();
   };
-
-  const Field = ({ label, k, hint }) => (
-    <label className="block">
-      <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">{label}</div>
-      <TextField value={state[k] || ""} onCommit={(v) => save({ [k]: v })} testId={`site-${k}`} />
-      {hint && <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5">{hint}</div>}
-    </label>
-  );
 
   return (
     <div className="space-y-4" data-testid="site-content">
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Wordmarks</div>
-      <Field label="Header" k="header_wordmark" />
-      <Field label="Footer" k="wordmark" hint="Separate on purpose — one need not follow the other" />
+      <SiteField label="Header" value={state.header_wordmark} testId="site-header_wordmark"
+                 onCommit={(v) => save({ header_wordmark: v })} />
+      <SiteField label="Footer" value={state.wordmark} testId="site-wordmark"
+                 hint="Separate on purpose — one need not follow the other"
+                 onCommit={(v) => save({ wordmark: v })} />
       <label className="block">
         <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">
           Menu text size: {state.nav_size ?? 11}px
@@ -917,10 +973,15 @@ function SiteContentEditor() {
         <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Description</div>
         <TextareaField value={state.description || ""} rows={3} testId="site-description" onCommit={(v) => save({ description: v })} />
       </label>
-      <Field label="Legal column heading" k="legal_heading" />
-      <Field label="Contact column heading" k="contact_heading" />
-      <Field label="Contact email" k="contact_email" />
-      <Field label="Copyright name" k="copyright_name" hint="The year is always the current one" />
+      <SiteField label="Legal column heading" value={state.legal_heading} testId="site-legal_heading"
+                 onCommit={(v) => save({ legal_heading: v })} />
+      <SiteField label="Contact column heading" value={state.contact_heading} testId="site-contact_heading"
+                 onCommit={(v) => save({ contact_heading: v })} />
+      <SiteField label="Contact email" value={state.contact_email} testId="site-contact_email"
+                 onCommit={(v) => save({ contact_email: v })} />
+      <SiteField label="Copyright name" value={state.copyright_name} testId="site-copyright_name"
+                 hint="The year is always the current one"
+                 onCommit={(v) => save({ copyright_name: v })} />
 
       <div className="pt-2 text-[10px] text-ink-4 leading-relaxed" data-testid="site-footer-pages">
         Footer links: {(state.pages || []).map((p) => p.label).join(" · ") || "none yet"}.
@@ -938,7 +999,8 @@ function SiteContentEditor() {
           </label>
         ))}
       </div>
-      {busy && <div className="font-mono-x text-[9px] uppercase tracking-[0.2em] text-ink-5">Saving…</div>}
+      {/* No local "Saving…" line. There is one indicator for the whole editor in the
+          toolbar, and a second one here answered the same question differently. */}
     </div>
   );
 }
@@ -958,25 +1020,41 @@ const EVENT_TAB_LABELS = { all: "All", upcoming: "Upcoming", past: "Past" };
  */
 function EventsSettingsEditor() {
   const [state, setState] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const pendingRef = useRef(null);
+
+  const pushToServer = useCallback(async (serialized) => {
+    const next = JSON.parse(serialized);
+    await http.put("/admin/cms/events-settings", {
+      tabs: next.tabs, default_tab: next.default_tab,
+    });
+  }, []);
+
+  // Ticking a box is not typing, so this one was never the cause of a request storm.
+  // It joins the same policy anyway: "autosave is off" has to mean the same thing in
+  // every pane, or the toggle is a suggestion rather than a setting.
+  const tabsSave = useAutosave({
+    getPending: () => (pendingRef.current
+      ? JSON.stringify({ tabs: pendingRef.current.tabs, default_tab: pendingRef.current.default_tab })
+      : undefined),
+    save: pushToServer,
+  });
 
   useEffect(() => {
-    http.get("/admin/cms/events-settings").then((r) => setState(r.data)).catch(() => {});
+    http.get("/admin/cms/events-settings").then((r) => {
+      setState(r.data);
+      pendingRef.current = r.data;
+      tabsSave.reset(JSON.stringify({ tabs: r.data.tabs, default_tab: r.data.default_tab }));
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!state) return <div className="text-[11px] text-ink-4 font-mono-x uppercase tracking-[0.2em]">Loading…</div>;
 
-  const save = async (next) => {
-    setBusy(true);
-    try {
-      const { data } = await http.put("/admin/cms/events-settings", {
-        tabs: next.tabs, default_tab: next.default_tab,
-      });
-      setState({ ...data, available_tabs: state.available_tabs });
-      toast.success("Events settings saved");
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Failed");
-    } finally { setBusy(false); }
+  const save = (next) => {
+    const merged = { ...state, ...next };
+    pendingRef.current = merged;
+    setState(merged);
+    tabsSave.bump();
   };
 
   const toggle = (t) => {
@@ -995,7 +1073,7 @@ function EventsSettingsEditor() {
       <div className="mt-3 space-y-2">
         {ordered.map((t) => (
           <label key={t} className="flex items-center gap-2 text-xs cursor-pointer">
-            <input type="checkbox" checked={state.tabs.includes(t)} disabled={busy}
+            <input type="checkbox" checked={state.tabs.includes(t)}
                    onChange={() => toggle(t)} data-testid={`events-tab-${t}`} />
             <span className="uppercase tracking-[0.15em] font-mono-x">{EVENT_TAB_LABELS[t] || t}</span>
           </label>
@@ -1003,7 +1081,7 @@ function EventsSettingsEditor() {
       </div>
 
       <div className="mt-5 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">Opens on</div>
-      <select value={state.default_tab} disabled={busy}
+      <select value={state.default_tab}
               onChange={(e) => save({ tabs: state.tabs, default_tab: e.target.value })}
               className="input-x w-full mt-2 !py-2 !text-sm" data-testid="events-default-tab">
         {state.tabs.map((t) => <option key={t} value={t}>{EVENT_TAB_LABELS[t] || t}</option>)}
