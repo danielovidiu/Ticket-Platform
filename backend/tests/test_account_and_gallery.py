@@ -32,7 +32,7 @@ from support import (API, db, mint_user, patient, TEST_EMAIL_DOMAIN, TIMEOUT,
 # see pytest.ini.
 pytestmark = pytest.mark.xdist_group("reservations_budget")
 
-PASSWORD = "pytest-passw0rd"
+PASSWORD = "Fixture-Str0ng-Pass!"
 
 
 def _new_email():

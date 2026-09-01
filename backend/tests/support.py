@@ -162,7 +162,7 @@ def skip_if_rate_limited(r, what):
     return r
 
 
-def register_user(email: str = None, password: str = "pytest-passw0rd", **extra):
+def register_user(email: str = None, password: str = "Fixture-Str0ng-Pass!", **extra):
     """Exercise the REAL registration endpoint. Rate-limited (5 per 5 min per IP) — use
     sparingly, and only in tests that are actually about registration.
 

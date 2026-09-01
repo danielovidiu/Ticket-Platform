@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { http, API } from "../api";
 import { useAuth } from "../auth";
 import { notifyError } from "../lib/notify";
+import PasswordFields from "../components/PasswordFields";
+import { isAcceptable } from "../lib/passwordPolicy";
 
 const safeReturn = (p) => (p && p.startsWith("/") && !p.startsWith("//") ? p : "/my-tickets");
 
@@ -25,7 +27,7 @@ export default function Login() {
   // asks for it as optional until this says otherwise.
   const [methods, setMethods] = useState({ password: true, google: false, apple: false, require_phone: false });
   const [form, setForm] = useState({
-    email: "", password: "", first_name: "", last_name: "", phone: "",
+    email: "", password: "", confirm: "", first_name: "", last_name: "", phone: "",
     tos: false, news_opt_in: false, promo_opt_in: false,
   });
   const [busy, setBusy] = useState(false);
@@ -53,6 +55,12 @@ export default function Login() {
   }, [search]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Only registration is choosing a password. Signing in is not, and forgot-password has
+  // no password field at all, so both are ready by definition.
+  const passwordReady = mode !== "register"
+    || (isAcceptable(form.password, { email: form.email, name: `${form.first_name} ${form.last_name}` })
+        && form.password === form.confirm && form.confirm.length > 0);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -176,8 +184,20 @@ export default function Login() {
                    placeholder={methods.require_phone ? "Phone number" : "Phone number (optional)"}
                    data-testid="login-phone" className="input-x w-full" />
           )}
-          {mode !== "forgot" && (
-            <input type="password" required value={form.password} onChange={(e) => set("password", e.target.value)} placeholder="Password" data-testid="login-password" className="input-x w-full" />
+          {mode === "login" && (
+            <input type="password" required value={form.password} onChange={(e) => set("password", e.target.value)}
+                   autoComplete="current-password" placeholder="Password" data-testid="login-password" className="input-x w-full" />
+          )}
+          {/* Only when CHOOSING one. A checklist over the sign-in field would be telling
+              somebody their existing password is wrong when it is merely old, and a
+              retype there is friction with nothing to catch. */}
+          {mode === "register" && (
+            <PasswordFields
+              value={form.password} onChange={(v) => set("password", v)}
+              confirm={form.confirm} onConfirmChange={(v) => set("confirm", v)}
+              identity={{ email: form.email, name: `${form.first_name} ${form.last_name}` }}
+              label="Password" testId="login-password"
+            />
           )}
 
           {mode === "register" && (
@@ -197,7 +217,8 @@ export default function Login() {
             </div>
           )}
 
-          <button disabled={busy} data-testid="login-submit" className="btn-accent w-full">
+          <button disabled={busy || !passwordReady} data-testid="login-submit"
+                  className="btn-accent w-full disabled:opacity-40">
             {busy ? "…" : mode === "register" ? "CREATE ACCOUNT" : mode === "forgot" ? "SEND RESET LINK" : "SIGN IN"}
           </button>
         </form>
