@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
+import { monthYear } from "../lib/dates";
 
 /** A video row carries a real poster only when its thumbnail differs from the
  * video URL — the upload endpoint reuses the video URL when no frame could be
@@ -33,12 +34,25 @@ function AlbumCard({ album }) {
         {isVideo && (
           <div className="absolute top-2 left-2 bg-scrim/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink">▶ Video</div>
         )}
-        <div className="absolute bottom-2 right-2 bg-scrim/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink">
+        {/* The count is a detail you go looking for, not something every tile should
+            spend a corner of its cover on, so it waits for the pointer. Keyboard users
+            get it on focus for the same reason; on a touch screen, where there is no
+            hover to give, it simply stays out of the way. */}
+        <div className="absolute bottom-2 right-2 bg-scrim/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink
+                        opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+             data-testid={`gallery-count-${album.slug}`}>
           {album.count} item{album.count === 1 ? "" : "s"}
         </div>
       </div>
       <div className="flex-1 flex items-center p-3">
-        <div className="font-mono-x text-[10px] uppercase tracking-[0.25em] text-ink-3">{album.title}</div>
+        <div className="font-mono-x text-[10px] uppercase tracking-[0.25em] text-ink-3">
+          {album.title}
+          {/* The date the grid is ordered by, said out loud. An order nobody can read is
+              indistinguishable from no order at all. */}
+          {monthYear(album.date) && (
+            <span className="text-ink-4" data-testid={`gallery-date-${album.slug}`}> · {monthYear(album.date)}</span>
+          )}
+        </div>
       </div>
     </Link>
   );

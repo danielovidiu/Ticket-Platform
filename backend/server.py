@@ -14,7 +14,7 @@ import secrets
 import hashlib
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 from typing import List, Literal, Optional
 
@@ -2336,13 +2336,34 @@ def _album_cover(items: List[dict]) -> Optional[dict]:
     return next((g for g in items if g.get("is_cover")), items[0])
 
 
+def _album_sort_key(album: dict) -> str:
+    """The day an album is filed under: its own date, or failing that the day it was
+    created.
+
+    The fallback is what keeps a dateless album in a sensible place. Sorting on `date`
+    alone would collapse every album that has never been given one into a single tie at
+    the end of the grid, which is worse than the creation order they had before.
+
+    Both readings are YYYY-MM-DD, so a string compare is a date compare — `created_at`
+    is a full ISO timestamp and gets cut down to its day so the two are the same shape.
+    """
+    return (album.get("date") or (album.get("created_at") or "")[:10]) or ""
+
+
 async def _albums_with_items(query: dict) -> List[dict]:
-    """Albums matching `query`, each carrying its items, cover and count, in album order.
+    """Albums matching `query`, each carrying its items, cover and count, newest first.
 
     Two queries regardless of how many albums come back, rather than one per album:
     the Gallery page and the admin both need every album's cover at once.
+
+    Ordering is by date, and it is done here rather than in the query because the key is
+    a fallback the database cannot express in a plain sort. The list is capped at 500,
+    so this is a sort of hundreds of dicts, not a scan.
     """
-    albums = await db.albums.find(query, {"_id": 0}).sort([("sort_order", 1), ("created_at", 1)]).to_list(500)
+    albums = await db.albums.find(query, {"_id": 0}).sort("created_at", 1).to_list(500)
+    # Stable, so albums sharing a date stay in the creation order the query returned
+    # them in rather than shuffling between requests.
+    albums.sort(key=_album_sort_key, reverse=True)
     items = await db.gallery.find(
         {"album_id": {"$in": [a["album_id"] for a in albums]}}, {"_id": 0}
     ).sort([("sort_order", 1), ("created_at", 1)]).to_list(5000)
@@ -4402,6 +4423,9 @@ class AlbumIn(ApiModel):
     slug: Optional[str] = None
     description: str = ""
     event_id: Optional[str] = None
+    # A day, not an instant. An album documents something that happened on a date; the
+    # hour it happened at is the event's business, not the gallery's.
+    date: Optional[str] = None
 
 
 class AlbumPatchIn(ApiModel):
@@ -4409,10 +4433,31 @@ class AlbumPatchIn(ApiModel):
     slug: Optional[str] = None
     description: Optional[str] = None
     event_id: Optional[str] = None
+    date: Optional[str] = None
 
 
-class AlbumReorderIn(ApiModel):
-    ordered_ids: List[str]
+_ALBUM_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _album_date(value: Optional[str]) -> Optional[str]:
+    """Validate an album's date as a plain YYYY-MM-DD day.
+
+    Blank is a real answer — an album with no date falls back to when it was created —
+    so only a value that is present and malformed is an error. The calendar day is
+    parsed, not just pattern-matched: "2026-02-31" satisfies the shape and is not a day.
+    """
+    if value is None:
+        return None
+    v = value.strip()
+    if not v:
+        return None
+    if not _ALBUM_DATE_RE.match(v):
+        raise HTTPException(400, "The date must look like 2026-08-15")
+    try:
+        date.fromisoformat(v)
+    except ValueError:
+        raise HTTPException(400, "That is not a real date")
+    return v
 
 
 async def _linked_event_id(event_id: Optional[str]) -> Optional[str]:
@@ -4446,35 +4491,21 @@ async def admin_create_album(body: AlbumIn, user=Depends(require_admin)):
     if not _SLUG_RE.match(slug):
         raise HTTPException(400, "The slug must use letters, numbers and hyphens, e.g. live-documentation")
 
-    last = await db.albums.find({}, {"_id": 0, "sort_order": 1}).sort("sort_order", -1).limit(1).to_list(1)
     album = {
         "album_id": new_id("alb"),
         "title": title,
         "slug": slug,
         "description": (body.description or "").strip(),
         "event_id": await _linked_event_id(body.event_id),
-        "sort_order": (last[0].get("sort_order", -1) + 1) if last else 0,
+        # No sort_order. Albums are ordered by date now, so a position written here
+        # would be a number nothing reads — see _album_sort_key.
+        "date": _album_date(body.date),
         "created_at": now_utc().isoformat(),
     }
     await db.albums.insert_one(album)
     await _audit(user["user_id"], "album_created", "album", album["album_id"],
                  {"title": title, "event_id": album["event_id"]})
     return {k: v for k, v in album.items() if k != "_id"}
-
-
-# Declared BEFORE /admin/albums/{album_id} — FastAPI matches in declaration order, and a
-# literal path registered after the parameterised one would be swallowed by it.
-@api.patch("/admin/albums/reorder")
-async def admin_reorder_albums(body: AlbumReorderIn, user=Depends(require_admin)):
-    """Rewrite album sort_order to match ordered_ids — the order tiles appear in on the
-    Gallery page."""
-    known = {a["album_id"] for a in await db.albums.find({}, {"_id": 0, "album_id": 1}).to_list(500)}
-    unknown = [i for i in body.ordered_ids if i not in known]
-    if unknown:
-        raise HTTPException(400, f"{len(unknown)} album(s) do not exist")
-    for i, album_id in enumerate(body.ordered_ids):
-        await db.albums.update_one({"album_id": album_id}, {"$set": {"sort_order": i}})
-    return {"ok": True, "count": len(body.ordered_ids)}
 
 
 @api.patch("/admin/albums/{album_id}")
@@ -4505,6 +4536,11 @@ async def admin_update_album(album_id: str, body: AlbumPatchIn, user=Depends(req
     # client actually sent, so ask it.
     if "event_id" in body.model_fields_set:
         updates["event_id"] = await _linked_event_id(body.event_id)
+
+    # Same absent-vs-null distinction: `date: null` clears the date and sends the album
+    # back to ordering by its creation day.
+    if "date" in body.model_fields_set:
+        updates["date"] = _album_date(body.date)
 
     if updates:
         await db.albums.update_one({"album_id": album_id}, {"$set": updates})
@@ -5053,7 +5089,11 @@ async def security_headers(request: Request, call_next):
 #    column — the pages are all still there, nothing marks them as belonging in it.
 # 10: the header nav's type size moved from the theme document to the site settings, so
 #     it sits with the header's other control instead of under Theme.
-SCHEMA_VERSION = 10
+# 11: albums carry their own `date`, and the Gallery grid orders by it instead of by a
+#     hand-written sort_order. Without the bump migrate_album_dates never runs on an
+#     already-initialised database, every album falls back to its creation day, and the
+#     grid silently keeps the old order while the CMS claims it is sorted by date.
+SCHEMA_VERSION = 11
 
 
 async def init_app():
@@ -5158,7 +5198,7 @@ async def init_indexes():
         await db.events.create_index("event_code", unique=True, partialFilterExpression={"event_code": {"$type": "string"}})
         await db.albums.create_index("album_id", unique=True)
         await db.albums.create_index("slug", unique=True)
-        await db.albums.create_index([("event_id", 1), ("sort_order", 1)])
+        await db.albums.create_index([("event_id", 1), ("date", -1)])
         # Webshop. The variant index backs the atomic stock hold, which filters on
         # product_id plus a variant with enough stock on every add-to-cart and checkout.
         await db.products.create_index("product_id", unique=True)
@@ -5198,6 +5238,13 @@ async def init_indexes():
         await migrate_gallery_ordering()
     except Exception:
         logger.exception("migrate_gallery_ordering failed")
+
+    try:
+        # After migrate_gallery_albums: an album has to exist, and know its event, before
+        # it can borrow that event's date.
+        await migrate_album_dates()
+    except Exception:
+        logger.exception("migrate_album_dates failed")
 
     try:
         await migrate_footer_pages()
@@ -5366,6 +5413,45 @@ async def migrate_gallery_albums():
         )
 
     logger.info("Gallery migrated into %d album(s): %d item(s) filed", len(created), len(legacy))
+
+
+async def migrate_album_dates():
+    """Give every existing album the date the Gallery grid now orders by.
+
+    An album linked to an event takes that event's day — which is the date anyone
+    looking at the tile means by it. One that is linked to nothing has only ever had its
+    creation day, so it keeps that, and lands where it already sat.
+
+    Albums that already carry a date are left alone: this runs on every version bump,
+    not only the one that introduced the field, and a re-run must not undo an editor's
+    correction by reimposing the linked event's date over it.
+    """
+    # One query, not two: a Mongo match against null also matches documents with no such
+    # field, so this catches the albums that predate the field alongside those that have
+    # it set to null or blank.
+    albums = await db.albums.find(
+        {"date": {"$in": [None, ""]}}, {"_id": 0, "album_id": 1, "event_id": 1, "created_at": 1}
+    ).to_list(500)
+    if not albums:
+        return 0
+
+    event_ids = [a["event_id"] for a in albums if a.get("event_id")]
+    events = await db.events.find(
+        {"event_id": {"$in": event_ids}}, {"_id": 0, "event_id": 1, "starts_at": 1}
+    ).to_list(500) if event_ids else []
+    starts = {e["event_id"]: e.get("starts_at") or "" for e in events}
+
+    fixed = 0
+    for a in albums:
+        source = starts.get(a.get("event_id") or "") or a.get("created_at") or ""
+        day = source[:10]
+        if not _ALBUM_DATE_RE.match(day):
+            continue
+        await db.albums.update_one({"album_id": a["album_id"]}, {"$set": {"date": day}})
+        fixed += 1
+    if fixed:
+        logger.info("Backfilled a date onto %d album(s)", fixed)
+    return fixed
 
 
 async def migrate_nav_size_to_site_settings():
