@@ -41,5 +41,6 @@ export function CartProvider({ children }) {
 
 export const useCart = () => useContext(CartCtx);
 
-/** Prices are stored and displayed gross, in RON. */
-export const ron = (n) => `${Number(n || 0).toFixed(2)} RON`;
+/** Prices are stored and displayed gross, in RON. The formatting rule lives in
+ *  lib/money.js; re-exported here because this is where callers already import it from. */
+export { ron, money } from "./money";

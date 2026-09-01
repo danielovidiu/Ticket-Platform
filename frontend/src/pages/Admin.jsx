@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { http, API } from "../api";
+import { money, ron } from "../lib/money";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -215,7 +216,7 @@ function Stats() {
 
   const filtered = f.filtered;
   const cards = s && [
-    ["Revenue", `${s.revenue_ron.toFixed(2)} RON`],
+    ["Revenue", ron(s.revenue_ron)],
     ["Orders", s.total_orders],
     ["Tickets issued", s.total_tickets],
     ["Scanned", s.scanned],
@@ -778,8 +779,8 @@ function Transactions() {
                       <td className="py-2 pr-3 text-right font-mono-x">{l.tickets_sold}</td>
                       {/* The multiplication is written out because this is the number an
                           auditor recomputes; showing only the product invites the question. */}
-                      <td className="py-2 pr-3 text-right font-mono-x">× {l.unit_price_ron.toFixed(2)}</td>
-                      <td className="py-2 pr-3 text-right font-mono-x">{l.total_ron.toFixed(2)}</td>
+                      <td className="py-2 pr-3 text-right font-mono-x">× {money(l.unit_price_ron)}</td>
+                      <td className="py-2 pr-3 text-right font-mono-x">{money(l.total_ron)}</td>
                       <td className="py-2 font-mono-x text-[10px] break-all">
                         {l.serial_first ? `${l.serial_first} – ${l.serial_last}` : <span className="text-ink-5">no serials</span>}
                       </td>
@@ -843,7 +844,7 @@ function OrderList() {
       {orders.map((o) => (
         <div key={o.reservation_id} className="border border-ink/10 bg-surface p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-2 lg:items-center text-sm">
           <div className="lg:col-span-3 min-w-0 font-mono-x text-xs break-words lg:truncate">{o.reservation_id}</div>
-          <div className="lg:col-span-2 min-w-0 font-mono-x">{o.total_ron?.toFixed(2)} RON</div>
+          <div className="lg:col-span-2 min-w-0 font-mono-x">{ron(o.total_ron)}</div>
           <div className="lg:col-span-1 min-w-0">{o.quantity}×</div>
           <div className="lg:col-span-2 min-w-0"><span className="inline-block border border-ink/20 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em]">{o.status}</span></div>
           <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-ink-3">{new Date(o.created_at).toLocaleString("en-GB")}</div>
@@ -884,7 +885,7 @@ function TicketList() {
   useEffect(() => { http.get("/admin/events").then((r) => setEvents(r.data)).catch(() => setEvents([])); }, []);
 
   const refund = async (t) => {
-    const price = Number(t.price_ron || 0).toFixed(2);
+    const price = money(t.price_ron);
     if (!confirm(`Refund this one ticket (${price} RON) to ${t.buyer?.email || "the buyer"}?\n\nThe other tickets on the same order are not affected. Money is returned in the Stripe dashboard.`)) return;
     try {
       await http.post(`/admin/tickets/${t.ticket_id}/refund`);
@@ -1284,7 +1285,7 @@ function Invites() {
           const url = ev ? `${window.location.origin}/events/${ev.slug}?invite=${s.token}` : `?invite=${s.token}`;
           return (
             <div key={s.link_id} className="border border-ink/10 p-3 font-mono-x text-xs space-y-1">
-              <div className="uppercase tracking-[0.2em] text-ink-4">{s.label} · {s.price_ron.toFixed(2)} RON · {s.used}/{s.capacity} used</div>
+              <div className="uppercase tracking-[0.2em] text-ink-4">{s.label} · {ron(s.price_ron)} · {s.used}/{s.capacity} used</div>
               <div className="break-all"><Link to={url.replace(window.location.origin, "")} className="text-ink underline">{url}</Link></div>
               <button onClick={async () => { await http.delete(`/admin/special-links/${s.link_id}`); load(); }} className="btn-primary text-xs mt-1">Del</button>
             </div>
