@@ -676,6 +676,51 @@ def event_code_for(title: str) -> str:
     return _code_from_words(title, 4) or "EVT"
 
 
+def _check_access_window(waves: List[dict]) -> None:
+    """A tier may carry one end of an admission window, never both.
+
+    The editor picks `until` or `from` with a toggle, so both being set means the request
+    did not come from that form. Refused rather than quietly preferring one: the door
+    checks `until` first, so silently keeping both would enforce the end the editor did
+    not choose and give no sign of it.
+    """
+    for w in waves:
+        if w.get("access_until") and w.get("access_from"):
+            raise HTTPException(
+                400,
+                f"\"{w.get('name') or 'A tier'}\" has both an access-until and an "
+                "access-from. Choose one end of the window.",
+            )
+
+
+def _ticket_type_label(ticket: dict, wave: dict) -> str:
+    """What a ticket's type is called in an export.
+
+    Three readings, oldest first: what the ticket recorded at issue, then the wave's
+    `tier`, then the wave's name. The name is the new last resort — the tier dropdown is
+    gone from the editor, so waves created from now on carry no tier, and without this
+    their column in a fiscal export would simply be blank.
+    """
+    return ticket.get("tier") or wave.get("tier") or wave.get("name", "")
+
+
+def _sorted_waves(waves: List[dict]) -> List[dict]:
+    """Tiers in the order a buyer is offered them: lowest `tier_id` first.
+
+    Sorted once here, on the way into the database, rather than by each of the several
+    places that hand waves out — the event page, the admin form, the exports and the
+    order emails would otherwise each have to remember, and the first one to forget
+    shows a different running order than the rest.
+
+    A wave with no id sorts last rather than first. An unnumbered tier is one nobody has
+    placed yet, and dropping it at the top of the list would push a numbered one down.
+    """
+    return sorted(
+        waves,
+        key=lambda w: (w.get("tier_id") is None, w.get("tier_id") or 0),
+    )
+
+
 def wave_type_code(wave: dict) -> str:
     """The code standing for one ticket type. The tier decides it when the tier is one
     we know; otherwise the wave's own name does."""
@@ -1297,13 +1342,23 @@ class WaveIn(ApiModel):
     capacity: int
     starts_at: str
     ends_at: str
-    tier: str = "general"  # early_bird, general, vip
-    # The last moment holders of *this* tier may enter on. Per-tier rather than
-    # per-event, so an early-bird ticket can carry an earlier cut-off than general.
+    # What orders the tiers a buyer is offered: lowest first. An editor's handle on the
+    # running order, which used to be whatever order the tiers happened to be added in.
+    tier_id: Optional[int] = None
+    # Kept, no longer editable. It fed the ticket serial's type code and the exports, and
+    # existing waves still carry the value they were given; new ones leave it empty and
+    # let the wave's own name stand for the type instead. See wave_type_code.
+    tier: str = ""
+    # The two ends of a tier's admission window. At most ONE is ever set: the editor
+    # picks which end they mean, so a wave says either "not after this" or "not before
+    # it", never both. Blank is no rule at all, which is how every event behaved before
+    # either field existed.
     #
-    # This replaced `access_from`, which stored the opposite end of the window and was
-    # never read by anything — see migrate_access_until.
+    # `access_from` was here once, stored the same thing, and was read by nothing — see
+    # the note on retire_access_from below before assuming that history repeats. It is
+    # enforced at the door now, exactly as `access_until` is.
     access_until: Optional[str] = None
+    access_from: Optional[str] = None
 
 
 class EventIn(ApiModel):
@@ -3400,21 +3455,30 @@ async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
     if ends and now_iso > ends:
         return {"valid": False, "reason": "EVENT ENDED", "ticket": t, "event": ev}
 
-    # Past this tier's cut-off. Deliberately NOT an automatic refusal: the guest is
-    # standing there holding a ticket they paid for, and a late arrival is a judgement
-    # call, not a rule. The door is shown the situation and decides; either outcome is
-    # recorded against the person who made it.
+    # Outside this tier's admission window. Deliberately NOT an automatic refusal: the
+    # guest is standing there holding a ticket they paid for, and arriving early or late
+    # is a judgement call, not a rule. The door is shown the situation and decides;
+    # either outcome is recorded against the person who made it.
+    #
+    # Which end was crossed is carried separately from the fact that one was, because
+    # "you are early" and "you are late" send the guest to different places — one waits,
+    # the other has missed it.
     wave = next((w for w in ev.get("waves", []) if w.get("wave_id") == t.get("wave_id")), {})
     access_until = wave.get("access_until")
-    if access_until and now_iso > access_until and not body.override:
+    access_from = wave.get("access_from")
+    outside = None
+    if access_until and now_iso > access_until:
+        outside = {"reason": "ACCESS EXPIRED", "edge": "late", "access_until": access_until}
+    elif access_from and now_iso < access_from:
+        outside = {"reason": "ACCESS NOT YET OPEN", "edge": "early", "access_from": access_from}
+    if outside and not body.override:
         return {
             "valid": False,
             "needs_override": True,
-            "reason": "ACCESS EXPIRED",
-            "access_until": access_until,
             "wave_name": wave.get("name", ""),
             "ticket": t,
             "event": ev,
+            **outside,
         }
 
     # first-scan-wins
@@ -3424,7 +3488,8 @@ async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
         # thing it describes when tickets are exported for a fiscal return.
         admit["override_by"] = user["user_id"]
         admit["override_at"] = now_iso
-        admit["override_reason"] = body.override_reason.strip() or "admitted after access expiry"
+        admit["override_reason"] = (body.override_reason.strip()
+                                    or "admitted outside this tier's access window")
     upd = await db.tickets.update_one(
         {"qr_code": body.qr_code, "status": "issued"},
         {"$set": admit},
@@ -3437,6 +3502,7 @@ async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
     if body.override:
         await _audit(user["user_id"], "door_override_admit", "ticket", ticket["ticket_id"],
                      {"event_id": ticket["event_id"], "access_until": access_until,
+                      "access_from": access_from,
                       "reason": ticket.get("override_reason", "")})
     return {"valid": True, "ticket": ticket, "event": ev, "overridden": bool(body.override)}
 
@@ -3613,7 +3679,8 @@ async def admin_create_event(body: EventIn, user=Depends(require_admin)):
         w["wave_id"] = new_id("wave")
         w["available"] = w["capacity"]
         waves.append(w)
-    e["waves"] = waves
+    _check_access_window(waves)
+    e["waves"] = _sorted_waves(waves)
     e["created_at"] = now_utc().isoformat()
     await db.events.insert_one(e)
     # Assigned here rather than at first sale so the code is visible in the admin before
@@ -3663,7 +3730,8 @@ async def admin_update_event(event_id: str, body: EventPatchIn, user=Depends(req
                 w["wave_id"] = new_id("wave")
                 w["available"] = w["capacity"]
             new_waves.append(w)
-        patch["waves"] = new_waves
+        _check_access_window(new_waves)
+        patch["waves"] = _sorted_waves(new_waves)
 
     # Reachable now in a way it was not before: a body of nothing but unknown keys used to
     # write those keys, and now dumps to {}. Mongo rejects an empty `$set`.
@@ -4087,7 +4155,7 @@ async def admin_transactions_csv(
             _csv_safe(ev.get("title", "")),
             ev.get("starts_at", ""),
             _csv_safe(t.get("wave_name") or wave.get("name", "")),
-            _csv_safe(t.get("tier") or wave.get("tier", "")),
+            _csv_safe(_ticket_type_label(t, wave)),
             f"{float(t.get('price_ron') or 0):.2f}",
             t.get("status", ""),
             t.get("created_at", ""),
@@ -4130,7 +4198,7 @@ async def admin_transactions_summary(
             "event_code": t.get("event_code") or ev.get("event_code", ""),
             "type_code": t.get("type_code") or "",
             "ticket_type": t.get("wave_name") or wave.get("name", ""),
-            "tier": t.get("tier") or wave.get("tier", ""),
+            "tier": _ticket_type_label(t, wave),
             "unit_price_ron": price,
             "tickets_sold": 0,
             "serials": [],
@@ -5093,7 +5161,11 @@ async def security_headers(request: Request, call_next):
 #     hand-written sort_order. Without the bump migrate_album_dates never runs on an
 #     already-initialised database, every album falls back to its creation day, and the
 #     grid silently keeps the old order while the CMS claims it is sorted by date.
-SCHEMA_VERSION = 11
+# 12: tiers carry a `tier_id` and the buyer is offered them lowest-id first. Without the
+#     bump migrate_wave_tier_ids never runs, every existing tier stays unnumbered, and
+#     they all sort last together — which is the order they were already in, right up
+#     until someone saves an event and one tier gets a number.
+SCHEMA_VERSION = 12
 
 
 async def init_app():
@@ -5223,9 +5295,9 @@ async def init_indexes():
         logger.exception("init_indexes failed")
 
     try:
-        await migrate_access_until()
+        await migrate_wave_tier_ids()
     except Exception:
-        logger.exception("migrate_access_until failed")
+        logger.exception("migrate_wave_tier_ids failed")
 
     try:
         # Order matters: ordering is assigned per album, so the albums have to exist and
@@ -5316,25 +5388,52 @@ async def migrate_session_token_hashes():
         logger.info("Session tokens hashed at rest: %d migrated, %d dropped", migrated, dropped)
 
 
-async def migrate_access_until():
-    """Rename the wave field `access_from` to `access_until`.
+# RETIRED: migrate_access_until.
+#
+# It unset `waves.$[].access_from` on every schema bump. That was right while the field
+# was a dead leftover — it stored when a tier's holders could START entering, nothing
+# read it, and carrying the value into the enforced `access_until` would have inverted
+# its meaning into "refused after 21:00".
+#
+# `access_from` is a real, enforced field again: the door refuses a scan before it, the
+# same way it refuses one after `access_until`. Leaving that migration in place would
+# have deleted every "from" cut-off an editor set, silently, on the next version bump —
+# and the deletion would look like the setting had never saved.
+#
+# It has already run everywhere it needed to; the key it cleaned up has not been written
+# by any version since. Do not reinstate it.
 
-    The old field stored the moment a tier's holders could START entering, and nothing
-    anywhere read it — not the door, not the event page, not the ticket. It is now the
-    opposite end of the window, `access_until`, and the door does read it.
 
-    Because the old value was never enforced, carrying it across would silently turn a
-    "doors open for VIPs at 21:00" into "VIPs are refused after 21:00" — the exact
-    inversion of what whoever typed it meant. So the key is dropped rather than renamed,
-    and the field starts empty for every existing wave. An empty cut-off is no cut-off,
-    which is precisely how these events have always behaved.
+async def migrate_wave_tier_ids():
+    """Number the tiers of events that predate `tier_id`.
+
+    Numbered from the order their waves are already stored in, so every existing event
+    keeps the exact running order it displays today. Backfilling to a constant, or
+    leaving them unnumbered, would reorder live events the first time anyone saved one.
+
+    Only waves with no id of their own are touched, and an event is written once for the
+    whole array rather than once per wave.
     """
-    result = await db.events.update_many(
-        {"waves.access_from": {"$exists": True}},
-        {"$unset": {"waves.$[].access_from": ""}},
-    )
-    if result.modified_count:
-        logger.info("Dropped the unenforced access_from from %d event(s)", result.modified_count)
+    fixed = 0
+    async for e in db.events.find({"waves.tier_id": None}, {"_id": 0, "event_id": 1, "waves": 1}):
+        waves = e.get("waves") or []
+        # The next number carries on past whatever is already numbered, so a
+        # part-numbered event does not end up with two tiers sharing an id.
+        used = {w.get("tier_id") for w in waves if isinstance(w.get("tier_id"), int)}
+        nxt = (max(used) + 1) if used else 1
+        changed = False
+        for w in waves:
+            if isinstance(w.get("tier_id"), int):
+                continue
+            w["tier_id"] = nxt
+            nxt += 1
+            changed = True
+        if changed:
+            await db.events.update_one({"event_id": e["event_id"]}, {"$set": {"waves": waves}})
+            fixed += 1
+    if fixed:
+        logger.info("Numbered the tiers of %d event(s)", fixed)
+    return fixed
 
 
 async def migrate_gallery_albums():
