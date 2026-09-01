@@ -5,6 +5,7 @@ import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import { DateTimePicker } from "../components/ui/datetime-picker";
+import { nextMorningAt6, doorsFrom, dayBefore, isPast } from "../lib/eventDates";
 import { FormatToolbar } from "../lib/richText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 import AlbumManager from "../components/AlbumManager";
@@ -245,15 +246,6 @@ function Stats() {
 // is set) — matches the same rule the public /events feed uses, so admin status
 // never disagrees with what visitors actually see.
 
-// Ticket tiers read as full words in the admin form — the abbreviated values
-// ("gen", "early") are storage detail, not something an editor should decode.
-const TIER_LABEL = { early_bird: "Early Bird", general: "General", vip: "VIP" };
-const TIER_BADGE = {
-  early_bird: "border-ok text-ok",
-  general: "border-ink/50 text-ink",
-  vip: "border-brand text-brand",
-};
-
 // Small labelled wrapper so every field in the tier card says what it is.
 function Field({ label, className = "", children }) {
   return (
@@ -270,7 +262,7 @@ function Events() {
   const [notice, setNotice] = useState(null);   // { event, kind } while composing
   const load = () => http.get("/admin/events").then((r) => setEvents(r.data));
   useEffect(() => { load(); }, []);
-  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_until: "" }] });
+  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ tier_id: 1, name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: "", access_until: "", access_from: "" }] });
   const save = async () => {
     try {
       if (form.event_id) {
@@ -484,9 +476,112 @@ function NoticeComposer({ event, initialKind, onClose }) {
   );
 }
 
+/** One tier's admission window: which end of it is being set, and when.
+ *
+ * Two fields on the wave, never both — `access_until` refuses a holder after that
+ * moment, `access_from` refuses one before it. The toggle picks which the date means
+ * and clears the other, so the pair can never disagree about what an editor intended.
+ * Blank is no rule, which is how a tier behaves unless someone says otherwise.
+ *
+ * Neither end is a hard refusal at the door. The guest is standing there holding a
+ * ticket they paid for, so the scanner states which side of the window they are on and
+ * a person decides.
+ */
+export function AccessWindow({ wave, onChange, index }) {
+  /* The mode is held here rather than read back off the wave.
+   *
+   * Deriving it from which field has a value reads well and does not work: on a tier
+   * with no date yet — the ordinary case, since people pick the end before the moment —
+   * switching to "from" writes an empty `access_from`, and the next render sees two
+   * empty fields and snaps the toggle back to "until". The control could not be moved
+   * before it had something to hold.
+   *
+   * Seeded from the wave, so an event that already carries a `from` opens on it.
+   */
+  const [mode, setMode] = useState(() => (wave.access_from && !wave.access_until ? "from" : "until"));
+  const value = mode === "from" ? wave.access_from : wave.access_until;
+
+  const switchTo = (next) => {
+    if (next === mode) return;
+    setMode(next);
+    // The date survives the switch — someone toggling "until" to "from" means the same
+    // moment read the other way round, not a field they now have to retype.
+    onChange(next === "from"
+      ? { access_from: value || "", access_until: "" }
+      : { access_until: value || "", access_from: "" });
+  };
+
+  return (
+    <label className="block min-w-0">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-[10px] text-ink-4 font-mono-x uppercase tracking-[0.2em]">Access</span>
+        <div className="flex border border-ink/20" data-testid={`wave-access-mode-${index}`}>
+          {["until", "from"].map((m) => (
+            <button key={m} type="button" onClick={() => switchTo(m)}
+                    data-testid={`wave-access-${m}-${index}`}
+                    aria-pressed={mode === m}
+                    className={`px-2 py-0.5 font-mono-x uppercase tracking-[0.2em] text-[10px] ${
+                      mode === m ? "bg-ink text-page" : "text-ink-4 hover:text-ink"}`}>
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+      <DateTimePicker
+        value={value || ""}
+        placeholder="No limit"
+        onChange={(v) => onChange(mode === "from"
+          ? { access_from: v, access_until: "" }
+          : { access_until: v, access_from: "" })} />
+    </label>
+  );
+}
+
 function EventForm({ form, setForm, onSave, onClose }) {
   const setF = (k, v) => setForm({ ...form, [k]: v });
   const setWave = (i, k, v) => { const w = [...form.waves]; w[i] = { ...w[i], [k]: v }; setForm({...form, waves: w}); };
+  /* Several keys at once. The access toggle has to clear one end as it sets the other,
+     and two setWave calls off the same `form` would leave only the second. */
+  const setWaveFields = (i, patch) => {
+    const w = [...form.waves]; w[i] = { ...w[i], ...patch }; setForm({ ...form, waves: w });
+  };
+
+  /* Ends, Doors and each tier's sale end are guesses made from Starts, and they follow
+   * it until somebody edits them by hand. After that they are that person's answer and
+   * are left alone, even if Starts moves again — the alternative is a form that
+   * overwrites a deliberate 02:00 curfew the moment the date shifts by a day.
+   *
+   * Editing an existing event marks nothing as touched, but nothing is derived either:
+   * a saved event already has all three, so there is no blank for a guess to fill. */
+  const [touched, setTouched] = useState(() => new Set());
+  const touch = (path) => setTouched((t) => new Set(t).add(path));
+  const held = (path, value) => touched.has(path) || Boolean(value);
+
+  /* Changing when the night starts re-derives everything still following it, in ONE
+   * state update — three sequential setForm calls off the same `form` would each
+   * overwrite the last, and only the final field would survive. */
+  const setStartsAt = (v) => {
+    setForm((f) => {
+      const next = { ...f, starts_at: v };
+      if (!held("ends_at", f.ends_at)) next.ends_at = nextMorningAt6(v);
+      if (!held("doors_open_at", f.doors_open_at)) next.doors_open_at = doorsFrom(v);
+      next.waves = (f.waves || []).map((w, i) =>
+        held(`wave.${i}.ends_at`, null) ? w : { ...w, ends_at: dayBefore(v) || w.ends_at });
+      return next;
+    });
+  };
+
+  const startsInPast = isPast(form.starts_at);
+
+  /* A past date is allowed — an event may be entered after the fact, for the archive or
+   * to sell nothing at all. It is confirmed rather than refused, and only when it is
+   * about to become real: warning on every keystroke would train the editor to ignore
+   * the one that matters. */
+  const saveWithPastCheck = () => {
+    if (startsInPast &&
+        !window.confirm("This event starts in the past. It will show as already finished. Save anyway?")) return;
+    onSave();
+  };
   const descRef = useRef(null);
   return (
     <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4">
@@ -496,7 +591,7 @@ function EventForm({ form, setForm, onSave, onClose }) {
         <div className="shrink-0 flex flex-wrap gap-3 justify-between items-center hairline-b px-6 py-4">
           <div className="font-display text-2xl uppercase font-bold">{form.event_id ? "Edit" : "New"} Event</div>
           <div className="flex gap-2">
-            <button onClick={onSave} data-testid="save-event-btn" className="btn-accent">SAVE</button>
+            <button onClick={saveWithPastCheck} data-testid="save-event-btn" className="btn-accent">SAVE</button>
             <button onClick={onClose} data-testid="close-event-btn" className="btn-primary">CLOSE</button>
           </div>
         </div>
@@ -518,10 +613,19 @@ function EventForm({ form, setForm, onSave, onClose }) {
               crossing rows while the two-column grid put Doors beside Max per user,
               which has nothing to do with when the night runs. Stacks on a phone. */}
           <div className="col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Starts</div><DateTimePicker value={form.starts_at} onChange={(v) => setF("starts_at", v)} /></label>
-            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Ends</div><DateTimePicker value={form.ends_at} onChange={(v) => setF("ends_at", v)} /></label>
-            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Doors</div><DateTimePicker value={form.doors_open_at} onChange={(v) => setF("doors_open_at", v)} /></label>
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Starts</div><DateTimePicker value={form.starts_at} onChange={setStartsAt} /></label>
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Ends</div><DateTimePicker value={form.ends_at} onChange={(v) => { touch("ends_at"); setF("ends_at", v); }} /></label>
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Doors</div><DateTimePicker value={form.doors_open_at} onChange={(v) => { touch("doors_open_at"); setF("doors_open_at", v); }} /></label>
           </div>
+          {/* Said out loud as soon as the date is set, not held back until save — an
+              editor who meant to type 2027 should find out while they are still looking
+              at the field they mistyped. */}
+          {startsInPast && (
+            <div className="col-span-2 border border-brand/40 text-brand px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em]"
+                 data-testid="event-past-warning">
+              This event starts in the past — it will show as already finished.
+            </div>
+          )}
           {/* The two selling rules, on the line below. */}
           <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Max per user</div><input type="number" value={form.max_tickets_per_user} onChange={(e) => setF("max_tickets_per_user", Number(e.target.value))} className="input-x w-full" /></label>
@@ -539,16 +643,24 @@ function EventForm({ form, setForm, onSave, onClose }) {
         <div className="mt-4 space-y-4">
           {form.waves.map((w, i) => (
             <div key={w.wave_id || w._key || `new-${i}`} className="border border-ink/15 bg-ink/[0.02] p-4" data-testid={`wave-row-${i}`}>
+              {/* The id took the badge's place. The badge showed the early_bird/general/vip
+                  dropdown's value, and that dropdown is gone: it decided nothing a buyer
+                  could see, while the running order it did not control was the thing
+                  editors actually wanted to change. */}
               <div className="flex flex-wrap items-center gap-3 pb-3 hairline-b">
-                <span className={`shrink-0 px-2 py-1 border font-mono-x uppercase tracking-[0.2em] text-[10px] ${TIER_BADGE[w.tier] || TIER_BADGE.general}`}>
-                  {TIER_LABEL[w.tier] || w.tier}
-                </span>
-                <input placeholder="Tier name" value={w.name} onChange={(e) => setWave(i, "name", e.target.value)} className="input-x flex-1 min-w-[8rem] font-display uppercase font-bold" />
-                <select value={w.tier} onChange={(e) => setWave(i, "tier", e.target.value)} className="input-x shrink-0 w-auto">
-                  <option value="early_bird">Early Bird</option>
-                  <option value="general">General</option>
-                  <option value="vip">VIP</option>
-                </select>
+                <label className="shrink-0">
+                  <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier id</div>
+                  <input type="number" min="1" step="1" value={w.tier_id ?? ""}
+                         onChange={(e) => setWave(i, "tier_id", e.target.value === "" ? null : Number(e.target.value))}
+                         data-testid={`wave-tier-id-${i}`}
+                         className="input-x w-20 font-mono-x" />
+                </label>
+                <label className="flex-1 min-w-[8rem]">
+                  <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier name</div>
+                  <input placeholder="Tier name" value={w.name} onChange={(e) => setWave(i, "name", e.target.value)}
+                         data-testid={`wave-name-${i}`}
+                         className="input-x w-full font-display uppercase font-bold" />
+                </label>
               </div>
               {/* Two rows rather than one four-column flow: what the tier costs, then when
                   it is sellable and usable. In one grid the three dates wrapped wherever
@@ -562,13 +674,24 @@ function EventForm({ form, setForm, onSave, onClose }) {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <Field label="Sale starts"><DateTimePicker value={w.starts_at} onChange={(v) => setWave(i, "starts_at", v)} /></Field>
-                  <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => setWave(i, "ends_at", v)} /></Field>
-                  <Field label="Access until"><DateTimePicker value={w.access_until} onChange={(v) => setWave(i, "access_until", v)} /></Field>
+                  <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => { touch(`wave.${i}.ends_at`); setWave(i, "ends_at", v); }} /></Field>
+                  <AccessWindow wave={w} onChange={(patch) => setWaveFields(i, patch)} index={i} />
                 </div>
               </div>
             </div>
           ))}
-          <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_until: "" }]})} className="btn-primary">+ Add tier</button>
+          {/* Numbered one past the highest already there, so a new tier lands at the
+              bottom of the running order instead of tying with an existing one. Sale
+              ends the day before the event; with no date set yet it stays blank and
+              fills itself in when Starts is. */}
+          <button data-testid="add-tier" onClick={() => setForm({...form, waves: [...form.waves, {
+                    _key: `k-${Date.now()}-${Math.random()}`,
+                    tier_id: Math.max(0, ...form.waves.map((w) => Number(w.tier_id) || 0)) + 1,
+                    name: "NEW", price_ron: 100, capacity: 50,
+                    starts_at: new Date().toISOString(),
+                    ends_at: dayBefore(form.starts_at),
+                    access_until: "", access_from: "",
+                  }]})} className="btn-primary">+ Add tier</button>
         </div>
         <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Albums</div>
         <div className="mt-3">

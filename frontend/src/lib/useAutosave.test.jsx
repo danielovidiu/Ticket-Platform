@@ -222,8 +222,15 @@ describe("the interval is an interval, not a debounce", () => {
       act(() => result.current.bump());
       await flushTimers(10);
     }
-    await waitFor(() => expect(save).toHaveBeenCalled());
-    // And what landed is the newest value, not the one current when the timer armed.
+    // Written DURING the run, which is the property under test: a debounce that re-armed
+    // on every edit would still have nothing on the server at this point.
+    expect(save).toHaveBeenCalled();
+
+    // Then settle before asking what the server ended up holding. Waiting only for the
+    // first call raced the rest: the last edits are carried by a later interval, so the
+    // assertion below saw whichever value the FIRST save happened to catch — 7 on one
+    // machine, 10 on another. Dirty going false is the honest "nothing left to write".
+    await waitFor(() => expect(result.current.dirty).toBe(false), { timeout: 2000 });
     expect(save.mock.calls[save.mock.calls.length - 1][0]).toBe(value);
   });
 });

@@ -148,3 +148,60 @@ describe("the ordinary path is untouched", () => {
     expect(overlay).toHaveAttribute("aria-live", "assertive");
   });
 });
+
+/* The access window, and why the screen says which end of it was crossed.
+ *
+ * A tier can carry one boundary: `access_until` refuses a holder after a moment,
+ * `access_from` before one. Neither is a refusal on its own — the guest is standing
+ * there holding a ticket they paid for, so the screen states the situation and a person
+ * decides. Early and late send that person to different places, one to wait and one to
+ * plead, which is why the two are not collapsed into "outside the window".
+ */
+const at = (h, m) => new Date(2026, 8, 14, h, m, 0).toISOString();
+const LATE = {
+  valid: false, needs_override: true, edge: "late",
+  reason: "ACCESS EXPIRED", access_until: at(23, 30), wave_name: "EARLY BIRD",
+};
+const EARLY = {
+  valid: false, needs_override: true, edge: "early",
+  reason: "ACCESS NOT YET OPEN", access_from: at(22, 0), wave_name: "VIP",
+};
+
+describe("a ticket outside its tier's access window", () => {
+  test("a late arrival says so, and when the tier closed", () => {
+    setup(LATE);
+    expect(screen.getByText("TOO LATE")).toBeVisible();
+    expect(screen.getByText(/EARLY BIRD closed at 23:30/)).toBeVisible();
+  });
+
+  test("an early arrival says so, and when the tier opens", () => {
+    setup(EARLY);
+    expect(screen.getByText("TOO EARLY")).toBeVisible();
+    expect(screen.getByText(/VIP opens at 22:00/)).toBeVisible();
+  });
+
+  test("both offer the same two-way choice, with neither preselected", () => {
+    // The software will not decide this one. Walking away is not an option either —
+    // there is no NEXT TICKET here, or the guest would end up neither in nor recorded.
+    for (const verdict of [LATE, EARLY]) {
+      const { unmount } = render(<ScanResult result={verdict} onNext={vi.fn()} onDeny={vi.fn()} />);
+      expect(screen.getByTestId("override-admit")).toBeVisible();
+      expect(screen.getByTestId("override-reject")).toBeVisible();
+      expect(screen.queryByTestId("next-ticket")).toBeNull();
+      unmount();
+    }
+  });
+
+  test("it is red, the colour that means stop and look at this one", () => {
+    // Shares INVALID's red deliberately: at a door, in the dark, the colour has one
+    // job. The headline and the two buttons are what tell the two verdicts apart.
+    setup(LATE);
+    expect(screen.getByTestId("scan-result").className).toMatch(/bg-brand/);
+  });
+
+  test("a missing boundary does not render 'Invalid Date' at someone", () => {
+    setup({ valid: false, needs_override: true, edge: "late", reason: "ACCESS EXPIRED" });
+    expect(screen.getByText("TOO LATE")).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/Invalid Date/);
+  });
+});
