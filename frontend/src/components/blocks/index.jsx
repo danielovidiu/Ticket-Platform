@@ -51,6 +51,22 @@ function Container({ children, className = "" }) {
   return <div className={`w-full max-w-[1400px] mx-auto px-6 md:px-10 ${className}`}>{children}</div>;
 }
 
+/**
+ * The width a block holds its content at.
+ *
+ * `full` drops the 1400px cap so the block spans the viewport. The side GUTTERS stay
+ * either way — they are not spacing between blocks, they are what keeps text off the edge
+ * of a phone, and there is no horizontal spacer to put them back with.
+ *
+ * `narrow` is the reading measure some blocks use instead: prose, a contact form and the
+ * newsletter sign-up are all worse at 1400px than at 900, because a line of text that
+ * wide is one the eye loses its place in.
+ */
+function Frame({ full, narrow = false, className = "", children }) {
+  const measure = full ? "" : narrow ? "max-w-[900px]" : "max-w-[1400px]";
+  return <div className={`w-full mx-auto px-6 md:px-10 ${measure} ${className}`}>{children}</div>;
+}
+
 // ---------------- Blocks ----------------
 
 /**
@@ -232,7 +248,7 @@ function Hero({ props }) {
 }
 
 function RichText({ props }) {
-  return <section><Container className="max-w-[900px]">{renderRich(props.content)}</Container></section>;
+  return <section><Frame full={props.full_width} narrow>{renderRich(props.content)}</Frame></section>;
 }
 
 function ImageBlock({ props }) {
@@ -255,7 +271,7 @@ function GalleryGrid({ props }) {
   const [items, setItems] = useState([]);
   useEffect(() => { http.get("/gallery").then((r) => setItems(r.data.slice(0, props.limit || 6))).catch(() => {}); }, [props.limit]);
   return (
-    <section><Container>
+    <section><Frame full={props.full_width}>
       {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mb-8">{props.heading}</h2>}
       <div className="columns-1 md:columns-3 gap-4 space-y-4">
         {items.map((g) => (
@@ -264,7 +280,7 @@ function GalleryGrid({ props }) {
           </figure>
         ))}
       </div>
-    </Container></section>
+    </Frame></section>
   );
 }
 
@@ -280,13 +296,13 @@ function EventsGrid({ props }) {
   };
 
   return (
-    <section><Container>
+    <section><Frame full={props.full_width}>
       <div className="flex items-end justify-between mb-10">
         <div>
           {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
           {props.heading && <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
         </div>
-        <Link to="/events" className="btn-primary hidden md:inline">All events</Link>
+        <Link to="/events" className="btn-primary">All events</Link>
       </div>
       <div className={`grid grid-cols-1 ${cols} gap-6 items-stretch`}>
         {events.map((e) => {
@@ -329,7 +345,7 @@ function EventsGrid({ props }) {
           onIndexChange={(i) => setActive({ ...active, index: i })}
         />
       )}
-    </Container></section>
+    </Frame></section>
   );
 }
 
@@ -338,13 +354,13 @@ function ArtistsGrid({ props }) {
   useEffect(() => { http.get("/artists").then((r) => setArtists(r.data.slice(0, props.limit || 6))).catch(() => {}); }, [props.limit]);
   const cols = props.layout === "grid-2" ? "md:grid-cols-2" : props.layout === "grid-4" ? "md:grid-cols-4" : "md:grid-cols-3";
   return (
-    <section><Container>
+    <section><Frame full={props.full_width}>
       <div className="flex items-end justify-between mb-10">
         <div>
           {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
           {props.heading && <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
         </div>
-        <Link to="/artists" className="btn-primary hidden md:inline">All artists</Link>
+        <Link to="/artists" className="btn-primary">All artists</Link>
       </div>
       <div className={`grid grid-cols-2 ${cols} gap-4`}>
         {artists.map((a) => (
@@ -354,7 +370,7 @@ function ArtistsGrid({ props }) {
           </Link>
         ))}
       </div>
-    </Container></section>
+    </Frame></section>
   );
 }
 
@@ -366,8 +382,13 @@ function Marquee({ props }) {
   const items = events.length
     ? events.map((e) => (e.city ? `${e.title} · ${e.city}` : e.title))
     : (props.items || []).length ? props.items : ["NO UPCOMING EVENTS"];
+  // A ticker is edge-to-edge by nature and runs with NO gutters — the text sliding off
+  // the screen edge is the effect. So `full_width` defaults to true here, unlike every
+  // other block: unset means what it has always done, and turning it off is what holds
+  // the ticker inside the 1400px frame instead.
+  const bleed = props.full_width !== false;
   return (
-    <section className="hairline-b hairline overflow-hidden">
+    <section className={`hairline-b hairline overflow-hidden ${bleed ? "" : "max-w-[1400px] mx-auto"}`}>
       <div className="marquee">
         <div className="marquee-track font-mono-x uppercase tracking-[0.3em] text-2xl md:text-4xl">
           {[...items, ...items].map((m, i) => (
@@ -385,7 +406,7 @@ function Marquee({ props }) {
 function CTABanner({ props }) {
   const upper = casing(props);
   return (
-    <section><Container>
+    <section><Frame full={props.full_width}>
       <div className="grid md:grid-cols-2 gap-10 items-start">
         {props.image_url ? (
           <img src={mediaUrl(props.image_url)} alt={props.heading || ""}
@@ -409,7 +430,7 @@ function CTABanner({ props }) {
           )}
         </div>
       </div>
-    </Container></section>
+    </Frame></section>
   );
 }
 
@@ -423,7 +444,7 @@ function ContactFormBlock({ props }) {
     setBusy(false);
   };
   return (
-    <section><Container className="max-w-[900px]">
+    <section><Frame full={props.full_width} narrow>
       {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter">{props.heading}</h2>}
       <form onSubmit={submit} className="border border-ink/10 bg-[color:var(--surface,#0F0F0F)] p-6 md:p-8 space-y-4 mt-6">
         <input required placeholder="NAME" value={f.name} onChange={(e) => setF({...f, name: e.target.value})} className="input-x" />
@@ -431,7 +452,7 @@ function ContactFormBlock({ props }) {
         <textarea required rows={5} placeholder="MESSAGE" value={f.message} onChange={(e) => setF({...f, message: e.target.value})} className="input-x" />
         <button disabled={busy} className="btn-accent w-full">{busy ? "SENDING…" : "SEND"}</button>
       </form>
-    </Container></section>
+    </Frame></section>
   );
 }
 
@@ -452,7 +473,7 @@ function Newsletter({ props }) {
     setBusy(false);
   };
   return (
-    <section className="hairline"><Container className="max-w-[900px]">
+    <section className="hairline"><Frame full={props.full_width} narrow>
       {props.heading && <h2 className="font-display text-3xl md:text-4xl uppercase font-bold tracking-tighter">{props.heading}</h2>}
       {/* Rich text, like every other multi-line body field — this one rendered inline,
           so an author's line breaks were dropped in this block and kept in the next. */}
@@ -461,7 +482,7 @@ function Newsletter({ props }) {
         <input required type="email" placeholder="you@domain.com" value={email} onChange={(e) => setEmail(e.target.value)} className="input-x flex-1 min-w-[240px]" data-testid="newsletter-email" />
         <button disabled={busy} className="btn-accent" data-testid="newsletter-submit">{busy ? "…" : (props.cta_label || "Subscribe")}</button>
       </form>
-    </Container></section>
+    </Frame></section>
   );
 }
 
@@ -500,7 +521,7 @@ function VideoEmbed({ props, preview }) {
   // from /admin/uploads plays and an arbitrary pasted host is refused by the browser.
   if (props.file_url) {
     return (
-      <section><Container>
+      <section><Frame full={props.full_width}>
         <div className={`${aspect} border border-ink/10 bg-scrim overflow-hidden`}>
           <video
             src={mediaUrl(props.file_url)}
@@ -516,7 +537,7 @@ function VideoEmbed({ props, preview }) {
           />
         </div>
         {caption}
-      </Container></section>
+      </Frame></section>
     );
   }
 
@@ -534,7 +555,7 @@ function VideoEmbed({ props, preview }) {
     // the person who can fix it is looking. Without this the failure was an empty box.
     if (!preview) return null;
     return (
-      <section><Container>
+      <section><Frame full={props.full_width}>
         <div className="border border-brand p-4 font-mono-x text-xs uppercase tracking-[0.2em] text-brand"
              data-testid="video-unsupported">
           Unsupported embed URL — YouTube, Vimeo, SoundCloud and Bandcamp only
@@ -543,7 +564,7 @@ function VideoEmbed({ props, preview }) {
           </div>
           <div className="mt-2 normal-case tracking-normal text-ink-3 break-all">{props.url}</div>
         </div>
-      </Container></section>
+      </Frame></section>
     );
   }
 
@@ -559,7 +580,7 @@ function VideoEmbed({ props, preview }) {
   const frameStyle = isAudio ? { height: audioHeight(embed, props) } : undefined;
 
   return (
-    <section><Container>
+    <section><Frame full={props.full_width}>
       <div className={`${frameClass} border border-ink/10`} style={frameStyle}>
         {/* `sandbox` is the half a CSP cannot do: frame-src says which origins may be
             framed, this says what the frame may then do. allow-same-origin is required
@@ -577,7 +598,7 @@ function VideoEmbed({ props, preview }) {
         />
       </div>
       {caption}
-    </Container></section>
+    </Frame></section>
   );
 }
 
@@ -594,7 +615,7 @@ function CustomHTML({ props }) {
   // defaults, so they read as the protection while doing none of the work, which is
   // worse than not being there.
   const safe = DOMPurify.sanitize(props.html || "", { USE_PROFILES: { html: true } });
-  return <section><Container><div dangerouslySetInnerHTML={{ __html: safe }} /></Container></section>;
+  return <section><Frame full={props.full_width}><div dangerouslySetInnerHTML={{ __html: safe }} /></Frame></section>;
 }
 
 function Spacer({ props }) { return <div style={{ height: props.height || "4rem" }} />; }
@@ -602,7 +623,7 @@ function Spacer({ props }) { return <div style={{ height: props.height || "4rem"
 function Split({ props }) {
   const reverse = props.direction === "image-right";
   return (
-    <section><Container>
+    <section><Frame full={props.full_width}>
       <div className={`grid md:grid-cols-2 gap-10 items-center ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}>
         <div className={`${aspectClass(props.aspect, "aspect-square")} overflow-hidden border border-ink/10`}>
           {props.image_url ? <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-ink-5 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>}
@@ -614,7 +635,7 @@ function Split({ props }) {
           {props.cta_label && <Link to={props.cta_href || "#"} className="mt-6 inline-block btn-primary">{props.cta_label}</Link>}
         </div>
       </div>
-    </Container></section>
+    </Frame></section>
   );
 }
 
