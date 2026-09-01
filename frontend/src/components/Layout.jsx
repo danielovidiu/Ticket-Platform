@@ -159,12 +159,20 @@ const Header = ({ cmsNav, navFailed }) => {
           The bar already scrolls horizontally rather than wrapping, so a long nav degrades
           by scrolling instead of by disappearing.
 
-          One row, no wrapping. The account actions live behind a dropdown now, so the
+          It takes a SECOND ROW to do that between md and lg. Seven links, the wordmark
+          and two buttons need about 880px in one line, and a tablet has 768 — so the
+          first attempt at this left the nav scrolling inside 271px with four links
+          (Gallery, Events, Shop, Contact) off the end, behind a scrollbar that is
+          deliberately invisible. That is fewer reachable links than the hamburger it
+          replaced, which is the opposite of the point. The nav takes the full width on
+          its own line instead, and rejoins the row at lg where it fits.
+
+          One row above lg. The account actions live behind a dropdown now, so the
           right-hand group is two controls at every role and in both auth states — the
           header can no longer change height or re-wrap when somebody signs in. The nav
           itself still grows with each CMS page, so it scrolls horizontally rather than
           pushing the row open. */}
-      <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-5 flex items-center justify-between gap-x-6">
+      <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <Link to="/" data-testid="logo-link" className="font-display text-xl md:text-2xl font-bold tracking-tighter uppercase shrink-0">
           SUPERSANITY
         </Link>
@@ -172,7 +180,7 @@ const Header = ({ cmsNav, navFailed }) => {
             should be depends on how many items it holds and how long their labels are,
             both of which an editor changes. 11px is the value it shipped with, so a
             theme saved before this existed renders exactly as it did. */}
-        <nav className="hidden md:flex items-center gap-x-5 min-w-0 overflow-x-auto no-scrollbar font-mono-x uppercase tracking-[0.18em] text-[length:var(--nav-size,11px)]">
+        <nav className="hidden md:flex order-last lg:order-none w-full lg:w-auto items-center gap-x-5 min-w-0 overflow-x-auto no-scrollbar font-mono-x uppercase tracking-[0.18em] text-[length:var(--nav-size,11px)]">
           {nav.map((n) => (
             <NavLink key={n.route} to={n.route} end={n.route === "/"} data-testid={`nav-${n.label.toLowerCase()}`}
               className={({ isActive }) => `whitespace-nowrap ${isActive ? "text-ink" : "text-ink-3 hover:text-ink transition-colors"}`}>
