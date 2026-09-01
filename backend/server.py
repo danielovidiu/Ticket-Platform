@@ -5047,7 +5047,11 @@ async def security_headers(request: Request, call_next):
 # 6: custom_fonts gained its unique (family, weight, style) index — without the bump an
 #    already-initialised database never runs init_indexes again and the upload route's
 #    replace-on-conflict guarantee would rest on nothing.
-SCHEMA_VERSION = 8
+# 9: pages carry `in_footer`, and the footer reads its links from them instead of having
+#    three hrefs typed into Layout.jsx. Without the bump migrate_footer_pages never runs
+#    on an already-initialised database, and the first deploy renders an EMPTY Legal
+#    column — the pages are all still there, nothing marks them as belonging in it.
+SCHEMA_VERSION = 9
 
 
 async def init_app():
@@ -5192,6 +5196,11 @@ async def init_indexes():
         await migrate_gallery_ordering()
     except Exception:
         logger.exception("migrate_gallery_ordering failed")
+
+    try:
+        await migrate_footer_pages()
+    except Exception:
+        logger.exception("migrate_footer_pages failed")
 
     try:
         await migrate_user_names()
@@ -5350,6 +5359,36 @@ async def migrate_gallery_albums():
         )
 
     logger.info("Gallery migrated into %d album(s): %d item(s) filed", len(created), len(legacy))
+
+
+async def migrate_footer_pages():
+    """Give the footer back the links it used to have hardcoded.
+
+    The three legal pages were seeded with `in_nav=False` and a comment saying they live
+    in the footer — but the footer typed their hrefs into the component instead, so the
+    flag was documentation rather than data. Without this, the first deploy of the
+    CMS-driven footer would render an empty Legal column: the pages exist, nothing marks
+    them as belonging there.
+
+    Only touches rows that have no `in_footer` at all, so an editor who has already
+    decided is never overruled. Keyed on the slugs the seeder creates rather than on
+    "not in the nav", because a page an editor deliberately hid from the nav is not
+    thereby a legal page.
+    """
+    seeded = ("terms", "privacy", "cookie-policy")
+    r = await db.cms_pages.update_many(
+        {"slug": {"$in": list(seeded)}, "in_footer": {"$exists": False}},
+        {"$set": {"in_footer": True, "footer_order": 100}},
+    )
+    # Everything else defaults to "not in the footer", stated rather than left absent so
+    # the field means the same thing on every row.
+    await db.cms_pages.update_many(
+        {"in_footer": {"$exists": False}},
+        {"$set": {"in_footer": False, "footer_order": 100}},
+    )
+    if r.modified_count:
+        logger.info("Marked %d page(s) as footer links", r.modified_count)
+    return r.modified_count
 
 
 async def migrate_gallery_ordering():

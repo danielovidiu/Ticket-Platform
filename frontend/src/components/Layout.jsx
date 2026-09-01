@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth, startLogin } from "../auth";
 import { http } from "../api";
+import { SOCIAL_PLATFORMS } from "../lib/social";
 import { Menu, X, ShoppingBag, ChevronDown, User } from "lucide-react";
 import { useCart } from "../lib/cart";
 import { loadNav, onNavChanged, readCachedNav } from "../lib/nav";
@@ -132,7 +133,7 @@ const AccountMenu = ({ user, logout }) => {
   );
 };
 
-const Header = ({ cmsNav, navFailed }) => {
+const Header = ({ cmsNav, navFailed, site }) => {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
   // Warm the chunks behind the staff links this role can see. Admin, CMS and Scan are
@@ -174,7 +175,7 @@ const Header = ({ cmsNav, navFailed }) => {
           pushing the row open. */}
       <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <Link to="/" data-testid="logo-link" className="font-display text-xl md:text-2xl font-bold tracking-tighter uppercase shrink-0">
-          SUPERSANITY
+          {site?.header_wordmark ?? "SUPERSANITY"}
         </Link>
         {/* Size comes from the theme (--nav-size), not a fixed class: how big the menu
             should be depends on how many items it holds and how long their labels are,
@@ -220,33 +221,74 @@ const Header = ({ cmsNav, navFailed }) => {
   );
 };
 
-const Footer = () => (
-  <footer className="hairline mt-24">
-    {/* Two columns before four: at md, quarter-width columns are narrower than
-        the wordmark itself, which then spills into its neighbour. */}
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-14 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
-      <div>
-        <div className="font-display text-2xl uppercase tracking-tighter">SUPERSANITY</div>
-        <p className="mt-4 text-ink-3 text-sm max-w-xs">A Bucharest music &amp; performance collective. Programming, artists, box office — one door.</p>
+/**
+ * The footer's words come from the CMS; its links are CMS pages.
+ *
+ * All of this used to be typed in here — a wordmark, a sentence, three hrefs, an address
+ * and a copyright line. The links were the worst of it: they pointed AT CMS pages by
+ * hardcoded path, so renaming or unpublishing one left the footer aimed at a 404 with
+ * nothing to say so. Pages are chosen with `in_footer` now, and a page in the footer is
+ * kept out of the top nav — the footer is where the pages that are not part of the
+ * journey go.
+ *
+ * `site` is null until the first response. The footer renders its frame either way
+ * rather than collapsing, because it sits at the bottom of every page and a layout that
+ * changes height after load pushes whatever the reader was looking at.
+ */
+const Footer = ({ site }) => {
+  const s = site || {};
+  const pages = s.pages || [];
+  const social = Object.entries(s.social || {}).filter(([, v]) => v);
+  // Ordered by the shared vocabulary, not by the key order of the stored object — the
+  // same rule the artist page follows.
+  const socialLinks = SOCIAL_PLATFORMS
+    .map((p) => social.find(([k]) => k === p.key) && [p.key, s.social[p.key], p.label])
+    .filter(Boolean);
+
+  return (
+    <footer className="hairline mt-24">
+      {/* Two columns before four: at md, quarter-width columns are narrower than
+          the wordmark itself, which then spills into its neighbour. */}
+      <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-14 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
+        <div>
+          <div className="font-display text-2xl uppercase tracking-tighter">{s.wordmark || ""}</div>
+          {s.description && <p className="mt-4 text-ink-3 text-sm max-w-xs">{s.description}</p>}
+          {socialLinks.length > 0 && (
+            <div className="mt-5 flex flex-wrap gap-x-4 gap-y-2" data-testid="footer-social">
+              {socialLinks.map(([key, href, label]) => (
+                <a key={key} href={href} target="_blank" rel="noreferrer"
+                   className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-3 hover:text-ink">
+                  {label}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+        {pages.length > 0 && (
+          <div data-testid="footer-legal">
+            <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-4">{s.legal_heading}</div>
+            <ul className="space-y-2 text-sm text-ink-2">
+              {pages.map((p) => (
+                <li key={p.slug}><Link to={`/${p.slug}`} className="hover:text-ink">{p.label}</Link></li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {s.contact_email && (
+          <div>
+            <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-4">{s.contact_heading}</div>
+            {/* An address has no spaces to break at, so it needs an explicit rule
+                to wrap instead of running past its column. */}
+            <p className="text-ink-2 text-sm break-words">{s.contact_email}</p>
+          </div>
+        )}
+        {/* The YEAR stays computed. A hardcoded year is a bug that surfaces once, in
+            January, on every page at the same time. */}
+        <div className="font-mono-x text-xs text-ink-4">© {new Date().getFullYear()} {s.copyright_name || ""}</div>
       </div>
-      <div>
-        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-4">Legal</div>
-        <ul className="space-y-2 text-sm text-ink-2">
-          <li><Link to="/terms" className="hover:text-ink">Terms &amp; Conditions</Link></li>
-          <li><Link to="/privacy" className="hover:text-ink">Privacy Policy</Link></li>
-          <li><Link to="/cookie-policy" className="hover:text-ink">Cookie Policy</Link></li>
-        </ul>
-      </div>
-      <div>
-        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-4">Contact</div>
-        {/* An address has no spaces to break at, so it needs an explicit rule
-            to wrap instead of running past its column. */}
-        <p className="text-ink-2 text-sm break-words">bookings@supersanity.collective</p>
-      </div>
-      <div className="font-mono-x text-xs text-ink-4">© {new Date().getFullYear()} Supersanity</div>
-    </div>
-  </footer>
-);
+    </footer>
+  );
+};
 
 export default function Layout({ children }) {
   // Seeded from the last nav this browser saw, read synchronously so a returning visitor
@@ -254,6 +296,12 @@ export default function Layout({ children }) {
   // sections and the authored pages appear a request later, which reads as the site
   // loading in two stages.
   const [cmsNav, setCmsNav] = useState(readCachedNav);
+  // The site's own words: both wordmarks and everything the footer says. One request for
+  // the whole layout rather than one per component that needs a word out of it.
+  const [site, setSite] = useState(null);
+  useEffect(() => {
+    http.get("/cms/site").then((r) => setSite(r.data)).catch(() => {});
+  }, []);
   // Only true once a request has actually failed, which is what lets the header tell
   // "not yet" apart from "not coming" — and show the offline nav for the second only.
   const [navFailed, setNavFailed] = useState(false);
@@ -275,9 +323,9 @@ export default function Layout({ children }) {
   return (
     <div className="min-h-screen flex flex-col">
       <div className="grain-overlay" />
-      <Header cmsNav={cmsNav} navFailed={navFailed} />
+      <Header cmsNav={cmsNav} navFailed={navFailed} site={site} />
       <main className="flex-1 min-h-0">{children}</main>
-      <Footer />
+      <Footer site={site} />
     </div>
   );
 }
