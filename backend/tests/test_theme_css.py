@@ -113,3 +113,49 @@ class TestFreshness:
             assert "--accent: #ABCDEF;" in r.text
         finally:
             _published(accent=before["accent"])
+
+
+class TestTheNavSize:
+    """The header nav's type size is a theme value, not a fixed class.
+
+    How big the menu should be depends on how many items it holds and how long their
+    labels are — both of which an editor changes and neither of which is knowable when
+    the class is written. The value lands in a stylesheet every visitor loads, so the
+    only thing that really matters here is that it cannot be set to something that
+    breaks the header the CMS is reached through.
+    """
+
+    @staticmethod
+    def _set(value):
+        db.cms_theme.update_one({"doc_id": "theme_current"},
+                                {"$set": {"published.nav_size": value}})
+
+    @staticmethod
+    def _unset():
+        db.cms_theme.update_one({"doc_id": "theme_current"},
+                                {"$unset": {"published.nav_size": ""}})
+
+    def test_it_is_emitted_as_a_variable(self):
+        self._set(18)
+        assert "--nav-size: 18px;" in _css().text
+
+    def test_an_absurd_value_is_clamped_not_honoured(self):
+        """A nav at 200px pushes the header off the page, and the CMS that would undo it
+        is reached through that header."""
+        self._set(400)
+        assert "--nav-size: 32px;" in _css().text
+        self._set(1)
+        assert "--nav-size: 8px;" in _css().text
+
+    def test_junk_is_dropped_rather_than_written_into_the_stylesheet(self):
+        for bad in ("18px; } body { display:none", None, "abc", {"n": 1}):
+            self._set(bad)
+            css = _css().text
+            assert "display:none" not in css
+            if bad is not None:
+                assert "--nav-size: abc" not in css
+
+    def test_a_theme_saved_before_this_existed_emits_nothing(self):
+        """The class carries an 11px fallback, so an untouched theme renders as it did."""
+        self._unset()
+        assert "--nav-size" not in _css().text

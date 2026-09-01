@@ -23,12 +23,28 @@
  */
 
 // Every host this module can EMIT. Not the hosts it accepts as input.
-export const EMBED_HOSTS = ["www.youtube.com", "player.vimeo.com"];
+export const EMBED_HOSTS = [
+  "www.youtube.com", "player.vimeo.com", "w.soundcloud.com", "bandcamp.com",
+];
+
+/** Providers that play sound, not video. They are a fixed-height strip rather than a
+ *  rectangle, so the block sizes them by height instead of by aspect ratio. */
+export const AUDIO_PROVIDERS = new Set(["soundcloud", "bandcamp"]);
 
 const YOUTUBE_INPUT_HOSTS = new Set([
   "youtube.com", "m.youtube.com", "youtube-nocookie.com", "youtu.be",
 ]);
 const VIMEO_INPUT_HOSTS = new Set(["vimeo.com", "player.vimeo.com"]);
+const SOUNDCLOUD_INPUT_HOSTS = new Set([
+  "soundcloud.com", "m.soundcloud.com", "on.soundcloud.com", "w.soundcloud.com",
+]);
+
+// A SoundCloud path segment: what appears in soundcloud.com/<artist>/<track>. Anything
+// with a slash, a dot or an escape in it is not one, which is the point — these segments
+// are what gets rebuilt into the `url` parameter below.
+const SOUNDCLOUD_SEGMENT = /^[A-Za-z0-9_-]{1,80}$/;
+// Bandcamp's embed URL names its content numerically: EmbeddedPlayer/album=123/...
+const BANDCAMP_REF = /^(album|track)=(\d{1,20})$/;
 
 const YOUTUBE_ID = /^[A-Za-z0-9_-]{6,20}$/;
 const VIMEO_ID = /^\d+$/;
@@ -108,6 +124,51 @@ export function resolveEmbed(raw) {
     const hash = parts[at + 1];
     const query = hash && VIMEO_HASH.test(hash) ? `?h=${hash}` : "";
     return { src: `https://player.vimeo.com/video/${id}${query}`, provider: "vimeo" };
+  }
+
+  if (SOUNDCLOUD_INPUT_HOSTS.has(host)) {
+    // The player takes the public track/playlist page as a query parameter. That is the
+    // one place in this module where author input reaches the emitted string, so it is
+    // NOT passed through: the path is validated segment by segment and a canonical
+    // soundcloud.com URL is rebuilt from the parts that survived. The frame host stays
+    // w.soundcloud.com either way, so even a malformed parameter cannot change what is
+    // framed — only what SoundCloud shows inside it.
+    let path = parts;
+    if (host === "w.soundcloud.com") {
+      // Already an embed URL: take the url= parameter and re-validate it as input.
+      const inner = url.searchParams.get("url");
+      if (!inner) return null;
+      let innerUrl;
+      try { innerUrl = new URL(inner); } catch { return null; }
+      if (innerUrl.hostname.toLowerCase().replace(/^www\./, "") !== "soundcloud.com") return null;
+      path = segments(innerUrl.pathname);
+    }
+    // artist/track, or artist/sets/playlist. One segment is a bare profile, which the
+    // player renders as an empty box, so it is refused rather than framed.
+    if (path.length < 2 || path.length > 3) return null;
+    if (!path.every((seg) => SOUNDCLOUD_SEGMENT.test(seg))) return null;
+
+    const target = `https://soundcloud.com/${path.join("/")}`;
+    const src = new URL("https://w.soundcloud.com/player/");
+    src.searchParams.set("url", target);
+    src.searchParams.set("visual", "false");
+    src.searchParams.set("show_comments", "false");
+    return { src: src.toString(), provider: "soundcloud" };
+  }
+
+  if (host === "bandcamp.com" || host.endsWith(".bandcamp.com")) {
+    // Bandcamp's public album URL does not carry the numeric id its player needs, and
+    // deriving one would mean fetching the page server-side. So the input is the URL from
+    // Bandcamp's own Share/Embed dialog, and only its album=/track= reference is kept.
+    if (parts[0] !== "EmbeddedPlayer") return null;
+    const ref = parts.slice(1).map((seg) => seg.match(BANDCAMP_REF)).find(Boolean);
+    if (!ref) return null;
+    const [, kind, id] = ref;
+    return {
+      src: `https://bandcamp.com/EmbeddedPlayer/${kind}=${id}/size=large/bgcol=333333/`
+         + "linkcol=ffffff/tracklist=false/transparent=true/",
+      provider: "bandcamp",
+    };
   }
 
   return null;

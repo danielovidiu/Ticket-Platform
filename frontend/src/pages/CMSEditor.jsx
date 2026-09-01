@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { http } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
-import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home } from "lucide-react";
-import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize } from "../components/blocks";
+import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home, CalendarRange } from "lucide-react";
+import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize, HERO_HEIGHT_LIMITS, heroHeight } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
 import { THEME_PRESETS, presetIdFor, themeChoicePatch } from "../lib/themePresets";
 import { failingPairs, AA_TEXT } from "../lib/contrast";
@@ -718,6 +718,7 @@ export default function CMSEditor() {
             <button onClick={() => setRightTab("props")} className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="props"?"bg-ink text-page":""}`}><FileText size={12} className="inline mr-1" /> Props</button>
             <button onClick={() => setRightTab("theme")} className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="theme"?"bg-ink text-page":""}`}><Palette size={12} className="inline mr-1" /> Theme</button>
             <button onClick={() => setRightTab("versions")} className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="versions"?"bg-ink text-page":""}`}><History size={12} className="inline mr-1" /> Versions</button>
+            <button onClick={() => setRightTab("site")} data-testid="cms-tab-site" className={`flex-1 py-2 text-[11px] uppercase tracking-[0.2em] font-mono-x ${rightTab==="site"?"bg-ink text-page":""}`}><CalendarRange size={12} className="inline mr-1" /> Site</button>
           </div>
 
           <div className="p-4">
@@ -733,6 +734,7 @@ export default function CMSEditor() {
             {rightTab === "versions" && page && (
               <VersionList page={page} onRevert={revert} />
             )}
+            {rightTab === "site" && <EventsSettingsEditor />}
           </div>
         </aside>
       </div>
@@ -833,6 +835,80 @@ function ListField({ value, onCommit }) {
   );
 }
 
+const EVENT_TAB_LABELS = { all: "All", upcoming: "Upcoming", past: "Past" };
+
+/**
+ * Which tabs the /events page offers, and which one it opens on.
+ *
+ * Lives in the CMS rather than in the admin because it is a content decision — what
+ * slices of the programme a visitor is offered — not an operational one. /events is a
+ * React route with no blocks to edit, so this panel is the only place it can be authored.
+ *
+ * Saves immediately rather than through the draft/publish cycle the pages and theme use:
+ * there is no preview of a tab bar to review, and a two-step publish for two fields
+ * reads as ceremony.
+ */
+function EventsSettingsEditor() {
+  const [state, setState] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    http.get("/admin/cms/events-settings").then((r) => setState(r.data)).catch(() => {});
+  }, []);
+
+  if (!state) return <div className="text-[11px] text-ink-4 font-mono-x uppercase tracking-[0.2em]">Loading…</div>;
+
+  const save = async (next) => {
+    setBusy(true);
+    try {
+      const { data } = await http.put("/admin/cms/events-settings", {
+        tabs: next.tabs, default_tab: next.default_tab,
+      });
+      setState({ ...data, available_tabs: state.available_tabs });
+      toast.success("Events settings saved");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed");
+    } finally { setBusy(false); }
+  };
+
+  const toggle = (t) => {
+    const tabs = state.tabs.includes(t) ? state.tabs.filter((x) => x !== t) : [...state.tabs, t];
+    if (tabs.length === 0) { toast.error("Keep at least one tab"); return; }
+    // Follow the default along rather than leaving it pointing at a tab nobody can reach.
+    const default_tab = tabs.includes(state.default_tab) ? state.default_tab : tabs[0];
+    save({ tabs, default_tab });
+  };
+
+  const ordered = (state.available_tabs || ["all", "upcoming", "past"]);
+
+  return (
+    <div data-testid="events-settings">
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">Events page tabs</div>
+      <div className="mt-3 space-y-2">
+        {ordered.map((t) => (
+          <label key={t} className="flex items-center gap-2 text-xs cursor-pointer">
+            <input type="checkbox" checked={state.tabs.includes(t)} disabled={busy}
+                   onChange={() => toggle(t)} data-testid={`events-tab-${t}`} />
+            <span className="uppercase tracking-[0.15em] font-mono-x">{EVENT_TAB_LABELS[t] || t}</span>
+          </label>
+        ))}
+      </div>
+
+      <div className="mt-5 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">Opens on</div>
+      <select value={state.default_tab} disabled={busy}
+              onChange={(e) => save({ tabs: state.tabs, default_tab: e.target.value })}
+              className="input-x w-full mt-2 !py-2 !text-sm" data-testid="events-default-tab">
+        {state.tabs.map((t) => <option key={t} value={t}>{EVENT_TAB_LABELS[t] || t}</option>)}
+      </select>
+
+      <div className="mt-4 text-[10px] text-ink-4 leading-relaxed">
+        One tab on its own hides the bar and applies that filter silently — there is
+        nothing to choose between.
+      </div>
+    </div>
+  );
+}
+
 const FIELDS = {
   hero: [
     { k: "eyebrow", label: "Eyebrow" },
@@ -852,7 +928,9 @@ const FIELDS = {
     { k: "second_cta_label", label: "Secondary CTA label" },
     { k: "second_cta_href", label: "Secondary CTA link" },
     { k: "align", label: "Align", type: "select", options: ["left", "center", "right"] },
-    { k: "height", label: "Height", type: "select", options: ["short", "medium", "tall"] },
+    // Replaces a short/medium/tall select. Those were 50/70/85vh, and `heroHeight`
+    // still resolves them, so a hero published under a name keeps its exact height.
+    { k: "height_vh", label: "Height (% of screen)", type: "size", unit: "vh" },
   ],
   rich_text: [{ k: "content", label: "Content (markdown-ish)", type: "textarea", rows: 12, format: true }],
   image: [
@@ -900,14 +978,33 @@ const FIELDS = {
     { k: "cta_label", label: "Button label" },
   ],
   video: [
-    { k: "url", label: "YouTube / Vimeo URL" },
+    { k: "url", label: "YouTube / Vimeo / SoundCloud / Bandcamp URL" },
     { k: "file_url", label: "Or upload a video file", type: "video" },
     { k: "autoplay", label: "Autoplay (always muted — browsers require it)", type: "checkbox" },
     { k: "loop", label: "Loop", type: "checkbox" },
     { k: "muted", label: "Start muted", type: "checkbox" },
     { k: "controls", label: "Show player controls (uploaded files)", type: "checkbox" },
-    { k: "aspect", label: "Aspect ratio", type: "select", options: ["16:9", "21:9", "4:3", "1:1", "3:4", "16:10", "3:2"] },
+    { k: "aspect", label: "Aspect ratio", type: "select", options: ["16:9", "21:9", "4:3", "1:1", "3:4", "16:10", "3:2"],
+      // SoundCloud and Bandcamp render as a fixed-height player strip and ignore this.
+      // Hidden rather than left visible: a control that looks editable and changes
+      // nothing is the same bug the hero's overlay boolean had.
+      when: (v) => !/soundcloud\.com|bandcamp\.com/i.test(v.url || "") },
     { k: "caption", label: "Caption" },
+  ],
+  image_band: [
+    { k: "image_url", label: "Background image", type: "image" },
+    { k: "overlay_color", label: "Overlay colour", type: "color", fallback: "#050505" },
+    { k: "overlay_opacity", label: "Overlay opacity", type: "range", min: 0, max: 100, fallback: 50 },
+    { k: "eyebrow", label: "Eyebrow" },
+    { k: "heading", label: "Heading", type: "textarea" },
+    { k: "body", label: "Body", type: "textarea", format: true },
+    { k: "cta_label", label: "Button label" },
+    { k: "cta_href", label: "Button link" },
+    { k: "cta_style", label: "Button style", type: "select", options: ["outline", "accent"], fallback: "outline" },
+    { k: "text_case", label: "Text case", type: "select", options: ["as-typed", "uppercase"], fallback: "as-typed" },
+    { k: "align", label: "Align", type: "select", options: ["left", "center", "right"] },
+    { k: "height", label: "Height", type: "select", options: ["short", "medium", "tall"], fallback: "medium" },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox", fallback: true },
   ],
   custom_html: [{ k: "html", label: "HTML", type: "textarea", rows: 10 }],
   spacer: [{ k: "height", label: "Height (e.g. 4rem, 120px)" }],
@@ -950,9 +1047,7 @@ function FormattedTextareaField({ f, value, onCommit, testId }) {
  * The placeholder shows what the block renders at TODAY when nothing has been set, which
  * for a hero saved before this existed is its old named step rather than a guess.
  */
-function SizeField({ value, breakpoint, block, onCommit, testId }) {
-  const limits = HERO_SIZE_LIMITS[breakpoint];
-  const current = heroHeadingSize(block)[breakpoint];
+function SizeField({ value, limits, current, unit = "px", onCommit, testId }) {
   const isSet = value !== undefined && value !== null && value !== "";
   const { local, onChange, flush } = useDebouncedField(isSet ? String(value) : "", (text) => {
     const trimmed = text.trim();
@@ -978,7 +1073,7 @@ function SizeField({ value, breakpoint, block, onCommit, testId }) {
           data-testid={`${testId}-number`}
           className="input-x !py-1 !px-2 !text-xs w-14 text-right font-mono-x"
         />
-        <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">px</span>
+        <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{unit}</span>
       </div>
     </div>
   );
@@ -1043,8 +1138,12 @@ function PropsEditor({ block, onChange }) {
                 <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{v[f.k] ?? f.fallback ?? "#050505"}</span>
               </div>
             ) : f.type === "size" ? (
-              <SizeField value={v[f.k]} breakpoint={f.breakpoint} block={v}
-                         onCommit={commitField(f.k)} testId={testId} />
+              <SizeField
+                value={v[f.k]} testId={testId} onCommit={commitField(f.k)}
+                unit={f.unit || "px"}
+                limits={f.breakpoint ? HERO_SIZE_LIMITS[f.breakpoint] : HERO_HEIGHT_LIMITS}
+                current={f.breakpoint ? heroHeadingSize(v)[f.breakpoint] : heroHeight(v)}
+              />
             ) : f.type === "range" ? (
               <div className="flex items-center gap-3">
                 <input type="range" min={f.min ?? 0} max={f.max ?? 100} value={v[f.k] ?? f.fallback ?? 0}
@@ -1146,6 +1245,17 @@ export function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsCh
         <FontPicker key={k} label={label} value={theme.fonts?.[k] || ""} custom={customFonts}
                     testId={`font-${k}`} onChange={(v) => setFont(k, v)} />
       ))}
+
+      <label className="block">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">
+          Menu text size: {theme.nav_size ?? 11}px
+        </div>
+        <input type="range" min="8" max="32" value={theme.nav_size ?? 11} data-testid="theme-nav-size"
+               onChange={(e) => onChange({ nav_size: Number(e.target.value) })} className="w-full" />
+        <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
+          The header nav. The phone menu follows it up but never below its own size.
+        </div>
+      </label>
 
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Your fonts</div>
       <FontManager fonts={customFonts} onChanged={onFontsChanged} />

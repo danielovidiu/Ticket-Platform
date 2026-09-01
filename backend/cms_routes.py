@@ -12,7 +12,7 @@ import uuid
 import hashlib
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from models_base import ApiModel, LONG_TEXT, MAX_JSON_DOC_BYTES
 
 import storage
@@ -218,6 +218,16 @@ async def ensure_core_nav_items(db):
     return created
 
 
+class EventsSettingsIn(ApiModel):
+    """Which tabs the Events page offers, and which one it opens on.
+
+    A closed vocabulary rather than free strings: these map to a tri-state query on
+    /events, not to a taxonomy, so a value outside the set has nothing to mean.
+    """
+    tabs: List[str] = Field(default_factory=list, max_length=8)
+    default_tab: str = "all"
+
+
 def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_editor):
     """Attach all CMS endpoints to the provided api router."""
 
@@ -383,6 +393,15 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             decls.append(f"  --section-y: {_css_value(s['sectionY'])};")
         if s.get("containerX"):
             decls.append(f"  --container-x: {_css_value(s['containerX'])};")
+        # Clamped, not trusted: this lands in a stylesheet every visitor loads, and a
+        # nav at 200px would push the header off the page with no way back except the
+        # CMS the header is needed to reach.
+        nav_size = (theme or {}).get("nav_size")
+        if nav_size is not None:
+            try:
+                decls.append(f"  --nav-size: {max(8, min(32, int(nav_size)))}px;")
+            except (TypeError, ValueError):
+                pass
         if (theme or {}).get("radius") is not None:
             decls.append(f"  --radius: {int((theme or {}).get('radius') or 0)}px;")
         decls.append(
@@ -451,6 +470,54 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         instead of following whatever order Mongo happens to return.
         """
         return [_font_public(f) for f in await _fonts_sorted()]
+
+    # ---------- Events page settings ----------
+    #
+    # /events is a React route, not a CMS page, so its tabs have nowhere to be authored.
+    # They live here rather than in the theme because they are content decisions, not
+    # appearance: which slices of the programme a visitor is offered, and which one they
+    # land on. Read per request for the same reason the VAT rate is — a change has to take
+    # effect on the next page load, not the next deploy.
+
+    EVENT_TABS = ("all", "upcoming", "past")
+    EVENTS_DEFAULTS = {"tabs": list(EVENT_TABS), "default_tab": "all"}
+
+    async def _events_settings() -> dict:
+        doc = await db.site_settings.find_one({"_id": "events"}, {"_id": 0}) or {}
+        tabs = [t for t in doc.get("tabs", EVENTS_DEFAULTS["tabs"]) if t in EVENT_TABS]
+        # An empty tab list would render a page with no way to see anything, so the
+        # stored value is only honoured while it still leaves something to click.
+        if not tabs:
+            tabs = list(EVENTS_DEFAULTS["tabs"])
+        default_tab = doc.get("default_tab", EVENTS_DEFAULTS["default_tab"])
+        # The default has to be a tab that is actually shown, or the page opens on a
+        # filter with no button to leave it by.
+        if default_tab not in tabs:
+            default_tab = tabs[0]
+        return {"tabs": tabs, "default_tab": default_tab}
+
+    @api.get("/cms/events-settings")
+    async def get_events_settings():
+        """Public: the Events page reads this before it renders its tabs."""
+        return await _events_settings()
+
+    @api.get("/admin/cms/events-settings")
+    async def admin_get_events_settings(user=Depends(require_admin_or_editor)):
+        return {**await _events_settings(), "available_tabs": list(EVENT_TABS)}
+
+    @api.put("/admin/cms/events-settings")
+    async def admin_put_events_settings(body: EventsSettingsIn,
+                                        user=Depends(require_admin_or_editor)):
+        tabs = [t for t in dict.fromkeys(body.tabs) if t in EVENT_TABS]
+        if not tabs:
+            raise HTTPException(400, "Keep at least one tab")
+        default_tab = body.default_tab if body.default_tab in tabs else tabs[0]
+        await db.site_settings.update_one(
+            {"_id": "events"},
+            {"$set": {"tabs": tabs, "default_tab": default_tab}},
+            upsert=True,
+        )
+        return await _events_settings()
 
     @api.get("/cms/nav")
     async def get_public_nav(request: Request):
@@ -875,6 +942,11 @@ def _default_theme():
             "mono": "IBM Plex Mono",
         },
         "spacing": {"sectionY": "6rem", "containerX": "2.5rem"},
+        # The header nav's type size, in px. A theme value rather than a hardcoded class
+        # because how big the menu should be depends on how many items are in it and how
+        # long their labels are — both of which an editor changes, and neither of which
+        # is knowable when the class is written.
+        "nav_size": 11,
         "radius": 0,
         "button_style": "sharp",  # sharp | pill
     }

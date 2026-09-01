@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import DOMPurify from "dompurify";
-import { resolveEmbed, withPlayback } from "../../lib/embeds";
+import { resolveEmbed, withPlayback, AUDIO_PROVIDERS } from "../../lib/embeds";
 import { http } from "../../api";
 import { toast } from "sonner";
 import { renderRich } from "../../lib/richText";
@@ -24,6 +24,22 @@ const ASPECTS = {
 };
 const aspectClass = (v, fallback = "aspect-square") => ASPECTS[v] || fallback;
 
+/**
+ * The 1400px frame and the side gutters every block sits in.
+ *
+ * VERTICAL padding is deliberately absent from this file. Blocks used to carry their own
+ * `py-10`/`py-16`/`py-24`, which meant page rhythm was decided by whoever wrote each
+ * block rather than by the person composing the page: two blocks that happened to be
+ * `py-24` and `py-16` produced a 40-unit gap nobody chose and nobody could change. Every
+ * block is now flush, and the Spacer block is the one control for the space between them.
+ *
+ * The HORIZONTAL gutters stay. They are not spacing between blocks — they are what keeps
+ * text off the edge of a phone screen, and Spacer only has a height, so there would be
+ * nothing to restore them with.
+ *
+ * Two insets survive on purpose and are not inter-block spacing: the hero's text inset
+ * over its own background image, and the "Image not set" editor placeholder.
+ */
 function Container({ children, className = "" }) {
   return <div className={`max-w-[1400px] mx-auto px-6 md:px-10 ${className}`}>{children}</div>;
 }
@@ -106,8 +122,33 @@ const casing = (props) => (props.text_case === undefined ? "uppercase" : props.t
  */
 const overlayMode = (props) => (props.overlay === undefined ? "gradient" : props.overlay === true ? "solid" : props.overlay || "none");
 
+/**
+ * Hero height, as a percentage of the viewport.
+ *
+ * vh rather than the px the heading sizes use, and for the opposite reason. A heading
+ * needs px because 96px is right on a laptop and unreadable on a 375px phone — the same
+ * number is the wrong size at both ends. A hero is the other way round: it is a
+ * viewport-filling element by construction, so a fixed 600px is most of a phone screen
+ * and a third of a laptop, and only a proportion means the same thing on both.
+ *
+ * It also keeps the three named steps this replaces exact. They WERE vh, so a hero
+ * published as "tall" resolves to 85 and renders at the height it always did.
+ */
+export const HERO_HEIGHT_LIMITS = { min: 10, max: 100, fallback: 85 };
+
+const LEGACY_HEIGHTS = { short: 50, medium: 70, tall: 85 };
+
+export function heroHeight(props) {
+  const raw = props.height_vh;
+  if (raw === undefined || raw === null || raw === "" || Number.isNaN(Number(raw))) {
+    return LEGACY_HEIGHTS[props.height] ?? HERO_HEIGHT_LIMITS.fallback;
+  }
+  // clampPx rounds and clamps; the name is about how it is usually used, not the unit.
+  return clampPx(raw, HERO_HEIGHT_LIMITS);
+}
+
 function Hero({ props }) {
-  const h = props.height === "short" ? "min-h-[50vh]" : props.height === "medium" ? "min-h-[70vh]" : "min-h-[85vh]";
+  const minHeight = { minHeight: `${heroHeight(props)}vh` };
   const align = props.align === "center" ? "text-center items-center" : props.align === "right" ? "text-right items-end" : "text-left items-start";
   const size = heroHeadingSize(props);
   const upper = casing(props);
@@ -138,7 +179,7 @@ function Hero({ props }) {
   );
 
   const body = (
-    <Container className="relative pb-16 md:pb-24 pt-24">
+    <Container className="relative pb-16 md:pb-24">
       <div className={`flex flex-col ${align}`}>
         {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-3 mb-6`}>{props.eyebrow}</div>}
         {props.heading && (
@@ -161,11 +202,11 @@ function Hero({ props }) {
   // image included — is held inside the same 1400px frame the Image block's "Full width"
   // toggles against, so the two controls mean the same thing in both places.
   if (fullFrame) {
-    return <section className={`relative overflow-hidden ${h} flex flex-col justify-end`} data-testid="hero">{media}{body}</section>;
+    return <section className="relative overflow-hidden flex flex-col justify-end" style={minHeight} data-testid="hero">{media}{body}</section>;
   }
   return (
-    <section className="py-10" data-testid="hero">
-      <div className={`max-w-[1400px] mx-auto relative overflow-hidden ${h} flex flex-col justify-end border border-ink/10`}>
+    <section data-testid="hero">
+      <div className="max-w-[1400px] mx-auto relative overflow-hidden flex flex-col justify-end border border-ink/10" style={minHeight}>
         {media}{body}
       </div>
     </section>
@@ -173,7 +214,7 @@ function Hero({ props }) {
 }
 
 function RichText({ props }) {
-  return <section className="py-16"><Container className="max-w-[900px]">{renderRich(props.content)}</Container></section>;
+  return <section><Container className="max-w-[900px]">{renderRich(props.content)}</Container></section>;
 }
 
 function ImageBlock({ props }) {
@@ -181,7 +222,7 @@ function ImageBlock({ props }) {
   const cls = props.full_width ? "w-full" : "max-w-[1200px] mx-auto";
   const aspect = props.aspect && props.aspect !== "natural" ? aspectClass(props.aspect, "") : "";
   return (
-    <section className="py-10">
+    <section>
       <figure className={cls}>
         <div className={`${aspect} overflow-hidden border border-ink/10`}>
           <img src={mediaUrl(props.image_url)} alt={props.caption || ""} className="w-full h-full object-cover block" />
@@ -196,7 +237,7 @@ function GalleryGrid({ props }) {
   const [items, setItems] = useState([]);
   useEffect(() => { http.get("/gallery").then((r) => setItems(r.data.slice(0, props.limit || 6))).catch(() => {}); }, [props.limit]);
   return (
-    <section className="py-16"><Container>
+    <section><Container>
       {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mb-8">{props.heading}</h2>}
       <div className="columns-1 md:columns-3 gap-4 space-y-4">
         {items.map((g) => (
@@ -221,7 +262,7 @@ function EventsGrid({ props }) {
   };
 
   return (
-    <section className="py-16"><Container>
+    <section><Container>
       <div className="flex items-end justify-between mb-10">
         <div>
           {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
@@ -279,7 +320,7 @@ function ArtistsGrid({ props }) {
   useEffect(() => { http.get("/artists").then((r) => setArtists(r.data.slice(0, props.limit || 6))).catch(() => {}); }, [props.limit]);
   const cols = props.layout === "grid-2" ? "md:grid-cols-2" : props.layout === "grid-4" ? "md:grid-cols-4" : "md:grid-cols-3";
   return (
-    <section className="py-16"><Container>
+    <section><Container>
       <div className="flex items-end justify-between mb-10">
         <div>
           {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
@@ -308,7 +349,7 @@ function Marquee({ props }) {
     ? events.map((e) => (e.city ? `${e.title} · ${e.city}` : e.title))
     : (props.items || []).length ? props.items : ["NO UPCOMING EVENTS"];
   return (
-    <section className="hairline-b hairline py-6 overflow-hidden">
+    <section className="hairline-b hairline overflow-hidden">
       <div className="marquee">
         <div className="marquee-track font-mono-x uppercase tracking-[0.3em] text-2xl md:text-4xl">
           {[...items, ...items].map((m, i) => (
@@ -326,7 +367,7 @@ function Marquee({ props }) {
 function CTABanner({ props }) {
   const upper = casing(props);
   return (
-    <section className="py-24"><Container>
+    <section><Container>
       <div className="grid md:grid-cols-2 gap-10 items-start">
         {props.image_url ? (
           <img src={mediaUrl(props.image_url)} alt={props.heading || ""}
@@ -364,7 +405,7 @@ function ContactFormBlock({ props }) {
     setBusy(false);
   };
   return (
-    <section className="py-16"><Container className="max-w-[900px]">
+    <section><Container className="max-w-[900px]">
       {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter">{props.heading}</h2>}
       <form onSubmit={submit} className="border border-ink/10 bg-[color:var(--surface,#0F0F0F)] p-6 md:p-8 space-y-4 mt-6">
         <input required placeholder="NAME" value={f.name} onChange={(e) => setF({...f, name: e.target.value})} className="input-x" />
@@ -393,7 +434,7 @@ function Newsletter({ props }) {
     setBusy(false);
   };
   return (
-    <section className="py-16 hairline"><Container className="max-w-[900px]">
+    <section className="hairline"><Container className="max-w-[900px]">
       {props.heading && <h2 className="font-display text-3xl md:text-4xl uppercase font-bold tracking-tighter">{props.heading}</h2>}
       {/* Rich text, like every other multi-line body field — this one rendered inline,
           so an author's line breaks were dropped in this block and kept in the next. */}
@@ -424,7 +465,7 @@ function VideoEmbed({ props, preview }) {
   // from /admin/uploads plays and an arbitrary pasted host is refused by the browser.
   if (props.file_url) {
     return (
-      <section className="py-10"><Container>
+      <section><Container>
         <div className={`${aspect} border border-ink/10 bg-scrim overflow-hidden`}>
           <video
             src={mediaUrl(props.file_url)}
@@ -458,26 +499,38 @@ function VideoEmbed({ props, preview }) {
     // the person who can fix it is looking. Without this the failure was an empty box.
     if (!preview) return null;
     return (
-      <section className="py-10"><Container>
+      <section><Container>
         <div className="border border-brand p-4 font-mono-x text-xs uppercase tracking-[0.2em] text-brand"
              data-testid="video-unsupported">
-          Unsupported video URL — only YouTube and Vimeo can be embedded
+          Unsupported embed URL — YouTube, Vimeo, SoundCloud and Bandcamp only
+          <div className="mt-1 normal-case tracking-normal text-ink-3">
+            Bandcamp needs the URL from its own Share / Embed dialog, not the album page.
+          </div>
           <div className="mt-2 normal-case tracking-normal text-ink-3 break-all">{props.url}</div>
         </div>
       </Container></section>
     );
   }
 
+  // A SoundCloud or Bandcamp player is a control strip, not a rectangle: forcing it into
+  // aspect-video leaves a 16:9 box mostly empty. Audio providers are sized by height and
+  // ignore the aspect control, which the panel hides for them.
+  const isAudio = AUDIO_PROVIDERS.has(embed.provider);
+  const frameClass = isAudio ? "" : aspect;
+  const frameStyle = isAudio
+    ? { height: embed.provider === "bandcamp" ? 470 : 166 }
+    : undefined;
+
   return (
-    <section className="py-10"><Container>
-      <div className={`${aspect} border border-ink/10`}>
+    <section><Container>
+      <div className={`${frameClass} border border-ink/10`} style={frameStyle}>
         {/* `sandbox` is the half a CSP cannot do: frame-src says which origins may be
             framed, this says what the frame may then do. allow-same-origin is required
             or the player cannot reach its own APIs; allow-top-navigation is deliberately
             absent, so an embed cannot redirect the page around the visitor. */}
         <iframe
           src={embed.src}
-          title={props.caption || "video"}
+          title={props.caption || (isAudio ? "audio" : "video")}
           className="w-full h-full"
           data-provider={embed.provider}
           sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
@@ -504,7 +557,7 @@ function CustomHTML({ props }) {
   // defaults, so they read as the protection while doing none of the work, which is
   // worse than not being there.
   const safe = DOMPurify.sanitize(props.html || "", { USE_PROFILES: { html: true } });
-  return <section className="py-4"><Container><div dangerouslySetInnerHTML={{ __html: safe }} /></Container></section>;
+  return <section><Container><div dangerouslySetInnerHTML={{ __html: safe }} /></Container></section>;
 }
 
 function Spacer({ props }) { return <div style={{ height: props.height || "4rem" }} />; }
@@ -512,7 +565,7 @@ function Spacer({ props }) { return <div style={{ height: props.height || "4rem"
 function Split({ props }) {
   const reverse = props.direction === "image-right";
   return (
-    <section className="py-16"><Container>
+    <section><Container>
       <div className={`grid md:grid-cols-2 gap-10 items-center ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}>
         <div className={`${aspectClass(props.aspect, "aspect-square")} overflow-hidden border border-ink/10`}>
           {props.image_url ? <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-ink-5 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>}
@@ -528,6 +581,68 @@ function Split({ props }) {
   );
 }
 
+/**
+ * An image-backed band for the middle of a page.
+ *
+ * Deliberately not the Hero. Hero is the top of a page: it fills the viewport, its
+ * heading is the h1, and it defaults to edge-to-edge. This sits inline at a fraction of
+ * that height with an h2, so a page can carry several without each one claiming to be
+ * the page's subject.
+ *
+ * The overlay is a plain colour and opacity, with none of Hero's three named modes.
+ * Those exist there only to keep heroes published before the overlay controls looking
+ * as they did; a new block has no such history and does not need to carry it.
+ *
+ * Its text inset is internal padding rather than block spacing, which is why it survives
+ * the zeroing described on Container: with none, the heading would sit against the edge
+ * of its own background image, and a Spacer between blocks could not put it back.
+ */
+function ImageBand({ props }) {
+  const h = props.height === "short" ? "min-h-[30vh]"
+    : props.height === "tall" ? "min-h-[60vh]"
+    : "min-h-[45vh]";
+  const align = props.align === "center" ? "text-center items-center"
+    : props.align === "right" ? "text-right items-end"
+    : "text-left items-start";
+  const upper = casing(props);
+  const opacity = Math.min(100, Math.max(0, Number(props.overlay_opacity ?? 50))) / 100;
+
+  const inner = (
+    <div className={`relative overflow-hidden ${h} flex flex-col justify-center`} data-testid="image-band">
+      {props.image_url && (
+        <div className="absolute inset-0">
+          <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" />
+          <div className="absolute inset-0"
+               style={{ backgroundColor: props.overlay_color || "#050505", opacity }}
+               data-testid="image-band-overlay" />
+        </div>
+      )}
+      <Container className="relative py-16 md:py-24">
+        <div className={`flex flex-col ${align}`}>
+          {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-3 mb-4`}>{props.eyebrow}</div>}
+          {props.heading && (
+            <h2 className={`font-display text-4xl md:text-6xl ${upper} tracking-tighter font-bold max-w-4xl whitespace-pre-wrap`}
+                data-testid="image-band-heading">
+              {props.heading}
+            </h2>
+          )}
+          {props.body && <div className="mt-6 max-w-xl">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed text-lg" })}</div>}
+          {props.cta_label && (
+            <div className="mt-8">
+              <Link to={props.cta_href || "#"} className={props.cta_style === "accent" ? "btn-accent" : "btn-primary"}>{props.cta_label}</Link>
+            </div>
+          )}
+        </div>
+      </Container>
+    </div>
+  );
+
+  // Same bargain the Image block's "Full width" makes: on, it spans the viewport; off,
+  // it is held inside the 1400px frame everything else lines up with.
+  if (props.full_width !== false) return <section>{inner}</section>;
+  return <section><div className="max-w-[1400px] mx-auto border border-ink/10">{inner}</div></section>;
+}
+
 export const BLOCK_RENDERERS = {
   hero: Hero,
   rich_text: RichText,
@@ -540,6 +655,7 @@ export const BLOCK_RENDERERS = {
   contact_form: ContactFormBlock,
   newsletter: Newsletter,
   video: VideoEmbed,
+  image_band: ImageBand,
   custom_html: CustomHTML,
   spacer: Spacer,
   split: Split,
