@@ -41,7 +41,14 @@ const aspectClass = (v, fallback = "aspect-square") => ASPECTS[v] || fallback;
  * over its own background image, and the "Image not set" editor placeholder.
  */
 function Container({ children, className = "" }) {
-  return <div className={`max-w-[1400px] mx-auto px-6 md:px-10 ${className}`}>{children}</div>;
+  // `w-full` is load-bearing, not decoration. Inside a flex column — which the hero and
+  // the image band both are — `mx-auto` sets auto margins on the CROSS axis, and an
+  // auto cross-axis margin suppresses the default `stretch`. The container then
+  // shrink-wrapped its own text and the auto margins centred that box, so a hero set to
+  // align left rendered its heading a third of the way across the screen: correctly
+  // left-aligned, inside a box that was floating in the middle. Width first, then the
+  // max-width caps it and mx-auto centres the capped box, which is what was always meant.
+  return <div className={`w-full max-w-[1400px] mx-auto px-6 md:px-10 ${className}`}>{children}</div>;
 }
 
 // ---------------- Blocks ----------------
@@ -120,6 +127,17 @@ const casing = (props) => (props.text_case === undefined ? "uppercase" : props.t
  * fallback while the prop stayed absent, so the colour and opacity controls sat there
  * looking editable and changed nothing.
  */
+/**
+ * Where the text sits down the height of an image-backed block.
+ *
+ * Absent means the position each block shipped with — the hero pinned to the bottom, the
+ * band centred — so nothing already published moves. That is also why this is a lookup
+ * with a per-block fallback rather than one default: the two blocks disagree about what
+ * "unset" means, and always did.
+ */
+const CONTENT_Y = { top: "justify-start", middle: "justify-center", bottom: "justify-end" };
+const contentY = (props, fallback) => CONTENT_Y[props.content_y] || fallback;
+
 const overlayMode = (props) => (props.overlay === undefined ? "gradient" : props.overlay === true ? "solid" : props.overlay || "none");
 
 /**
@@ -202,11 +220,11 @@ function Hero({ props }) {
   // image included — is held inside the same 1400px frame the Image block's "Full width"
   // toggles against, so the two controls mean the same thing in both places.
   if (fullFrame) {
-    return <section className="relative overflow-hidden flex flex-col justify-end" style={minHeight} data-testid="hero">{media}{body}</section>;
+    return <section className={`relative overflow-hidden flex flex-col ${contentY(props, "justify-end")}`} style={minHeight} data-testid="hero">{media}{body}</section>;
   }
   return (
     <section data-testid="hero">
-      <div className="max-w-[1400px] mx-auto relative overflow-hidden flex flex-col justify-end border border-ink/10" style={minHeight}>
+      <div className={`max-w-[1400px] mx-auto relative overflow-hidden flex flex-col ${contentY(props, "justify-end")} border border-ink/10`} style={minHeight}>
         {media}{body}
       </div>
     </section>
@@ -608,7 +626,7 @@ function ImageBand({ props }) {
   const opacity = Math.min(100, Math.max(0, Number(props.overlay_opacity ?? 50))) / 100;
 
   const inner = (
-    <div className={`relative overflow-hidden ${h} flex flex-col justify-center`} data-testid="image-band">
+    <div className={`relative overflow-hidden ${h} flex flex-col ${contentY(props, "justify-center")}`} data-testid="image-band">
       {props.image_url && (
         <div className="absolute inset-0">
           <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" />

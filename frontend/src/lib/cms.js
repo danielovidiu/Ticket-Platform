@@ -158,6 +158,7 @@ export const BLOCK_DEFAULTS = {
     second_cta_label: "",
     second_cta_href: "",
     align: "left",
+    content_y: "bottom",
     height_vh: 85,
   }),
   rich_text: () => ({ content: "## New heading\n\nParagraph text with **bold** words and [links](#)." }),
@@ -176,6 +177,7 @@ export const BLOCK_DEFAULTS = {
   image_band: () => ({
     eyebrow: "", heading: "Statement over an image.", body: "", image_url: "",
     overlay_color: "#050505", overlay_opacity: 50, height: "medium", align: "left",
+    content_y: "middle",
     text_case: "as-typed", full_width: true, cta_label: "", cta_href: "", cta_style: "outline",
   }),
   custom_html: () => ({ html: "<div class=\"p-8 text-center font-mono-x uppercase\">Custom HTML</div>" }),
