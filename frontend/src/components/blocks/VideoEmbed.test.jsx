@@ -132,3 +132,68 @@ describe("autoplay", () => {
     expect(iframeIn(container)).toBeNull();
   });
 });
+
+/**
+ * How an audio player is sized.
+ *
+ * A video is a rectangle and gets an aspect ratio. A SoundCloud or Bandcamp player is a
+ * control strip, so it gets a height instead — and a playlist is not a track. The compact
+ * 166px player is right for one track and cuts a playlist off at its first row, which is
+ * the row nobody embedded a playlist to see.
+ */
+const audioBlock = (url, extra = {}) =>
+  ({ block_id: "b2", type: "video", props: { url, ...extra } });
+
+const frameHeight = (container) => container.querySelector("iframe")?.parentElement?.style.height;
+
+describe("audio players are sized by height, not aspect", () => {
+  test("a single track gets the compact player", () => {
+    const { container } = render(
+      <BlockRenderer block={audioBlock("https://soundcloud.com/artist/a-track")} />);
+    expect(frameHeight(container)).toBe("166px");
+  });
+
+  test("a playlist gets room for its track list", () => {
+    const { container } = render(
+      <BlockRenderer block={audioBlock("https://soundcloud.com/artist/sets/a-playlist")} />);
+    expect(frameHeight(container)).toBe("400px");
+  });
+
+  test("SoundCloud's own embed code lands as a playlist", () => {
+    const { container } = render(<BlockRenderer block={audioBlock(
+      "https://w.soundcloud.com/player/?url=https%3A//api.soundcloud.com/playlists/"
+      + "soundcloud%253Aplaylists%253A1084330825&visual=true")} />);
+    expect(container.querySelector("iframe")).toBeTruthy();
+    expect(frameHeight(container)).toBe("400px");
+  });
+
+  test("a block can name its own height", () => {
+    const { container } = render(<BlockRenderer block={audioBlock(
+      "https://soundcloud.com/artist/a-track", { embed_height: 320 })} />);
+    expect(frameHeight(container)).toBe("320px");
+  });
+
+  test("that height is clamped, not trusted", () => {
+    const tall = render(<BlockRenderer block={audioBlock(
+      "https://soundcloud.com/artist/a-track", { embed_height: 99999 })} />);
+    expect(frameHeight(tall.container)).toBe("1000px");
+    const short = render(<BlockRenderer block={audioBlock(
+      "https://soundcloud.com/artist/a-track", { embed_height: 1 })} />);
+    expect(frameHeight(short.container)).toBe("80px");
+  });
+
+  test("junk falls back to the default rather than reaching the DOM", () => {
+    for (const bad of ["", null, "abc"]) {
+      const { container } = render(<BlockRenderer block={audioBlock(
+        "https://soundcloud.com/artist/a-track", { embed_height: bad })} />);
+      expect(frameHeight(container)).toBe("166px");
+    }
+  });
+
+  test("a video keeps its aspect ratio and gets no height", () => {
+    const { container } = render(
+      <BlockRenderer block={audioBlock("https://www.youtube.com/watch?v=abcdefghijk")} />);
+    expect(frameHeight(container)).toBeFalsy();
+    expect(container.querySelector(".aspect-video")).toBeTruthy();
+  });
+});

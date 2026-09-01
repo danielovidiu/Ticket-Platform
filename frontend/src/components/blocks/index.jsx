@@ -465,6 +465,23 @@ function Newsletter({ props }) {
   );
 }
 
+// Default player heights, in px, by provider and by whether the thing playing is one
+// track or a list of them. Bandcamp emits size=large for both, so both want the same box.
+const AUDIO_HEIGHTS = {
+  soundcloud: { track: 166, playlist: 400 },
+  bandcamp: { track: 470, playlist: 470 },
+};
+
+/** The default for what is playing, unless the block names its own height. */
+function audioHeight(embed, props) {
+  const raw = props.embed_height;
+  if (raw !== undefined && raw !== null && raw !== "" && !Number.isNaN(Number(raw))) {
+    return clampPx(raw, { min: 80, max: 1000 });
+  }
+  const byProvider = AUDIO_HEIGHTS[embed.provider] || AUDIO_HEIGHTS.soundcloud;
+  return byProvider[embed.kind === "playlist" ? "playlist" : "track"];
+}
+
 function VideoEmbed({ props, preview }) {
   // Browsers refuse to start an unmuted video on their own, so autoplay forces muted
   // rather than offering a combination that would silently never play.
@@ -533,11 +550,13 @@ function VideoEmbed({ props, preview }) {
   // A SoundCloud or Bandcamp player is a control strip, not a rectangle: forcing it into
   // aspect-video leaves a 16:9 box mostly empty. Audio providers are sized by height and
   // ignore the aspect control, which the panel hides for them.
+  //
+  // A playlist is not a track. SoundCloud's compact player is 166px, which is right for
+  // one track and cuts a playlist off at its first row — the track list is the reason
+  // someone embeds a playlist at all.
   const isAudio = AUDIO_PROVIDERS.has(embed.provider);
   const frameClass = isAudio ? "" : aspect;
-  const frameStyle = isAudio
-    ? { height: embed.provider === "bandcamp" ? 470 : 166 }
-    : undefined;
+  const frameStyle = isAudio ? { height: audioHeight(embed, props) } : undefined;
 
   return (
     <section><Container>
