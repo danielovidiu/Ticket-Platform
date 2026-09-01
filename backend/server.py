@@ -676,6 +676,51 @@ def event_code_for(title: str) -> str:
     return _code_from_words(title, 4) or "EVT"
 
 
+def _check_access_window(waves: List[dict]) -> None:
+    """A tier may carry one end of an admission window, never both.
+
+    The editor picks `until` or `from` with a toggle, so both being set means the request
+    did not come from that form. Refused rather than quietly preferring one: the door
+    checks `until` first, so silently keeping both would enforce the end the editor did
+    not choose and give no sign of it.
+    """
+    for w in waves:
+        if w.get("access_until") and w.get("access_from"):
+            raise HTTPException(
+                400,
+                f"\"{w.get('name') or 'A tier'}\" has both an access-until and an "
+                "access-from. Choose one end of the window.",
+            )
+
+
+def _ticket_type_label(ticket: dict, wave: dict) -> str:
+    """What a ticket's type is called in an export.
+
+    Three readings, oldest first: what the ticket recorded at issue, then the wave's
+    `tier`, then the wave's name. The name is the new last resort — the tier dropdown is
+    gone from the editor, so waves created from now on carry no tier, and without this
+    their column in a fiscal export would simply be blank.
+    """
+    return ticket.get("tier") or wave.get("tier") or wave.get("name", "")
+
+
+def _sorted_waves(waves: List[dict]) -> List[dict]:
+    """Tiers in the order a buyer is offered them: lowest `tier_id` first.
+
+    Sorted once here, on the way into the database, rather than by each of the several
+    places that hand waves out — the event page, the admin form, the exports and the
+    order emails would otherwise each have to remember, and the first one to forget
+    shows a different running order than the rest.
+
+    A wave with no id sorts last rather than first. An unnumbered tier is one nobody has
+    placed yet, and dropping it at the top of the list would push a numbered one down.
+    """
+    return sorted(
+        waves,
+        key=lambda w: (w.get("tier_id") is None, w.get("tier_id") or 0),
+    )
+
+
 def wave_type_code(wave: dict) -> str:
     """The code standing for one ticket type. The tier decides it when the tier is one
     we know; otherwise the wave's own name does."""
@@ -1242,13 +1287,11 @@ class ResendVerifyIn(ApiModel):
     email: str
 
 
-# Ceilings for the list fields on artists and projects. Not editorial limits — the point
-# is the same one models_base.py makes for strings: "arbitrarily many" should be
-# impossible, without telling an editor how to do their job.
+# Ceilings for the list fields on an artist. Not editorial limits — the point is the
+# same one models_base.py makes for strings: "arbitrarily many" should be impossible,
+# without telling an editor how to do their job.
 MAX_DISCIPLINES = 24
 MAX_ARTIST_ALBUMS = 60
-MAX_ARTIST_PROJECTS = 60
-MAX_PROJECT_ARTISTS = 60
 
 
 class ArtistIn(ApiModel):
@@ -1265,12 +1308,9 @@ class ArtistIn(ApiModel):
     # can appear in the album for a night they did not headline, and one event may have
     # several albums, so the link is its own decision.
     album_ids: List[str] = Field(default_factory=list, max_length=MAX_ARTIST_ALBUMS)
-    # Supersanity projects this artist belongs to. Not stored here — the edge lives on
-    # `projects.artist_ids`, and this field is the write-through the artist form posts.
-    # Absent means "leave the project links alone"; [] means "remove them all".
-    project_ids: Optional[List[str]] = Field(default=None, max_length=MAX_ARTIST_PROJECTS)
-    # One outside project, kept deliberately apart from the Supersanity work above so
-    # the artist page can mark the two differently.
+    # One outside project of the artist's own — their band, their label, their studio.
+    # This is NOT the retired `projects` collection: that was a Supersanity-side record
+    # with its own page furniture, and this is a name and a link the artist gives us.
     other_project_name: str = ""
     other_project_url: str = ""
 
@@ -1281,29 +1321,29 @@ class DisciplinesIn(ApiModel):
     disciplines: List[str] = Field(default_factory=list, max_length=MAX_DISCIPLINES)
 
 
-class ProjectIn(ApiModel):
-    title: str
-    slug: str
-    description: str = Field(default="", max_length=LONG_TEXT)
-    year: Optional[int] = None
-    image_url: str = ""
-    artist_ids: List[str] = []
-    is_past: bool = False
-
-
 class WaveIn(ApiModel):
     name: str
     price_ron: float
     capacity: int
     starts_at: str
     ends_at: str
-    tier: str = "general"  # early_bird, general, vip
-    # The last moment holders of *this* tier may enter on. Per-tier rather than
-    # per-event, so an early-bird ticket can carry an earlier cut-off than general.
+    # What orders the tiers a buyer is offered: lowest first. An editor's handle on the
+    # running order, which used to be whatever order the tiers happened to be added in.
+    tier_id: Optional[int] = None
+    # Kept, no longer editable. It fed the ticket serial's type code and the exports, and
+    # existing waves still carry the value they were given; new ones leave it empty and
+    # let the wave's own name stand for the type instead. See wave_type_code.
+    tier: str = ""
+    # The two ends of a tier's admission window. At most ONE is ever set: the editor
+    # picks which end they mean, so a wave says either "not after this" or "not before
+    # it", never both. Blank is no rule at all, which is how every event behaved before
+    # either field existed.
     #
-    # This replaced `access_from`, which stored the opposite end of the window and was
-    # never read by anything — see migrate_access_until.
+    # `access_from` was here once, stored the same thing, and was read by nothing — see
+    # the note on retire_access_from below before assuming that history repeats. It is
+    # enforced at the door now, exactly as `access_until` is.
     access_until: Optional[str] = None
+    access_from: Optional[str] = None
 
 
 class EventIn(ApiModel):
@@ -1373,25 +1413,8 @@ class ArtistPatchIn(ApiModel):
     links: Optional[dict] = None
     disciplines: Optional[List[str]] = Field(default=None, max_length=MAX_DISCIPLINES)
     album_ids: Optional[List[str]] = Field(default=None, max_length=MAX_ARTIST_ALBUMS)
-    project_ids: Optional[List[str]] = Field(default=None, max_length=MAX_ARTIST_PROJECTS)
     other_project_name: Optional[str] = None
     other_project_url: Optional[str] = None
-
-
-class ProjectPatchIn(ApiModel):
-    """Partial update for a project. Same bargain as `EventPatchIn`.
-
-    Projects were create-and-delete only until now, which meant a project's artist list
-    could never be corrected after the fact — the one thing the artist<->project link
-    most needs to be able to change.
-    """
-    title: Optional[str] = None
-    slug: Optional[str] = None
-    description: Optional[str] = Field(default=None, max_length=LONG_TEXT)
-    year: Optional[int] = None
-    image_url: Optional[str] = None
-    artist_ids: Optional[List[str]] = Field(default=None, max_length=MAX_PROJECT_ARTISTS)
-    is_past: Optional[bool] = None
 
 
 class EventNoticeIn(ApiModel):
@@ -2180,9 +2203,9 @@ async def list_artists():
 async def get_artist(slug: str):
     """One artist, with everything their page renders already attached.
 
-    Albums and projects are resolved here rather than fetched separately by the client:
-    the page draws them in one pass, and three round trips to paint one screen is three
-    chances to paint half of it.
+    Albums are resolved here rather than fetched separately by the client: the page
+    draws them in one pass, and two round trips to paint one screen is two chances to
+    paint half of it.
     """
     a = await db.artists.find_one({"slug": slug}, {"_id": 0})
     if not a:
@@ -2197,18 +2220,7 @@ async def get_artist(slug: str):
             {"$and": [{"album_id": {"$in": album_ids}}, await _public_album_query()]}
         ) if al["count"]
     ] if album_ids else []
-
-    # Supersanity work. The edge lives on the project, so this reads from that side.
-    a["projects"] = await db.projects.find(
-        {"artist_ids": a["artist_id"]}, {"_id": 0}
-    ).sort([("year", -1), ("title", 1)]).to_list(MAX_ARTIST_PROJECTS)
     return a
-
-
-@api.get("/projects")
-async def list_projects():
-    items = await db.projects.find({}, {"_id": 0}).sort("year", -1).to_list(200)
-    return items
 
 
 @api.get("/events")
@@ -3400,21 +3412,30 @@ async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
     if ends and now_iso > ends:
         return {"valid": False, "reason": "EVENT ENDED", "ticket": t, "event": ev}
 
-    # Past this tier's cut-off. Deliberately NOT an automatic refusal: the guest is
-    # standing there holding a ticket they paid for, and a late arrival is a judgement
-    # call, not a rule. The door is shown the situation and decides; either outcome is
-    # recorded against the person who made it.
+    # Outside this tier's admission window. Deliberately NOT an automatic refusal: the
+    # guest is standing there holding a ticket they paid for, and arriving early or late
+    # is a judgement call, not a rule. The door is shown the situation and decides;
+    # either outcome is recorded against the person who made it.
+    #
+    # Which end was crossed is carried separately from the fact that one was, because
+    # "you are early" and "you are late" send the guest to different places — one waits,
+    # the other has missed it.
     wave = next((w for w in ev.get("waves", []) if w.get("wave_id") == t.get("wave_id")), {})
     access_until = wave.get("access_until")
-    if access_until and now_iso > access_until and not body.override:
+    access_from = wave.get("access_from")
+    outside = None
+    if access_until and now_iso > access_until:
+        outside = {"reason": "ACCESS EXPIRED", "edge": "late", "access_until": access_until}
+    elif access_from and now_iso < access_from:
+        outside = {"reason": "ACCESS NOT YET OPEN", "edge": "early", "access_from": access_from}
+    if outside and not body.override:
         return {
             "valid": False,
             "needs_override": True,
-            "reason": "ACCESS EXPIRED",
-            "access_until": access_until,
             "wave_name": wave.get("name", ""),
             "ticket": t,
             "event": ev,
+            **outside,
         }
 
     # first-scan-wins
@@ -3424,7 +3445,8 @@ async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
         # thing it describes when tickets are exported for a fiscal return.
         admit["override_by"] = user["user_id"]
         admit["override_at"] = now_iso
-        admit["override_reason"] = body.override_reason.strip() or "admitted after access expiry"
+        admit["override_reason"] = (body.override_reason.strip()
+                                    or "admitted outside this tier's access window")
     upd = await db.tickets.update_one(
         {"qr_code": body.qr_code, "status": "issued"},
         {"$set": admit},
@@ -3437,6 +3459,7 @@ async def scan_ticket(body: ScanIn, user=Depends(require_admin_or_door)):
     if body.override:
         await _audit(user["user_id"], "door_override_admit", "ticket", ticket["ticket_id"],
                      {"event_id": ticket["event_id"], "access_until": access_until,
+                      "access_from": access_from,
                       "reason": ticket.get("override_reason", "")})
     return {"valid": True, "ticket": ticket, "event": ev, "overridden": bool(body.override)}
 
@@ -3613,7 +3636,8 @@ async def admin_create_event(body: EventIn, user=Depends(require_admin)):
         w["wave_id"] = new_id("wave")
         w["available"] = w["capacity"]
         waves.append(w)
-    e["waves"] = waves
+    _check_access_window(waves)
+    e["waves"] = _sorted_waves(waves)
     e["created_at"] = now_utc().isoformat()
     await db.events.insert_one(e)
     # Assigned here rather than at first sale so the code is visible in the admin before
@@ -3663,7 +3687,8 @@ async def admin_update_event(event_id: str, body: EventPatchIn, user=Depends(req
                 w["wave_id"] = new_id("wave")
                 w["available"] = w["capacity"]
             new_waves.append(w)
-        patch["waves"] = new_waves
+        _check_access_window(new_waves)
+        patch["waves"] = _sorted_waves(new_waves)
 
     # Reachable now in a way it was not before: a body of nothing but unknown keys used to
     # write those keys, and now dumps to {}. Mongo rejects an empty `$set`.
@@ -4087,7 +4112,7 @@ async def admin_transactions_csv(
             _csv_safe(ev.get("title", "")),
             ev.get("starts_at", ""),
             _csv_safe(t.get("wave_name") or wave.get("name", "")),
-            _csv_safe(t.get("tier") or wave.get("tier", "")),
+            _csv_safe(_ticket_type_label(t, wave)),
             f"{float(t.get('price_ron') or 0):.2f}",
             t.get("status", ""),
             t.get("created_at", ""),
@@ -4130,7 +4155,7 @@ async def admin_transactions_summary(
             "event_code": t.get("event_code") or ev.get("event_code", ""),
             "type_code": t.get("type_code") or "",
             "ticket_type": t.get("wave_name") or wave.get("name", ""),
-            "tier": t.get("tier") or wave.get("tier", ""),
+            "tier": _ticket_type_label(t, wave),
             "unit_price_ron": price,
             "tickets_sold": 0,
             "serials": [],
@@ -4192,25 +4217,6 @@ async def admin_refund_ticket(ticket_id: str, user=Depends(require_admin)):
     return {"ok": True, "ticket": await db.tickets.find_one({"ticket_id": ticket_id}, {"_id": 0})}
 
 
-async def _sync_artist_projects(artist_id: str, project_ids: List[str]) -> None:
-    """Make `projects.artist_ids` name exactly this set of projects for one artist.
-
-    Two targeted updates rather than rewriting whole arrays: `$addToSet` on the projects
-    that should list this artist, `$pull` on the ones that should not. Two admins editing
-    two different artists at the same moment therefore cannot overwrite each other — a
-    read-modify-write of `artist_ids` would drop one of them silently.
-    """
-    wanted = [pid for pid in dict.fromkeys(project_ids) if pid]
-    if wanted:
-        await db.projects.update_many(
-            {"project_id": {"$in": wanted}}, {"$addToSet": {"artist_ids": artist_id}}
-        )
-    await db.projects.update_many(
-        {"project_id": {"$nin": wanted}, "artist_ids": artist_id},
-        {"$pull": {"artist_ids": artist_id}},
-    )
-
-
 def _sort_artist_disciplines(payload: dict) -> None:
     """A-Z, in place. The multiselect stores them in the order they were clicked, which
     is nobody's idea of an order by the time it reaches the artist's page. Canonicalised
@@ -4242,21 +4248,8 @@ async def admin_set_disciplines(body: DisciplinesIn, user=Depends(require_admin)
 
 @api.get("/admin/artists")
 async def admin_list_artists(user=Depends(require_admin)):
-    """Every artist, each carrying the project ids it is linked from.
-
-    `project_ids` is not a stored field — the edge lives on `projects.artist_ids`. The
-    form needs it to render its picker, so it is resolved here rather than making the
-    admin fetch every project and invert the relation client-side.
-    """
-    artists = await db.artists.find({}, {"_id": 0}).to_list(500)
-    projects = await db.projects.find(
-        {}, {"_id": 0, "project_id": 1, "artist_ids": 1}
-    ).to_list(500)
-    for a in artists:
-        a["project_ids"] = [
-            p["project_id"] for p in projects if a["artist_id"] in (p.get("artist_ids") or [])
-        ]
-    return artists
+    """Every artist."""
+    return await db.artists.find({}, {"_id": 0}).to_list(500)
 
 
 @api.post("/admin/artists")
@@ -4264,13 +4257,9 @@ async def admin_create_artist(body: ArtistIn, user=Depends(require_admin)):
     a = body.model_dump()
     _check_artist_payload(a)
     _sort_artist_disciplines(a)
-    # Write-through, not a column: the artist document never stores this.
-    project_ids = a.pop("project_ids", None) or []
     a["artist_id"] = new_id("art")
     a["created_at"] = now_utc().isoformat()
     await db.artists.insert_one(a)
-    if project_ids:
-        await _sync_artist_projects(a["artist_id"], project_ids)
     return {k: v for k, v in a.items() if k != "_id"}
 
 
@@ -4281,57 +4270,17 @@ async def admin_update_artist(artist_id: str, body: ArtistPatchIn, user=Depends(
     patch = body.model_dump(exclude_unset=True)
     _check_artist_payload(patch)
     _sort_artist_disciplines(patch)
-    # Absent means "leave the project links alone"; [] means "remove them all". Popping
-    # it here is what keeps it out of the `$set` — it is an edge, not a field.
-    project_ids = patch.pop("project_ids", None)
     if patch:
         await db.artists.update_one({"artist_id": artist_id}, {"$set": patch})
-    if project_ids is not None:
-        await _sync_artist_projects(artist_id, project_ids)
     return await db.artists.find_one({"artist_id": artist_id}, {"_id": 0})
 
 
 @api.delete("/admin/artists/{artist_id}")
 async def admin_delete_artist(artist_id: str, user=Depends(require_admin)):
     await db.artists.delete_one({"artist_id": artist_id})
-    # Otherwise the id lingers in every project that named them, and the project page
-    # renders a credit for an artist who no longer exists.
-    await db.projects.update_many(
-        {"artist_ids": artist_id}, {"$pull": {"artist_ids": artist_id}}
-    )
     await db.events.update_many(
         {"artist_ids": artist_id}, {"$pull": {"artist_ids": artist_id}}
     )
-    return {"ok": True}
-
-
-@api.get("/admin/projects")
-async def admin_list_projects(user=Depends(require_admin)):
-    return await db.projects.find({}, {"_id": 0}).to_list(500)
-
-
-@api.post("/admin/projects")
-async def admin_create_project(body: ProjectIn, user=Depends(require_admin)):
-    p = body.model_dump()
-    p["project_id"] = new_id("prj")
-    p["created_at"] = now_utc().isoformat()
-    await db.projects.insert_one(p)
-    return {k: v for k, v in p.items() if k != "_id"}
-
-
-@api.patch("/admin/projects/{project_id}")
-async def admin_update_project(project_id: str, body: ProjectPatchIn, user=Depends(require_admin)):
-    """Projects were create-and-delete only, so an artist list set at creation could
-    never be corrected. This is the other half of the artist<->project link."""
-    patch = body.model_dump(exclude_unset=True)
-    if patch:
-        await db.projects.update_one({"project_id": project_id}, {"$set": patch})
-    return await db.projects.find_one({"project_id": project_id}, {"_id": 0})
-
-
-@api.delete("/admin/projects/{project_id}")
-async def admin_delete_project(project_id: str, user=Depends(require_admin)):
-    await db.projects.delete_one({"project_id": project_id})
     return {"ok": True}
 
 
@@ -4815,18 +4764,6 @@ async def seed_demo(user=Depends(require_admin)):
           "links": {}, "created_at": now_utc().isoformat()}
     await db.artists.insert_many([a1, a2, a3])
 
-    p1 = {"project_id": new_id("prj"), "title": "BLACK ROOM · WINTER 2023", "slug": "black-room-2023",
-          "description": "48h continuous programme across four Bucharest venues.",
-          "year": 2023, "image_url": "https://images.unsplash.com/photo-1687511844598-165c1fc387cc?crop=entropy&cs=srgb&fm=jpg&q=85",
-          "artist_ids": [a1["artist_id"], a2["artist_id"]], "is_past": True,
-          "created_at": now_utc().isoformat()}
-    p2 = {"project_id": new_id("prj"), "title": "CORPUS · SUMMER RESIDENCY", "slug": "corpus-2024",
-          "description": "Cross-disciplinary residency with dancers, producers and light artists.",
-          "year": 2024, "image_url": "https://images.unsplash.com/photo-1593408995262-1d8933c37afc?crop=entropy&cs=srgb&fm=jpg&q=85",
-          "artist_ids": [a3["artist_id"]], "is_past": True,
-          "created_at": now_utc().isoformat()}
-    await db.projects.insert_many([p1, p2])
-
     # Gallery. Two albums, neither attached to an event — which is the ordinary case now,
     # and the one the seed should demonstrate. Linking one to an event is a later edit.
     alb1 = {"album_id": new_id("alb"), "title": "FIELD NOTES", "slug": "field-notes",
@@ -5093,7 +5030,21 @@ async def security_headers(request: Request, call_next):
 #     hand-written sort_order. Without the bump migrate_album_dates never runs on an
 #     already-initialised database, every album falls back to its creation day, and the
 #     grid silently keeps the old order while the CMS claims it is sorted by date.
-SCHEMA_VERSION = 11
+# 12: tiers carry a `tier_id` and the buyer is offered them lowest-id first. Without the
+#     bump migrate_wave_tier_ids never runs, every existing tier stays unnumbered, and
+#     they all sort last together — which is the order they were already in, right up
+#     until someone saves an event and one tier gets a number.
+# 13: Archive is retired. Without the bump migrate_drop_archive_page never runs on an
+#     already-seeded database, its cms_pages row survives, and the header goes on
+#     offering a nav link to a route that no longer exists.
+#
+#     NEVER let two branches claim one number. This one and 12 were developed in
+#     parallel and both wanted 12. The marker is compared for EQUALITY, not order, so
+#     whichever deployed second would have found `current == marker`, skipped setup
+#     entirely and run NONE of its migrations. That is not hypothetical — it happened on
+#     the dev database while these were being written, and the symptom was an Archive
+#     link that would not go away. They merged in order and took one number each.
+SCHEMA_VERSION = 13
 
 
 async def init_app():
@@ -5223,9 +5174,9 @@ async def init_indexes():
         logger.exception("init_indexes failed")
 
     try:
-        await migrate_access_until()
+        await migrate_wave_tier_ids()
     except Exception:
-        logger.exception("migrate_access_until failed")
+        logger.exception("migrate_wave_tier_ids failed")
 
     try:
         # Order matters: ordering is assigned per album, so the albums have to exist and
@@ -5238,6 +5189,11 @@ async def init_indexes():
         await migrate_gallery_ordering()
     except Exception:
         logger.exception("migrate_gallery_ordering failed")
+
+    try:
+        await migrate_drop_archive_page()
+    except Exception:
+        logger.exception("migrate_drop_archive_page failed")
 
     try:
         # After migrate_gallery_albums: an album has to exist, and know its event, before
@@ -5316,25 +5272,52 @@ async def migrate_session_token_hashes():
         logger.info("Session tokens hashed at rest: %d migrated, %d dropped", migrated, dropped)
 
 
-async def migrate_access_until():
-    """Rename the wave field `access_from` to `access_until`.
+# RETIRED: migrate_access_until.
+#
+# It unset `waves.$[].access_from` on every schema bump. That was right while the field
+# was a dead leftover — it stored when a tier's holders could START entering, nothing
+# read it, and carrying the value into the enforced `access_until` would have inverted
+# its meaning into "refused after 21:00".
+#
+# `access_from` is a real, enforced field again: the door refuses a scan before it, the
+# same way it refuses one after `access_until`. Leaving that migration in place would
+# have deleted every "from" cut-off an editor set, silently, on the next version bump —
+# and the deletion would look like the setting had never saved.
+#
+# It has already run everywhere it needed to; the key it cleaned up has not been written
+# by any version since. Do not reinstate it.
 
-    The old field stored the moment a tier's holders could START entering, and nothing
-    anywhere read it — not the door, not the event page, not the ticket. It is now the
-    opposite end of the window, `access_until`, and the door does read it.
 
-    Because the old value was never enforced, carrying it across would silently turn a
-    "doors open for VIPs at 21:00" into "VIPs are refused after 21:00" — the exact
-    inversion of what whoever typed it meant. So the key is dropped rather than renamed,
-    and the field starts empty for every existing wave. An empty cut-off is no cut-off,
-    which is precisely how these events have always behaved.
+async def migrate_wave_tier_ids():
+    """Number the tiers of events that predate `tier_id`.
+
+    Numbered from the order their waves are already stored in, so every existing event
+    keeps the exact running order it displays today. Backfilling to a constant, or
+    leaving them unnumbered, would reorder live events the first time anyone saved one.
+
+    Only waves with no id of their own are touched, and an event is written once for the
+    whole array rather than once per wave.
     """
-    result = await db.events.update_many(
-        {"waves.access_from": {"$exists": True}},
-        {"$unset": {"waves.$[].access_from": ""}},
-    )
-    if result.modified_count:
-        logger.info("Dropped the unenforced access_from from %d event(s)", result.modified_count)
+    fixed = 0
+    async for e in db.events.find({"waves.tier_id": None}, {"_id": 0, "event_id": 1, "waves": 1}):
+        waves = e.get("waves") or []
+        # The next number carries on past whatever is already numbered, so a
+        # part-numbered event does not end up with two tiers sharing an id.
+        used = {w.get("tier_id") for w in waves if isinstance(w.get("tier_id"), int)}
+        nxt = (max(used) + 1) if used else 1
+        changed = False
+        for w in waves:
+            if isinstance(w.get("tier_id"), int):
+                continue
+            w["tier_id"] = nxt
+            nxt += 1
+            changed = True
+        if changed:
+            await db.events.update_one({"event_id": e["event_id"]}, {"$set": {"waves": waves}})
+            fixed += 1
+    if fixed:
+        logger.info("Numbered the tiers of %d event(s)", fixed)
+    return fixed
 
 
 async def migrate_gallery_albums():
@@ -5413,6 +5396,23 @@ async def migrate_gallery_albums():
         )
 
     logger.info("Gallery migrated into %d album(s): %d item(s) filed", len(created), len(legacy))
+
+
+async def migrate_drop_archive_page():
+    """Remove the retired Archive page from the CMS.
+
+    Archive was a core nav row seeded into cms_pages, so taking it out of CORE_NAV_ITEMS
+    is not enough on its own: the row an already-seeded site holds would stay, and the
+    header would keep offering a link to a route that no longer exists.
+
+    Only the seeded core row is deleted, keyed on its slug and its `kind`. A page an
+    editor has authored at that slug is theirs — "archive" is no longer a reserved word,
+    so it is now a name they are allowed to use.
+    """
+    r = await db.cms_pages.delete_many({"slug": "core-archive", "kind": "core"})
+    if r.deleted_count:
+        logger.info("Removed the retired Archive page from the nav")
+    return r.deleted_count
 
 
 async def migrate_album_dates():

@@ -5,6 +5,7 @@ import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import { DateTimePicker } from "../components/ui/datetime-picker";
+import { nextMorningAt6, doorsFrom, dayBefore, isPast } from "../lib/eventDates";
 import { FormatToolbar } from "../lib/richText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 import AlbumManager from "../components/AlbumManager";
@@ -13,7 +14,7 @@ import { ShopProducts, ShopOrders, ShopSettings } from "../components/ShopAdmin"
 import { eventStatus, STATUS_CLASS, TICKET_FILTERS, TICKET_STATUS_CLASS } from "../lib/ticketStatus";
 
 const TABS = ["stats", "events", "orders", "transactions", "shop", "shop orders", "shop settings",
-              "artists", "projects", "discounts", "invites", "users", "gallery", "newsletter"];
+              "artists", "discounts", "invites", "users", "gallery", "newsletter"];
 
 export default function Admin() {
   const { user, loading } = useAuth();
@@ -41,7 +42,6 @@ export default function Admin() {
         {tab === "shop orders" && <ShopOrders />}
         {tab === "shop settings" && <ShopSettings />}
         {tab === "artists" && <Artists />}
-        {tab === "projects" && <Projects />}
         {tab === "discounts" && <Discounts />}
         {tab === "invites" && <Invites />}
         {tab === "users" && <Users />}
@@ -186,10 +186,10 @@ function SalesFilters({ f, testId }) {
           selected={f.statuses} onChange={f.setStatuses}
         />
         <Field label="From">
-          <input type="date" value={f.dateFrom} max={f.dateTo || undefined} onChange={(e) => f.setDateFrom(e.target.value)} className="input-x w-full" data-testid={`${testId}-date-from`} />
+          <DateTimePicker mode="date" value={f.dateFrom} placeholder="Any date" onChange={f.setDateFrom} />
         </Field>
         <Field label="To">
-          <input type="date" value={f.dateTo} min={f.dateFrom || undefined} onChange={(e) => f.setDateTo(e.target.value)} className="input-x w-full" data-testid={`${testId}-date-to`} />
+          <DateTimePicker mode="date" value={f.dateTo} placeholder="Any date" onChange={f.setDateTo} />
         </Field>
       </div>
       <div className="flex flex-wrap gap-2 items-center mt-3">
@@ -246,15 +246,6 @@ function Stats() {
 // is set) — matches the same rule the public /events feed uses, so admin status
 // never disagrees with what visitors actually see.
 
-// Ticket tiers read as full words in the admin form — the abbreviated values
-// ("gen", "early") are storage detail, not something an editor should decode.
-const TIER_LABEL = { early_bird: "Early Bird", general: "General", vip: "VIP" };
-const TIER_BADGE = {
-  early_bird: "border-ok text-ok",
-  general: "border-ink/50 text-ink",
-  vip: "border-brand text-brand",
-};
-
 // Small labelled wrapper so every field in the tier card says what it is.
 function Field({ label, className = "", children }) {
   return (
@@ -271,7 +262,7 @@ function Events() {
   const [notice, setNotice] = useState(null);   // { event, kind } while composing
   const load = () => http.get("/admin/events").then((r) => setEvents(r.data));
   useEffect(() => { load(); }, []);
-  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_until: "" }] });
+  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ tier_id: 1, name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: "", access_until: "", access_from: "" }] });
   const save = async () => {
     try {
       if (form.event_id) {
@@ -485,9 +476,112 @@ function NoticeComposer({ event, initialKind, onClose }) {
   );
 }
 
+/** One tier's admission window: which end of it is being set, and when.
+ *
+ * Two fields on the wave, never both — `access_until` refuses a holder after that
+ * moment, `access_from` refuses one before it. The toggle picks which the date means
+ * and clears the other, so the pair can never disagree about what an editor intended.
+ * Blank is no rule, which is how a tier behaves unless someone says otherwise.
+ *
+ * Neither end is a hard refusal at the door. The guest is standing there holding a
+ * ticket they paid for, so the scanner states which side of the window they are on and
+ * a person decides.
+ */
+export function AccessWindow({ wave, onChange, index }) {
+  /* The mode is held here rather than read back off the wave.
+   *
+   * Deriving it from which field has a value reads well and does not work: on a tier
+   * with no date yet — the ordinary case, since people pick the end before the moment —
+   * switching to "from" writes an empty `access_from`, and the next render sees two
+   * empty fields and snaps the toggle back to "until". The control could not be moved
+   * before it had something to hold.
+   *
+   * Seeded from the wave, so an event that already carries a `from` opens on it.
+   */
+  const [mode, setMode] = useState(() => (wave.access_from && !wave.access_until ? "from" : "until"));
+  const value = mode === "from" ? wave.access_from : wave.access_until;
+
+  const switchTo = (next) => {
+    if (next === mode) return;
+    setMode(next);
+    // The date survives the switch — someone toggling "until" to "from" means the same
+    // moment read the other way round, not a field they now have to retype.
+    onChange(next === "from"
+      ? { access_from: value || "", access_until: "" }
+      : { access_until: value || "", access_from: "" });
+  };
+
+  return (
+    <label className="block min-w-0">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-[10px] text-ink-4 font-mono-x uppercase tracking-[0.2em]">Access</span>
+        <div className="flex border border-ink/20" data-testid={`wave-access-mode-${index}`}>
+          {["until", "from"].map((m) => (
+            <button key={m} type="button" onClick={() => switchTo(m)}
+                    data-testid={`wave-access-${m}-${index}`}
+                    aria-pressed={mode === m}
+                    className={`px-2 py-0.5 font-mono-x uppercase tracking-[0.2em] text-[10px] ${
+                      mode === m ? "bg-ink text-page" : "text-ink-4 hover:text-ink"}`}>
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+      <DateTimePicker
+        value={value || ""}
+        placeholder="No limit"
+        onChange={(v) => onChange(mode === "from"
+          ? { access_from: v, access_until: "" }
+          : { access_until: v, access_from: "" })} />
+    </label>
+  );
+}
+
 function EventForm({ form, setForm, onSave, onClose }) {
   const setF = (k, v) => setForm({ ...form, [k]: v });
   const setWave = (i, k, v) => { const w = [...form.waves]; w[i] = { ...w[i], [k]: v }; setForm({...form, waves: w}); };
+  /* Several keys at once. The access toggle has to clear one end as it sets the other,
+     and two setWave calls off the same `form` would leave only the second. */
+  const setWaveFields = (i, patch) => {
+    const w = [...form.waves]; w[i] = { ...w[i], ...patch }; setForm({ ...form, waves: w });
+  };
+
+  /* Ends, Doors and each tier's sale end are guesses made from Starts, and they follow
+   * it until somebody edits them by hand. After that they are that person's answer and
+   * are left alone, even if Starts moves again — the alternative is a form that
+   * overwrites a deliberate 02:00 curfew the moment the date shifts by a day.
+   *
+   * Editing an existing event marks nothing as touched, but nothing is derived either:
+   * a saved event already has all three, so there is no blank for a guess to fill. */
+  const [touched, setTouched] = useState(() => new Set());
+  const touch = (path) => setTouched((t) => new Set(t).add(path));
+  const held = (path, value) => touched.has(path) || Boolean(value);
+
+  /* Changing when the night starts re-derives everything still following it, in ONE
+   * state update — three sequential setForm calls off the same `form` would each
+   * overwrite the last, and only the final field would survive. */
+  const setStartsAt = (v) => {
+    setForm((f) => {
+      const next = { ...f, starts_at: v };
+      if (!held("ends_at", f.ends_at)) next.ends_at = nextMorningAt6(v);
+      if (!held("doors_open_at", f.doors_open_at)) next.doors_open_at = doorsFrom(v);
+      next.waves = (f.waves || []).map((w, i) =>
+        held(`wave.${i}.ends_at`, null) ? w : { ...w, ends_at: dayBefore(v) || w.ends_at });
+      return next;
+    });
+  };
+
+  const startsInPast = isPast(form.starts_at);
+
+  /* A past date is allowed — an event may be entered after the fact, for the archive or
+   * to sell nothing at all. It is confirmed rather than refused, and only when it is
+   * about to become real: warning on every keystroke would train the editor to ignore
+   * the one that matters. */
+  const saveWithPastCheck = () => {
+    if (startsInPast &&
+        !window.confirm("This event starts in the past. It will show as already finished. Save anyway?")) return;
+    onSave();
+  };
   const descRef = useRef(null);
   return (
     <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4">
@@ -497,7 +591,7 @@ function EventForm({ form, setForm, onSave, onClose }) {
         <div className="shrink-0 flex flex-wrap gap-3 justify-between items-center hairline-b px-6 py-4">
           <div className="font-display text-2xl uppercase font-bold">{form.event_id ? "Edit" : "New"} Event</div>
           <div className="flex gap-2">
-            <button onClick={onSave} data-testid="save-event-btn" className="btn-accent">SAVE</button>
+            <button onClick={saveWithPastCheck} data-testid="save-event-btn" className="btn-accent">SAVE</button>
             <button onClick={onClose} data-testid="close-event-btn" className="btn-primary">CLOSE</button>
           </div>
         </div>
@@ -519,10 +613,19 @@ function EventForm({ form, setForm, onSave, onClose }) {
               crossing rows while the two-column grid put Doors beside Max per user,
               which has nothing to do with when the night runs. Stacks on a phone. */}
           <div className="col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Starts</div><DateTimePicker value={form.starts_at} onChange={(v) => setF("starts_at", v)} /></label>
-            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Ends</div><DateTimePicker value={form.ends_at} onChange={(v) => setF("ends_at", v)} /></label>
-            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Doors</div><DateTimePicker value={form.doors_open_at} onChange={(v) => setF("doors_open_at", v)} /></label>
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Starts</div><DateTimePicker value={form.starts_at} onChange={setStartsAt} /></label>
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Ends</div><DateTimePicker value={form.ends_at} onChange={(v) => { touch("ends_at"); setF("ends_at", v); }} /></label>
+            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Doors</div><DateTimePicker value={form.doors_open_at} onChange={(v) => { touch("doors_open_at"); setF("doors_open_at", v); }} /></label>
           </div>
+          {/* Said out loud as soon as the date is set, not held back until save — an
+              editor who meant to type 2027 should find out while they are still looking
+              at the field they mistyped. */}
+          {startsInPast && (
+            <div className="col-span-2 border border-brand/40 text-brand px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em]"
+                 data-testid="event-past-warning">
+              This event starts in the past — it will show as already finished.
+            </div>
+          )}
           {/* The two selling rules, on the line below. */}
           <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Max per user</div><input type="number" value={form.max_tickets_per_user} onChange={(e) => setF("max_tickets_per_user", Number(e.target.value))} className="input-x w-full" /></label>
@@ -540,16 +643,24 @@ function EventForm({ form, setForm, onSave, onClose }) {
         <div className="mt-4 space-y-4">
           {form.waves.map((w, i) => (
             <div key={w.wave_id || w._key || `new-${i}`} className="border border-ink/15 bg-ink/[0.02] p-4" data-testid={`wave-row-${i}`}>
+              {/* The id took the badge's place. The badge showed the early_bird/general/vip
+                  dropdown's value, and that dropdown is gone: it decided nothing a buyer
+                  could see, while the running order it did not control was the thing
+                  editors actually wanted to change. */}
               <div className="flex flex-wrap items-center gap-3 pb-3 hairline-b">
-                <span className={`shrink-0 px-2 py-1 border font-mono-x uppercase tracking-[0.2em] text-[10px] ${TIER_BADGE[w.tier] || TIER_BADGE.general}`}>
-                  {TIER_LABEL[w.tier] || w.tier}
-                </span>
-                <input placeholder="Tier name" value={w.name} onChange={(e) => setWave(i, "name", e.target.value)} className="input-x flex-1 min-w-[8rem] font-display uppercase font-bold" />
-                <select value={w.tier} onChange={(e) => setWave(i, "tier", e.target.value)} className="input-x shrink-0 w-auto">
-                  <option value="early_bird">Early Bird</option>
-                  <option value="general">General</option>
-                  <option value="vip">VIP</option>
-                </select>
+                <label className="shrink-0">
+                  <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier id</div>
+                  <input type="number" min="1" step="1" value={w.tier_id ?? ""}
+                         onChange={(e) => setWave(i, "tier_id", e.target.value === "" ? null : Number(e.target.value))}
+                         data-testid={`wave-tier-id-${i}`}
+                         className="input-x w-20 font-mono-x" />
+                </label>
+                <label className="flex-1 min-w-[8rem]">
+                  <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier name</div>
+                  <input placeholder="Tier name" value={w.name} onChange={(e) => setWave(i, "name", e.target.value)}
+                         data-testid={`wave-name-${i}`}
+                         className="input-x w-full font-display uppercase font-bold" />
+                </label>
               </div>
               {/* Two rows rather than one four-column flow: what the tier costs, then when
                   it is sellable and usable. In one grid the three dates wrapped wherever
@@ -563,13 +674,24 @@ function EventForm({ form, setForm, onSave, onClose }) {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <Field label="Sale starts"><DateTimePicker value={w.starts_at} onChange={(v) => setWave(i, "starts_at", v)} /></Field>
-                  <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => setWave(i, "ends_at", v)} /></Field>
-                  <Field label="Access until"><DateTimePicker value={w.access_until} onChange={(v) => setWave(i, "access_until", v)} /></Field>
+                  <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => { touch(`wave.${i}.ends_at`); setWave(i, "ends_at", v); }} /></Field>
+                  <AccessWindow wave={w} onChange={(patch) => setWaveFields(i, patch)} index={i} />
                 </div>
               </div>
             </div>
           ))}
-          <button onClick={() => setForm({...form, waves: [...form.waves, { _key: `k-${Date.now()}-${Math.random()}`, name: "NEW", price_ron: 100, capacity: 50, starts_at: new Date().toISOString(), ends_at: new Date(Date.now()+30*864e5).toISOString(), tier: "general", access_until: "" }]})} className="btn-primary">+ Add tier</button>
+          {/* Numbered one past the highest already there, so a new tier lands at the
+              bottom of the running order instead of tying with an existing one. Sale
+              ends the day before the event; with no date set yet it stays blank and
+              fills itself in when Starts is. */}
+          <button data-testid="add-tier" onClick={() => setForm({...form, waves: [...form.waves, {
+                    _key: `k-${Date.now()}-${Math.random()}`,
+                    tier_id: Math.max(0, ...form.waves.map((w) => Number(w.tier_id) || 0)) + 1,
+                    name: "NEW", price_ron: 100, capacity: 50,
+                    starts_at: new Date().toISOString(),
+                    ends_at: dayBefore(form.starts_at),
+                    access_until: "", access_from: "",
+                  }]})} className="btn-primary">+ Add tier</button>
         </div>
         <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Albums</div>
         <div className="mt-3">
@@ -994,7 +1116,6 @@ function Artists() {
   const [form, setForm] = useState(null);
   const [disciplines, setDisciplines] = useState([]);
   const [albums, setAlbums] = useState([]);
-  const [projects, setProjects] = useState([]);
   const load = () => http.get("/admin/artists").then((r) => setItems(r.data));
   useEffect(() => {
     load();
@@ -1002,10 +1123,9 @@ function Artists() {
     // reopening the form doesn't re-request a list that has not changed.
     http.get("/admin/artists/disciplines").then((r) => setDisciplines(r.data.disciplines)).catch(() => {});
     http.get("/admin/albums").then((r) => setAlbums(r.data)).catch(() => {});
-    http.get("/admin/projects").then((r) => setProjects(r.data)).catch(() => {});
   }, []);
   const emptyForm = () => ({ name: "", slug: "", bio: "", image_url: "", links: {},
-                             disciplines: [], album_ids: [], project_ids: [],
+                             disciplines: [], album_ids: [],
                              other_project_name: "", other_project_url: "" });
   const save = async () => {
     try {
@@ -1018,8 +1138,6 @@ function Artists() {
         await http.post("/admin/artists", body);
       }
       setForm(null); load();
-      // A project link is stored on the project, so the picker's own list is now stale.
-      http.get("/admin/projects").then((r) => setProjects(r.data)).catch(() => {});
       toast.success("Saved");
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
   };
@@ -1047,12 +1165,12 @@ function Artists() {
         ))}
       </div>
       {form && <ArtistForm form={form} setForm={setForm} onSave={save} onClose={() => setForm(null)}
-                           disciplines={disciplines} albums={albums} projects={projects} />}
+                           disciplines={disciplines} albums={albums} />}
     </div>
   );
 }
 
-function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums, projects }) {
+function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums }) {
   const bioRef = useRef(null);
   const setF = (k, v) => setForm({ ...form, [k]: v });
   const setLink = (k, v) => setForm({ ...form, links: { ...(form.links || {}), [k]: v } });
@@ -1099,12 +1217,6 @@ function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums, proje
             </div>
           </div>
           <div className="col-span-2">
-            <MultiSelect label="Supersanity projects" allLabel="None chosen" testId="artist-projects"
-                         options={projects.map((p) => ({ value: p.project_id, label: p.title }))}
-                         selected={form.project_ids || []}
-                         onChange={setList("project_ids")} />
-          </div>
-          <div className="col-span-2">
             <MultiSelect label="Galleries (albums this artist appears in)"
                          allLabel="None chosen" testId="artist-albums"
                          options={albums.map((a) => ({
@@ -1143,98 +1255,6 @@ function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums, proje
   );
 }
 
-const EMPTY_PROJECT = { title: "", slug: "", description: "", year: new Date().getFullYear(),
-                        image_url: "", artist_ids: [], is_past: true };
-
-/**
- * Projects were create-and-delete only, so an artist list set at creation could never be
- * corrected — and the artist<->project link is the one thing that most needs to change.
- * The form now doubles as the editor, the same way the artist form does.
- */
-function Projects() {
-  const [items, setItems] = useState([]);
-  const [artists, setArtists] = useState([]);
-  const [f, setF] = useState(EMPTY_PROJECT);
-  const descRef = useRef(null);
-  const load = () => http.get("/admin/projects").then((r) => setItems(r.data));
-  useEffect(() => {
-    load();
-    http.get("/admin/artists").then((r) => setArtists(r.data)).catch(() => {});
-  }, []);
-  const save = async () => {
-    try {
-      if (f.project_id) {
-        const body = { ...f };
-        delete body.project_id; delete body.created_at;
-        await http.patch(`/admin/projects/${f.project_id}`, body);
-      } else {
-        await http.post("/admin/projects", f);
-      }
-      setF(EMPTY_PROJECT); load(); toast.success("Saved");
-    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
-  };
-  const del = async (id) => {
-    if (!confirm("Delete?")) return;
-    await http.delete(`/admin/projects/${id}`);
-    if (f.project_id === id) setF(EMPTY_PROJECT);
-    load();
-  };
-  const nameOf = (id) => artists.find((a) => a.artist_id === id)?.name || id;
-  return (
-    <div>
-      <div className="border border-ink/10 p-4 grid grid-cols-2 gap-3" data-testid="project-form">
-        <div className="col-span-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
-          {f.project_id ? `Editing ${f.title}` : "New project"}
-        </div>
-        <input placeholder="Title" value={f.title} onChange={(e) => setF({...f, title: e.target.value})} className="input-x" />
-        <input placeholder="Slug" value={f.slug} onChange={(e) => setF({...f, slug: e.target.value})} className="input-x" />
-        <input type="number" placeholder="Year" value={f.year} onChange={(e) => setF({...f, year: Number(e.target.value)})} className="input-x" />
-        <div className="col-span-2">
-          <ImageField value={f.image_url} onChange={(v) => setF({...f, image_url: v})}
-                      label="Image" testId="project-image" />
-        </div>
-        <div className="col-span-2">
-          <FormatToolbar textareaRef={descRef} value={f.description} onChange={(v) => setF({...f, description: v})} />
-          <textarea ref={descRef} placeholder="Description" value={f.description} onChange={(e) => setF({...f, description: e.target.value})} className="input-x w-full" rows={2} />
-        </div>
-        <div className="col-span-2">
-          <MultiSelect label="Artists" allLabel="None chosen" testId="project-artists"
-                       options={artists.map((a) => ({ value: a.artist_id, label: a.name }))}
-                       selected={f.artist_ids || []}
-                       onChange={(next) => setF((cur) => ({
-                         ...cur,
-                         artist_ids: typeof next === "function" ? next(cur.artist_ids || []) : next,
-                       }))} />
-        </div>
-        <button onClick={save} className={f.project_id ? "btn-accent" : "btn-accent col-span-2"}>
-          {f.project_id ? "SAVE" : "ADD"}
-        </button>
-        {f.project_id && (
-          <button onClick={() => setF(EMPTY_PROJECT)} className="btn-primary">CANCEL</button>
-        )}
-      </div>
-      <div className="mt-4 space-y-2">
-        {items.map((p) => (
-          <div key={p.project_id} className="border border-ink/10 p-3 flex justify-between items-center">
-            <div>
-              <div className="font-display uppercase">{p.title} · <span className="text-ink-4 text-sm">{p.year}</span></div>
-              {(p.artist_ids || []).length > 0 && (
-                <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
-                  {p.artist_ids.map(nameOf).join(" · ")}
-                </div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setF({ ...EMPTY_PROJECT, ...p })} className="btn-primary text-xs">Edit</button>
-              <button onClick={() => del(p.project_id)} className="btn-primary text-xs">Del</button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function Discounts() {
   const [items, setItems] = useState([]);
   const [f, setF] = useState({ code: "", percent_off: 10, max_uses: 0, expires_at: "" });
@@ -1247,17 +1267,41 @@ function Discounts() {
         <input placeholder="CODE" value={f.code} onChange={(e) => setF({...f, code: e.target.value.toUpperCase()})} className="input-x uppercase" />
         <input type="number" placeholder="% off" value={f.percent_off} onChange={(e) => setF({...f, percent_off: Number(e.target.value)})} className="input-x" />
         <input type="number" placeholder="Max uses (0=∞)" value={f.max_uses} onChange={(e) => setF({...f, max_uses: Number(e.target.value)})} className="input-x" />
-        <input placeholder="Expires ISO" value={f.expires_at} onChange={(e) => setF({...f, expires_at: e.target.value})} className="input-x" />
+        {/* Was a bare text box labelled "Expires ISO", which asked an editor to type a
+            timestamp by hand and to know the format. A discount expires at a moment, so
+            this is the full picker rather than the date-only one. */}
+        <DateTimePicker value={f.expires_at} placeholder="Never expires"
+                        onChange={(v) => setF({ ...f, expires_at: v })} />
         <button onClick={save} className="btn-accent col-span-4">ADD</button>
       </div>
-      <div className="mt-4 space-y-2">
-        {items.map((d) => (
-          <div key={d.discount_id} className="border border-ink/10 p-3 flex justify-between font-mono-x text-sm">
-            <span>{d.code} · {d.percent_off}%</span>
-            <span className="text-ink-4">uses {d.uses}/{d.max_uses || "∞"}</span>
-            <button onClick={async () => { await http.delete(`/admin/discounts/${d.discount_id}`); load(); }} className="btn-primary text-xs">Del</button>
-          </div>
-        ))}
+      {/* A run of unlabelled values — "SAVE20 · 15%", "uses 3/100" — reads fine to
+          whoever built it and to nobody else. The headings say which number is which. */}
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full border-collapse" data-testid="discounts-table">
+          <thead>
+            <tr className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 text-left">
+              <th className="hairline-b py-2 pr-3 font-normal">Code</th>
+              <th className="hairline-b py-2 pr-3 font-normal">% off</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Uses</th>
+              <th className="hairline-b py-2 font-normal sr-only">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((d) => (
+              <tr key={d.discount_id} className="font-mono-x text-sm" data-testid={`discount-row-${d.code}`}>
+                <td className="hairline-b py-3 pr-3 uppercase">{d.code}</td>
+                <td className="hairline-b py-3 pr-3">{d.percent_off}%</td>
+                <td className="hairline-b py-3 pr-3 text-ink-4">{d.uses}/{d.max_uses || "∞"}</td>
+                <td className="hairline-b py-3 text-right">
+                  <button onClick={async () => { await http.delete(`/admin/discounts/${d.discount_id}`); load(); }} className="btn-primary text-xs">Del</button>
+                </td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr><td colSpan={4} className="py-4 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">No discount codes yet</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -1279,18 +1323,44 @@ function Invites() {
         <input type="number" placeholder="Cap" value={f.capacity} onChange={(e) => setF({...f, capacity: Number(e.target.value)})} className="input-x" />
         <button onClick={save} className="btn-accent col-span-4">ADD</button>
       </div>
-      <div className="mt-4 space-y-2">
-        {items.map((s) => {
-          const ev = events.find((e) => e.event_id === s.event_id);
-          const url = ev ? `${window.location.origin}/events/${ev.slug}?invite=${s.token}` : `?invite=${s.token}`;
-          return (
-            <div key={s.link_id} className="border border-ink/10 p-3 font-mono-x text-xs space-y-1">
-              <div className="uppercase tracking-[0.2em] text-ink-4">{s.label} · {ron(s.price_ron)} · {s.used}/{s.capacity} used</div>
-              <div className="break-all"><Link to={url.replace(window.location.origin, "")} className="text-ink underline">{url}</Link></div>
-              <button onClick={async () => { await http.delete(`/admin/special-links/${s.link_id}`); load(); }} className="btn-primary text-xs mt-1">Del</button>
-            </div>
-          );
-        })}
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full border-collapse" data-testid="invites-table">
+          <thead>
+            <tr className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 text-left">
+              <th className="hairline-b py-2 pr-3 font-normal">Label</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Event</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Price</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Used</th>
+              <th className="hairline-b py-2 pr-3 font-normal">Link</th>
+              <th className="hairline-b py-2 font-normal sr-only">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((s) => {
+              const ev = events.find((e) => e.event_id === s.event_id);
+              const url = ev ? `${window.location.origin}/events/${ev.slug}?invite=${s.token}` : `?invite=${s.token}`;
+              return (
+                <tr key={s.link_id} className="font-mono-x text-xs" data-testid={`invite-row-${s.link_id}`}>
+                  <td className="hairline-b py-3 pr-3 uppercase tracking-[0.2em]">{s.label}</td>
+                  {/* An invite whose event was deleted still has a row; saying so beats
+                      an empty cell that reads like a rendering fault. */}
+                  <td className="hairline-b py-3 pr-3">{ev ? ev.title : <span className="text-ink-4">— deleted —</span>}</td>
+                  <td className="hairline-b py-3 pr-3">{ron(s.price_ron)}</td>
+                  <td className="hairline-b py-3 pr-3 text-ink-4">{s.used}/{s.capacity}</td>
+                  <td className="hairline-b py-3 pr-3 max-w-[22rem]">
+                    <Link to={url.replace(window.location.origin, "")} className="text-ink underline break-all">{url}</Link>
+                  </td>
+                  <td className="hairline-b py-3 text-right">
+                    <button onClick={async () => { await http.delete(`/admin/special-links/${s.link_id}`); load(); }} className="btn-primary text-xs">Del</button>
+                  </td>
+                </tr>
+              );
+            })}
+            {items.length === 0 && (
+              <tr><td colSpan={6} className="py-4 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">No invite links yet</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -1439,13 +1509,12 @@ function AlbumDetails({ album, events, onSaved, onDeleted }) {
           </select>
         </Field>
         {/* A day, not a moment — an album is filed under the date it documents, and the
-            Gallery grid orders newest first by this. A native date input rather than the
-            DateTimePicker: there is no time to set, and the browser's own picker already
-            navigates years and months. Left blank, the album falls back to the day it
-            was created. */}
+            Gallery grid orders newest first by this. The picker's date-only mode: same
+            calendar as every other date in the admin, minus a time nobody sets here.
+            Left blank, the album falls back to the day it was created. */}
         <Field label="Date">
-          <input type="date" value={draft.date || ""} onChange={(e) => set("date", e.target.value || null)}
-                 className="input-x w-full" data-testid="album-date" />
+          <DateTimePicker mode="date" value={draft.date || ""} placeholder="No date"
+                          onChange={(v) => set("date", v || null)} />
         </Field>
       </div>
       <div className="flex flex-wrap items-center gap-3 mt-3">

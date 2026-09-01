@@ -124,7 +124,7 @@ describe("artist social links", () => {
   const withLinks = (links) => {
     http.get.mockResolvedValue({ data: {
       artist_id: "a1", name: "VOID", slug: "void", bio: "", image_url: "",
-      disciplines: [], albums: [], projects: [], links,
+      disciplines: [], albums: [], links,
     }});
     return render(
       <MemoryRouter initialEntries={["/artists/void"]}>

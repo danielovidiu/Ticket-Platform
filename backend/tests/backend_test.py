@@ -425,17 +425,6 @@ def test_admin_artists_crud(admin_headers):
     assert r3.status_code == 200
 
 
-def test_admin_projects_crud(admin_headers):
-    body = {"title": "TEST_Project", "slug": f"tp-{uuid.uuid4().hex[:6]}", "description": "d"}
-    r = requests.post(f"{API}/admin/projects", json=body, headers=admin_headers, timeout=15)
-    assert r.status_code == 200
-    pid = r.json()["project_id"]
-    r2 = requests.get(f"{API}/admin/projects", headers=admin_headers, timeout=15)
-    assert any(x["project_id"] == pid for x in r2.json())
-    r3 = requests.delete(f"{API}/admin/projects/{pid}", headers=admin_headers, timeout=15)
-    assert r3.status_code == 200
-
-
 def test_admin_discounts_crud(admin_headers):
     body = {"code": f"TEST{uuid.uuid4().hex[:4].upper()}", "percent_off": 15, "max_uses": 5}
     r = requests.post(f"{API}/admin/discounts", json=body, headers=admin_headers, timeout=15)

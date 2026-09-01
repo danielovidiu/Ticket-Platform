@@ -218,14 +218,23 @@ class TestWaveStockStaysTheServersNumber:
         assert vip["available"] == 20, "a new wave opens with exactly its capacity"
 
     def test_wave_defaults_survive_the_patch(self, admin_headers, event):
-        """`tier` and `access_until` have model defaults; `exclude_unset` must not eat them."""
-        wave = {k: v for k, v in event["waves"][0].items() if k not in ("tier", "access_until")}
+        """The wave model's defaults have to materialise; `exclude_unset` must not eat them.
+
+        What the defaults ARE has moved once already — `tier` defaulted to "general"
+        while the editor had a dropdown to choose it with. That dropdown is gone, so an
+        omitted tier now means "no tier" and the wave's own name stands for the type in
+        the exports and the serial. The invariant under test is unchanged: an omitted
+        key comes back as its default, not as a missing field.
+        """
+        dropped = ("tier", "access_until", "access_from")
+        wave = {k: v for k, v in event["waves"][0].items() if k not in dropped}
         r = _patch(admin_headers, event["event_id"], {"waves": [wave]})
         assert r.status_code == 200, r.text
 
         stored_wave = _stored(event["event_id"])["waves"][0]
-        assert stored_wave["tier"] == "general"
+        assert stored_wave["tier"] == ""
         assert stored_wave["access_until"] is None
+        assert stored_wave["access_from"] is None
 
 
 class TestArtistPatch:

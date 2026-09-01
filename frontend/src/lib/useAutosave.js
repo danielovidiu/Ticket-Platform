@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AUTOSAVE_INTERVAL_MS, useAutosaveEnabled, useRegisteredSaver } from "./autosavePolicy";
 
 /**
  * The save policy the CMS uses everywhere something is edited.
@@ -8,12 +9,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * the theme fired one per change, which for a colour picker is one per pixel dragged.
  * Neither debounced, neither ordered its writes, and neither could report a failure.
  *
+ * When it writes is not its own decision any more — that is one policy for the whole
+ * CMS, and it lives in autosavePolicy.js. This hook is how a surface obeys it.
+ *
  * Four properties, and each exists because its absence was a bug:
  *
- *   DEBOUNCE      — wait for a pause before writing, so typing is not a request per key.
- *   CEILING       — but never wait longer than `maxWait`. A plain debounce resets on
- *                   every keystroke, so someone typing steadily for two minutes had
- *                   nothing persisted for two minutes.
+ *   INTERVAL      — with autosave on, the first edit of a run arms a timer and later
+ *                   edits do not push it back. A debounce that resets on every keystroke
+ *                   never fires while somebody is typing steadily.
+ *   OFF IS OFF    — with autosave off, nothing is scheduled. The work stays dirty, says
+ *                   so, and is written when a person asks.
  *   ONE IN FLIGHT — a save requested while one is running is queued and re-run with the
  *                   newest value afterwards. Without this a slow request can land after
  *                   a newer one and resurrect stale content.
@@ -24,11 +29,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * schedule time, so a save always writes the newest state rather than the snapshot that
  * happened to be current when the timer was armed.
  */
-export function useAutosave({ getPending, save, delay = 1200, maxWait = 5000 }) {
+export function useAutosave({ getPending, save, intervalMs = AUTOSAVE_INTERVAL_MS }) {
   const [state, setState] = useState("idle"); // idle | saving | saved | error
   const [savedAt, setSavedAt] = useState(null);
   const [dirty, setDirty] = useState(false);
-  const [revision, setRevision] = useState(0);
+  // Bumped when a save finishes with work still outstanding. `dirty` alone cannot
+  // re-arm the interval: it was already true before the save and is still true after,
+  // so the effect's dependencies never change and no new timer is ever set. The symptom
+  // is the last thing you typed never being written at all.
+  const [resume, setResume] = useState(0);
 
   const savedRef = useRef(undefined);   // what the server last acknowledged
   const dirtySinceRef = useRef(0);
@@ -56,21 +65,35 @@ export function useAutosave({ getPending, save, delay = 1200, maxWait = 5000 }) 
         setDirty(false);
         dirtySinceRef.current = 0;
       }
-    } catch {
+    } catch (err) {
       // Left dirty on purpose: the next edit re-arms the timer, so this retries on its
       // own, and the status says so meanwhile.
+      //
+      // The reason is logged in development. A bare `catch {}` here cost real time once:
+      // the request was answering 200 and the editor was reporting a failure, and with
+      // the exception swallowed there was nothing to say which half was lying.
+      if (import.meta.env?.DEV) console.error("[autosave] save failed", err);
       setState("error");
     } finally {
       inFlightRef.current = false;
-      if (queuedRef.current) { queuedRef.current = false; flush(); }
+      if (queuedRef.current) {
+        queuedRef.current = false;
+        flush();
+      } else {
+        // Hand back to the interval rather than writing again straight away: someone
+        // typing without pause would otherwise get one request per round trip, which is
+        // the request-per-keystroke problem wearing a different hat.
+        setResume((r) => r + 1);
+      }
     }
   }, []);
 
   /** Call on every edit. Marks dirty and re-arms the timer. */
   const bump = useCallback(() => {
     if (!dirtySinceRef.current) dirtySinceRef.current = Date.now();
+    // No revision counter. It existed to force a render per edit; nothing reads it now,
+    // and a render inside the typing loop is exactly the lag being removed.
     setDirty(true);
-    setRevision((r) => r + 1);
   }, []);
 
   /** Adopt a value straight from the server: nothing pending, nothing to save. */
@@ -81,13 +104,30 @@ export function useAutosave({ getPending, save, delay = 1200, maxWait = 5000 }) 
     setState("idle");
   }, []);
 
+  const autosave = useAutosaveEnabled();
+
+  /* The interval, and the reason `revision` is deliberately NOT a dependency.
+   *
+   * Listing it would re-arm the timer on every keystroke, which is a debounce wearing an
+   * interval's clothes: someone typing steadily for a minute would push the deadline
+   * ahead of themselves the whole time and nothing would ever be written. Depending only
+   * on `dirty` means the clock starts at the first edit of a run and fires once, on the
+   * beat, no matter how much is typed in between.
+   *
+   * With autosave off nothing is armed at all. The work stays dirty and visible as such,
+   * and goes to the server when a person asks — "Save now", ⌘S, or the guard on the way
+   * out of the tab. */
   useEffect(() => {
-    if (!dirty) return undefined;
-    const elapsed = dirtySinceRef.current ? Date.now() - dirtySinceRef.current : 0;
-    const wait = Math.max(0, Math.min(delay, maxWait - elapsed));
-    const t = setTimeout(flush, wait);
+    if (!autosave || !dirty) return undefined;
+    const t = setTimeout(flush, intervalMs);
     return () => clearTimeout(t);
-  }, [revision, dirty, flush, delay, maxWait]);
+  }, [autosave, dirty, flush, intervalMs, resume]);
+
+  // Joining the register is what lets one Save button, one status line and one unsaved
+  // guard cover a surface without knowing it exists.
+  // The signal is what tells the toolbar this surface has work outstanding — `state` as
+  // well as `dirty`, so a failed save keeps "Save now" live rather than going quiet.
+  useRegisteredSaver({ flush, isDirty: () => dirty }, `${dirty}:${state}`);
 
   return { state, savedAt, dirty, bump, flush, reset };
 }

@@ -212,12 +212,21 @@ export function ScanResult({ result, onNext, onDeny, onAdmit }) {
 
   // A denial is not a bad ticket, so it gets its own verdict rather than reusing INVALID
   // — staff need to see that the decision they just made is the one that landed.
-  // An expired ticket is neither valid nor invalid until someone decides, so it gets a
-  // third colour rather than borrowing the red that means "turn this person away".
+  //
+  // A ticket outside its access window is red, the same red as INVALID: at a door, in
+  // the dark, the colour has one job — stop, look at this one. What separates the two is
+  // the headline and the fact that this screen asks a question instead of answering it.
   const tone = result.denied ? "bg-ink text-page"
     : result.valid ? "bg-ok text-page"
-    : result.needs_override ? "bg-ink-2 text-page"
     : "bg-brand text-ink";
+
+  // Which edge of the window was crossed. The server says; the door does not infer it
+  // from which timestamp happens to be present.
+  const early = result.edge === "early";
+  const boundary = early ? result.access_from : result.access_until;
+  const atTime = boundary
+    ? new Date(boundary).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+    : "";
 
   const confirmDeny = async () => {
     setBusy(true);
@@ -250,9 +259,13 @@ export function ScanResult({ result, onNext, onDeny, onAdmit }) {
       ) : result.needs_override ? (
         <>
           <Clock size={96} className="shrink-0" />
-          <div className="font-display text-5xl sm:text-7xl uppercase font-black tracking-tighter mt-4">LATE</div>
+          {/* Early and late send the guest to different places — one waits, the other
+              has missed it — so the screen says which rather than just "outside". */}
+          <div className="font-display text-5xl sm:text-7xl uppercase font-black tracking-tighter mt-4">
+            {early ? "TOO EARLY" : "TOO LATE"}
+          </div>
           <div className="font-mono-x uppercase mt-2 text-lg break-words max-w-full">
-            {result.wave_name || "This tier"} closed at {new Date(result.access_until).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+            {result.wave_name || "This tier"} {early ? "opens" : "closed"} at {atTime}
           </div>
           <div className="font-mono-x text-xs mt-2 opacity-80">TICKET IS OTHERWISE VALID — YOUR CALL</div>
         </>
