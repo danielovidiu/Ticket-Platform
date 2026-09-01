@@ -1351,6 +1351,15 @@ function AlbumDetails({ album, events, onSaved, onDeleted }) {
 
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
 
+  /** Linking an event offers its date, but only into an empty field — an album whose
+   * date has been set by hand keeps it, because the two are allowed to differ: photos
+   * from a three-day festival get filed under one day of it, not the day it opened. */
+  const linkEvent = (event_id) => setDraft((d) => {
+    const ev = events.find((e) => e.event_id === event_id);
+    const borrowed = ev?.starts_at ? String(ev.starts_at).slice(0, 10) : "";
+    return { ...d, event_id, date: d.date || borrowed || null };
+  });
+
   const save = async () => {
     setBusy(true);
     try {
@@ -1359,6 +1368,7 @@ function AlbumDetails({ album, events, onSaved, onDeleted }) {
         slug: draft.slug,
         description: draft.description || "",
         event_id: draft.event_id || null,
+        date: draft.date || null,
       });
       setSlugTouched(false);
       onSaved(data);
@@ -1418,15 +1428,26 @@ function AlbumDetails({ album, events, onSaved, onDeleted }) {
         <input value={draft.description || ""} onChange={(e) => set("description", e.target.value)}
                className="input-x w-full" data-testid="album-description" />
       </Field>
-      {/* An album needs no event. Linking one makes it show on that event's page as
-          well as keeping its own tile on the Gallery page. */}
-      <Field label="Linked event (optional)" className="mt-3">
-        <select value={draft.event_id || ""} onChange={(e) => set("event_id", e.target.value || null)}
-                className="input-x w-full" data-testid="album-event">
-          <option value="">Not linked to an event</option>
-          {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
-        </select>
-      </Field>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+        {/* An album needs no event. Linking one makes it show on that event's page as
+            well as keeping its own tile on the Gallery page. */}
+        <Field label="Linked event (optional)">
+          <select value={draft.event_id || ""} onChange={(e) => linkEvent(e.target.value || null)}
+                  className="input-x w-full" data-testid="album-event">
+            <option value="">Not linked to an event</option>
+            {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.title}</option>)}
+          </select>
+        </Field>
+        {/* A day, not a moment — an album is filed under the date it documents, and the
+            Gallery grid orders newest first by this. A native date input rather than the
+            DateTimePicker: there is no time to set, and the browser's own picker already
+            navigates years and months. Left blank, the album falls back to the day it
+            was created. */}
+        <Field label="Date">
+          <input type="date" value={draft.date || ""} onChange={(e) => set("date", e.target.value || null)}
+                 className="input-x w-full" data-testid="album-date" />
+        </Field>
+      </div>
       <div className="flex flex-wrap items-center gap-3 mt-3">
         <button onClick={save} disabled={busy} className="btn-accent disabled:opacity-40" data-testid="album-save">
           {busy ? "…" : "SAVE DETAILS"}

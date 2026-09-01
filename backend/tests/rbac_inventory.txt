@@ -57,7 +57,6 @@ admin  GET    /api/admin/events/{event_id}/notices
 admin  POST   /api/admin/events/{event_id}/notify
 admin  GET    /api/admin/albums
 admin  POST   /api/admin/albums
-admin  PATCH  /api/admin/albums/reorder
 admin  DELETE /api/admin/albums/{album_id}
 admin  PATCH  /api/admin/albums/{album_id}
 admin  GET    /api/admin/gallery
