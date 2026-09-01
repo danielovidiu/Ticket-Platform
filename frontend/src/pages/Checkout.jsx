@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { http } from "../api";
+import { ron } from "../lib/money";
 import { toast } from "sonner";
 
 function Countdown({ expiresAt, onExpire }) {
@@ -82,19 +83,19 @@ export default function Checkout() {
 
         <div className="mt-6 space-y-3 font-mono-x text-sm">
           <div className="flex justify-between"><span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Tickets</span><span>{res.quantity}</span></div>
-          <div className="flex justify-between"><span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Unit</span><span>{res.unit_price_ron.toFixed(2)} RON</span></div>
-          <div className="flex justify-between"><span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Subtotal</span><span>{res.subtotal_ron.toFixed(2)} RON</span></div>
+          <div className="flex justify-between"><span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Unit</span><span>{ron(res.unit_price_ron)}</span></div>
+          <div className="flex justify-between"><span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Subtotal</span><span>{ron(res.subtotal_ron)}</span></div>
           {res.discount_amount_ron > 0 && (
             <div className="flex justify-between text-ok">
               <span className="uppercase tracking-[0.2em] text-xs">Discount ({res.discount_percent}%)</span>
-              <span>-{res.discount_amount_ron.toFixed(2)} RON</span>
+              <span>-{ron(res.discount_amount_ron)}</span>
             </div>
           )}
         </div>
 
         <div className="hairline mt-6 pt-6 flex justify-between items-center">
           <span className="font-mono-x uppercase text-xs tracking-[0.2em] text-ink-3">Total</span>
-          <span className="font-display text-4xl font-black">{res.total_ron.toFixed(2)} RON</span>
+          <span className="font-display text-4xl font-black">{ron(res.total_ron)}</span>
         </div>
 
         {/* A dead hold swaps the action out rather than greying it out. The old button

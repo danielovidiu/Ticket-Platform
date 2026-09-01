@@ -144,6 +144,25 @@ _NOTICE_HEADLINES = {
 }
 
 
+def _money(value) -> str:
+    """An amount as a reader sees it: no trailing ".00", but decimals kept when the
+    amount genuinely has them.
+
+    Matches `frontend/src/lib/money.js`, because a buyer comparing the order email
+    against the page they bought from should not find two different numbers.
+
+    NOT used by the invoice PDF or the CSV export. An invoice is a fiscal document and a
+    CSV is fed to a spreadsheet; both want one fixed shape, and the invoice's net and VAT
+    lines have to carry two decimals regardless — 100 gross at 21% is 82.64 + 17.36, and
+    rounding either stops them summing to the total.
+    """
+    try:
+        n = round(float(value or 0), 2)
+    except (TypeError, ValueError):
+        return "0"
+    return str(int(n)) if n == int(n) else f"{n:.2f}"
+
+
 def _esc(v) -> str:
     """Escape anything bound for the notice's HTML.
 
@@ -232,7 +251,7 @@ def _order_rows(order):
         f'<tr><td style="padding:4px 0">{i.get("name","")}'
         + (f' · {i["size"]}' if i.get("size") else "")
         + f'</td><td style="text-align:center">{i.get("quantity",1)}</td>'
-        f'<td style="text-align:right">{float(i.get("line_total_ron",0)):.2f} RON</td></tr>'
+        f'<td style="text-align:right">{_money(i.get("line_total_ron"))} RON</td></tr>'
         for i in order.get("items", [])
     )
 
@@ -251,11 +270,11 @@ def _tpl_shop_order_paid(p):
         f'<p>We have your payment. You will get another email when it ships.</p>'
         f'<table style="width:100%;border-collapse:collapse;font-size:14px">{_order_rows(o)}</table>'
         f'<hr style="border:none;border-top:1px solid #eee;margin:12px 0">'
-        f'<p style="font-size:14px">Subtotal: {float(o.get("subtotal_ron", 0)):.2f} RON<br>'
-        f'Shipping ({o.get("shipping_zone", "")}): {float(o.get("shipping_ron", 0)):.2f} RON<br>'
-        f'<strong>Total: {float(o.get("total_ron", 0)):.2f} RON</strong><br>'
+        f'<p style="font-size:14px">Subtotal: {_money(o.get("subtotal_ron"))} RON<br>'
+        f'Shipping ({o.get("shipping_zone", "")}): {_money(o.get("shipping_ron"))} RON<br>'
+        f'<strong>Total: {_money(o.get("total_ron"))} RON</strong><br>'
         f'<span style="color:#888">Includes VAT ({int(float(o.get("vat_rate", 0.19)) * 100)}%): '
-        f'{float(o.get("vat_amount_ron", 0)):.2f} RON</span></p>'
+        f'{_money(o.get("vat_amount_ron"))} RON</span></p>'
         f'<p style="font-size:13px">Shipping to: {ship_to}</p>'
         + (f'<p style="font-size:12px;color:#888">Invoice #{o["invoice_no"]} is on your orders page.</p>'
            if o.get("invoice_no") else "")

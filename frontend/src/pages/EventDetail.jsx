@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
+import { ron } from "../lib/money";
 import { useAuth, startLogin } from "../auth";
 import { toast } from "sonner";
 import { Play } from "lucide-react";
@@ -96,7 +97,7 @@ function MobileBuyBar({ waveName, total, busy, onBuy }) {
             {waveName || "Tickets"}
           </div>
           <div className="font-display text-2xl font-bold leading-none mt-1 tabular-nums">
-            {total.toFixed(2)} RON
+            {ron(total)}
           </div>
         </div>
         <button onClick={onBuy} disabled={busy} data-testid="mobile-reserve-btn"
@@ -226,7 +227,7 @@ export default function EventDetail() {
 
           {special && (
             <div className="mt-4 border border-brand p-3 font-mono-x text-xs uppercase tracking-[0.2em] text-brand">
-              INVITE · {special.label} · {special.price_ron.toFixed(2)} RON
+              INVITE · {special.label} · {ron(special.price_ron)}
             </div>
           )}
 
@@ -259,7 +260,7 @@ export default function EventDetail() {
                               : "Available"}
                         </div>
                       </div>
-                      <div className="font-mono-x">{w.price_ron.toFixed(2)} RON</div>
+                      <div className="font-mono-x">{ron(w.price_ron)}</div>
                     </div>
                   </button>
                 ))}
@@ -283,11 +284,11 @@ export default function EventDetail() {
               <div className="mt-6 hairline pt-6">
                 <div className="flex justify-between font-mono-x text-sm">
                   <span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Subtotal</span>
-                  <span>{total.toFixed(2)} RON</span>
+                  <span>{ron(total)}</span>
                 </div>
                 <div className="flex justify-between mt-3 items-center">
                   <span className="font-mono-x uppercase text-xs tracking-[0.2em] text-ink-3">Total</span>
-                  <span className="font-display text-3xl font-bold">{total.toFixed(2)} RON</span>
+                  <span className="font-display text-3xl font-bold">{ron(total)}</span>
                 </div>
               </div>
 
