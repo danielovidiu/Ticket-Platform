@@ -7,11 +7,12 @@ import { ensureFontPreview } from "../lib/cms";
  * eighteen hundred names is a worse tool than a list of twenty good ones, and the
  * free-text row at the bottom of the panel still reaches anything Google serves.
  */
+/** A-Z. It is a menu to find a family in, not a ranking. */
 export const GOOGLE_SUGGESTIONS = [
-  "Clash Display", "Space Grotesk", "Inter", "Manrope", "Playfair Display",
-  "IBM Plex Mono", "JetBrains Mono", "Archivo", "Bebas Neue", "Anton",
-  "Syne", "Fraunces", "Rubik", "DM Sans", "Instrument Serif",
-  "Big Shoulders Display", "Unbounded", "Cormorant Garamond", "Public Sans", "Geist",
+  "Anton", "Archivo", "Bebas Neue", "Big Shoulders Display", "Clash Display",
+  "Cormorant Garamond", "DM Sans", "Fraunces", "Geist", "IBM Plex Mono",
+  "Instrument Serif", "Inter", "JetBrains Mono", "Manrope", "Playfair Display",
+  "Public Sans", "Rubik", "Space Grotesk", "Syne", "Unbounded",
 ];
 
 const slug = (s) => s.toLowerCase().replace(/\s+/g, "-");

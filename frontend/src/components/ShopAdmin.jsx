@@ -6,8 +6,10 @@ import { ron } from "../lib/cart";
 import ImageField from "./ImageField";
 
 const SIZES = ["XS", "S", "M", "L", "XL", "XXL", "ONE SIZE"];
-const GENDERS = ["unisex", "men", "women"];
-const CATEGORIES = ["apparel", "accessories", "print", "music"];
+// A-Z. SIZES above is deliberately NOT sorted: XS..XXL is a scale, and alphabetical
+// would render it L, M, ONE SIZE, S, XL, XS, XXL.
+const GENDERS = ["men", "unisex", "women"];
+const CATEGORIES = ["accessories", "apparel", "music", "print"];
 
 // Only these can be set by hand — `paid` comes from a confirmed payment and nothing else.
 const NEXT_STATUS = { paid: ["shipped", "cancelled"], shipped: ["delivered"] };

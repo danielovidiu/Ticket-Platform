@@ -120,12 +120,35 @@ class TestDisciplineVocabulary:
         assert r.status_code == 200, r.text
         assert "DJ" in r.json()["disciplines"]
 
-    def test_replacing_it_keeps_order_and_drops_blanks_and_duplicates(self, admin):
+    def test_replacing_it_sorts_and_drops_blanks_and_duplicates(self, admin):
+        """A-Z, not the order they were typed. This is a list to FIND a discipline in and
+        it is read in three places — the manager, the artist form and the artist page —
+        so an order that depends on the sequence someone added them in is an order none
+        of the three can explain.
+
+        The previous fixture here was ["Aerial", "DJ"], which is alphabetical by accident:
+        it went on passing after the behaviour changed while claiming to pin the opposite.
+        """
         r = requests.put(f"{API}/admin/artists/disciplines",
-                         json={"disciplines": ["Aerial", "  ", "DJ", "Aerial", ""]},
+                         json={"disciplines": ["Trapeze", "  ", "aerial", "DJ", "Trapeze", ""]},
                          headers=admin, timeout=TIMEOUT)
         assert r.status_code == 200, r.text
-        assert r.json()["disciplines"] == ["Aerial", "DJ"]
+        assert r.json()["disciplines"] == ["aerial", "DJ", "Trapeze"]
+
+    def test_a_list_stored_out_of_order_still_reads_back_sorted(self, admin):
+        """Sorted on read as well as write, so a value that predates the rule — or was
+        edited into the database directly — is not the one unordered list."""
+        db.site_settings.update_one({"_id": "artists"},
+                                    {"$set": {"disciplines": ["Zebra", "Alpha", "Mid"]}},
+                                    upsert=True)
+        r = requests.get(f"{API}/admin/artists/disciplines", headers=admin, timeout=TIMEOUT)
+        assert r.json()["disciplines"] == ["Alpha", "Mid", "Zebra"]
+
+    def test_the_built_in_default_is_sorted_too(self, admin):
+        db.site_settings.delete_one({"_id": "artists"})
+        got = requests.get(f"{API}/admin/artists/disciplines", headers=admin,
+                           timeout=TIMEOUT).json()["disciplines"]
+        assert got == sorted(got, key=lambda v: (v.casefold(), v))
 
     def test_it_is_read_per_request_not_cached_at_import(self, admin):
         requests.put(f"{API}/admin/artists/disciplines",
@@ -159,6 +182,22 @@ class TestArtistFields:
                        other_project_url="https://example.com/side")
         assert a["disciplines"] == ["DJ", "Producer"]
         assert a["other_project_name"] == "Side Thing"
+
+    def test_disciplines_are_stored_a_to_z_whatever_order_they_were_clicked(self, admin):
+        """The multiselect appends in click order, which is nobody's idea of an order by
+        the time it reaches the artist's page. Canonicalised on write so every reader
+        gets the same list without each one having to sort it."""
+        a = _mk_artist(admin, disciplines=["Vocalist", "DJ", "Producer"])
+        assert a["disciplines"] == ["DJ", "Producer", "Vocalist"]
+        public = requests.get(f"{API}/artists/{a['slug']}", timeout=TIMEOUT).json()
+        assert public["disciplines"] == ["DJ", "Producer", "Vocalist"]
+
+    def test_patching_them_sorts_too(self, admin):
+        a = _mk_artist(admin)
+        r = requests.patch(f"{API}/admin/artists/{a['artist_id']}",
+                           json={"disciplines": ["Vocalist", "Curator"]},
+                           headers=admin, timeout=TIMEOUT)
+        assert r.json()["disciplines"] == ["Curator", "Vocalist"]
 
     def test_they_round_trip_through_patch(self, admin):
         a = _mk_artist(admin)

@@ -203,7 +203,14 @@ export const BLOCK_LABELS = {
   split: "Split (image + text)",
 };
 
-export const BLOCK_TYPES = Object.keys(BLOCK_LABELS);
+/**
+ * The palette, A-Z by the label a person actually reads — "Custom HTML", not
+ * "custom_html". Sorted here rather than by keeping BLOCK_LABELS in order, because the
+ * literal is where blocks get added and the ordering would drift the first time somebody
+ * appended one to the end. Derived means it cannot.
+ */
+export const BLOCK_TYPES = Object.keys(BLOCK_LABELS)
+  .sort((a, b) => BLOCK_LABELS[a].localeCompare(BLOCK_LABELS[b]));
 
 export const newBlockId = () => `bk_new_${Math.random().toString(36).slice(2, 10)}`;
 

@@ -12,8 +12,8 @@
  */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
-import { Bio } from "./ArtistDetail";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
+import ArtistDetail, { Bio } from "./ArtistDetail";
 import Artists from "./Artists";
 
 vi.mock("../api", () => ({ http: { get: vi.fn() } }));
@@ -109,5 +109,50 @@ describe("bio", () => {
     await userEvent.click(screen.getByTestId("artist-bio-toggle"));
     expect(container.querySelector("strong")).toBeNull();
     expect(screen.getByTestId("artist-bio-toggle")).toHaveTextContent("See more");
+  });
+});
+
+/**
+ * The order of the social buttons.
+ *
+ * `links` is a bag whose iteration order is whatever the admin form happened to write, so
+ * sorting SOCIAL_PLATFORMS alone changed the form's fields and left these in insertion
+ * order — a real artist rendered YouTube, Facebook, SoundCloud, Instagram after the
+ * constant was already A-Z. The page has to walk the vocabulary, not the stored object.
+ */
+describe("artist social links", () => {
+  const withLinks = (links) => {
+    http.get.mockResolvedValue({ data: {
+      artist_id: "a1", name: "VOID", slug: "void", bio: "", image_url: "",
+      disciplines: [], albums: [], projects: [], links,
+    }});
+    return render(
+      <MemoryRouter initialEntries={["/artists/void"]}>
+        <Routes><Route path="/artists/:slug" element={<ArtistDetail />} /></Routes>
+      </MemoryRouter>
+    );
+  };
+
+  const buttonLabels = () =>
+    [...document.querySelectorAll("a.btn-primary")].map((a) => a.textContent);
+
+  test("they render A-Z however the object was written", async () => {
+    withLinks({ youtube: "https://y", facebook: "https://f",
+                soundcloud: "https://s", instagram: "https://i" });
+    await screen.findByText("VOID");
+    expect(buttonLabels()).toEqual(["Facebook", "Instagram", "SoundCloud", "YouTube"]);
+  });
+
+  test("a key the vocabulary does not know still renders, after the known ones", async () => {
+    // Dropping it silently would lose a link an editor deliberately stored.
+    withLinks({ youtube: "https://y", bandcamp: "https://b" });
+    await screen.findByText("VOID");
+    expect(buttonLabels()).toEqual(["YouTube", "bandcamp"]);
+  });
+
+  test("empty values are not rendered as empty buttons", async () => {
+    withLinks({ youtube: "https://y", facebook: "" });
+    await screen.findByText("VOID");
+    expect(buttonLabels()).toEqual(["YouTube"]);
   });
 });
