@@ -241,7 +241,7 @@ export default function EventDetail() {
             <>
               <div className="mt-6 space-y-3">
                 {!special && event.waves.map((w) => (
-                  <button key={w.wave_id} onClick={() => setWaveId(w.wave_id)} data-testid={`wave-${w.tier}`}
+                  <button key={w.wave_id} onClick={() => setWaveId(w.wave_id)} data-testid={`wave-${w.wave_id}`}
                           disabled={!w.is_active || w.available <= 0}
                           className={`w-full text-left border p-4 transition-colors ${waveId===w.wave_id ? "border-ink bg-ink/5" : "border-ink/15"} ${(!w.is_active || w.available<=0) ? "opacity-40 cursor-not-allowed" : "hover:border-ink"}`}>
                     <div className="flex items-center justify-between">
@@ -256,7 +256,7 @@ export default function EventDetail() {
                           {w.available <= 0
                             ? "SOLD OUT"
                             : w.available < LOW_STOCK_AT
-                              ? <span className="text-brand" data-testid={`wave-low-stock-${w.tier}`}>Only a few left</span>
+                              ? <span className="text-brand" data-testid={`wave-low-stock-${w.wave_id}`}>Only a few left</span>
                               : "Available"}
                         </div>
                       </div>
