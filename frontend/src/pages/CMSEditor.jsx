@@ -927,7 +927,8 @@ const FIELDS = {
     { k: "cta_style", label: "Primary CTA style", type: "select", options: ["accent", "outline"] },
     { k: "second_cta_label", label: "Secondary CTA label" },
     { k: "second_cta_href", label: "Secondary CTA link" },
-    { k: "align", label: "Align", type: "select", options: ["left", "center", "right"] },
+    { k: "align", label: "Text align (horizontal)", type: "select", options: ["left", "center", "right"] },
+    { k: "content_y", label: "Text position (vertical)", type: "select", options: ["top", "middle", "bottom"], fallback: "bottom" },
     // Replaces a short/medium/tall select. Those were 50/70/85vh, and `heroHeight`
     // still resolves them, so a hero published under a name keeps its exact height.
     { k: "height_vh", label: "Height (% of screen)", type: "size", unit: "vh" },
@@ -1002,7 +1003,8 @@ const FIELDS = {
     { k: "cta_href", label: "Button link" },
     { k: "cta_style", label: "Button style", type: "select", options: ["outline", "accent"], fallback: "outline" },
     { k: "text_case", label: "Text case", type: "select", options: ["as-typed", "uppercase"], fallback: "as-typed" },
-    { k: "align", label: "Align", type: "select", options: ["left", "center", "right"] },
+    { k: "align", label: "Text align (horizontal)", type: "select", options: ["left", "center", "right"] },
+    { k: "content_y", label: "Text position (vertical)", type: "select", options: ["top", "middle", "bottom"], fallback: "middle" },
     { k: "height", label: "Height", type: "select", options: ["short", "medium", "tall"], fallback: "medium" },
     { k: "full_width", label: "Full width (edge to edge)", type: "checkbox", fallback: true },
   ],

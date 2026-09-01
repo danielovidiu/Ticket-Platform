@@ -152,3 +152,56 @@ describe("hero height", () => {
     expect(c.querySelector('[data-testid="hero"]').style.minHeight).toBe("42vh");
   });
 });
+
+/**
+ * The bug this fixes, pinned so it cannot come back.
+ *
+ * `Container` carries `mx-auto`. Inside a flex COLUMN — which the hero and the image band
+ * both are — that sets auto margins on the cross axis, and an auto cross-axis margin
+ * suppresses the default `stretch`. The container shrink-wrapped its own text and the
+ * auto margins centred that box, so a hero set to align LEFT drew its heading a third of
+ * the way across the screen: correctly left-aligned, inside a box floating in the middle.
+ *
+ * jsdom does no layout, so the widths cannot be measured here. What is testable is the
+ * declaration that produces them.
+ */
+describe("the container fills its flex parent", () => {
+  test("Container asks for full width before capping it", () => {
+    const c = draw("rich_text");
+    const el = c.querySelector(".max-w-\\[1400px\\]");
+    expect([...el.classList]).toContain("w-full");
+    expect([...el.classList]).toContain("mx-auto");
+  });
+
+  test.each(["hero", "image_band"])("%s's inner container is full width", (type) => {
+    const c = draw(type, { ...BLOCK_DEFAULTS[type](), heading: "H", image_url: "/x.jpg" });
+    const el = c.querySelector(".max-w-\\[1400px\\].w-full");
+    expect(el, "the block whose flex column caused the bug must stretch").toBeTruthy();
+  });
+});
+
+describe("vertical text position", () => {
+  const yClass = (c) => [...c.querySelector('[data-testid="hero"]').classList]
+    .find((x) => x.startsWith("justify-"));
+  const bandY = (c) => [...c.querySelector('[data-testid="image-band"]').classList]
+    .find((x) => x.startsWith("justify-"));
+
+  test("the hero still pins to the bottom when unset", () => {
+    // Absent means the position it shipped with; nothing published may move.
+    expect(yClass(draw("hero", { heading: "H" }))).toBe("justify-end");
+  });
+
+  test("the band still centres when unset", () => {
+    expect(bandY(draw("image_band", { heading: "H" }))).toBe("justify-center");
+  });
+
+  test.each([["top", "justify-start"], ["middle", "justify-center"], ["bottom", "justify-end"]])(
+    "%s maps to %s", (pos, cls) => {
+      expect(yClass(draw("hero", { heading: "H", content_y: pos }))).toBe(cls);
+      expect(bandY(draw("image_band", { heading: "H", content_y: pos }))).toBe(cls);
+    });
+
+  test("an unknown value falls back rather than dropping the class", () => {
+    expect(yClass(draw("hero", { heading: "H", content_y: "sideways" }))).toBe("justify-end");
+  });
+});
