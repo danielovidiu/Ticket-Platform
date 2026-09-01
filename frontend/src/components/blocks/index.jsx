@@ -154,7 +154,7 @@ function Hero({ props }) {
   );
 
   const body = (
-    <Container className="relative pb-16 md:pb-24 pt-24">
+    <Container className="relative pb-16 md:pb-24">
       <div className={`flex flex-col ${align}`}>
         {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-3 mb-6`}>{props.eyebrow}</div>}
         {props.heading && (
