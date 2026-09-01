@@ -249,7 +249,7 @@ server {
     # strict form works as-is. Verify with `grep -c "<script>" frontend/build/index.html`
     # after a build — if that ever stops being 0, fix the build, don't relax this.
     # style-src does need it: React renders style={{...}} as inline attributes.
-    set $csp "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://images.unsplash.com; media-src 'self' blob:; frame-src https://www.youtube.com https://player.vimeo.com; connect-src 'self'";
+    set $csp "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://images.unsplash.com; media-src 'self' blob:; frame-src https://www.youtube.com https://player.vimeo.com https://w.soundcloud.com https://bandcamp.com; connect-src 'self'";
     add_header Content-Security-Policy $csp always;
 
     # Source maps are never served, whatever is on disk.

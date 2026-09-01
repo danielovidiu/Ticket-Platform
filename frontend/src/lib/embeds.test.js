@@ -6,7 +6,7 @@
  * for anything it did not recognise, which is how an editor could frame a phishing page
  * under the real domain.
  */
-import { resolveEmbed, withPlayback, EMBED_HOSTS } from "./embeds";
+import { resolveEmbed, withPlayback, EMBED_HOSTS, AUDIO_PROVIDERS } from "./embeds";
 
 describe("URLs that must never be framed", () => {
   const hostile = [
@@ -100,7 +100,9 @@ describe("the emitted host set", () => {
   test("EMBED_HOSTS is the contract the CSP frame-src must match", () => {
     // Pinned so a change here is deliberate; the backend asserts it against the
     // deployed CSP in vercel.json and DEPLOY_VPS.md.
-    expect([...EMBED_HOSTS].sort()).toEqual(["player.vimeo.com", "www.youtube.com"]);
+    expect([...EMBED_HOSTS].sort()).toEqual([
+      "bandcamp.com", "player.vimeo.com", "w.soundcloud.com", "www.youtube.com",
+    ]);
   });
 });
 
@@ -147,5 +149,93 @@ describe("playback flags", () => {
 
   test("null in, null out — flags cannot resurrect a refused URL", () => {
     expect(withPlayback(resolveEmbed("https://evil.example/login"), { autoplay: true })).toBeNull();
+  });
+});
+
+/**
+ * SoundCloud and Bandcamp.
+ *
+ * SoundCloud is the one provider whose embed carries author input in the emitted string —
+ * the player takes the track page as a `url` parameter. So the parameter is never a
+ * passthrough: the path is validated segment by segment and a canonical soundcloud.com
+ * URL is rebuilt from what survives. The frame host is `w.soundcloud.com` regardless,
+ * which is what keeps M11 closed even if the parameter were wrong.
+ */
+describe("soundcloud", () => {
+  const src = (u) => resolveEmbed(u)?.src;
+
+  test("a track page becomes a player on the fixed host", () => {
+    const e = resolveEmbed("https://soundcloud.com/artist/track-name");
+    expect(e.provider).toBe("soundcloud");
+    expect(new URL(e.src).hostname).toBe("w.soundcloud.com");
+    expect(new URL(e.src).searchParams.get("url")).toBe("https://soundcloud.com/artist/track-name");
+  });
+
+  test("a playlist (three segments) works", () => {
+    expect(src("https://soundcloud.com/artist/sets/a-playlist")).toContain("artist%2Fsets%2Fa-playlist");
+  });
+
+  test("an existing player URL is re-validated, not trusted", () => {
+    const e = resolveEmbed(
+      "https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Fartist%2Ftrack");
+    expect(new URL(e.src).searchParams.get("url")).toBe("https://soundcloud.com/artist/track");
+  });
+
+  test("a player URL pointing somewhere else is refused", () => {
+    // The attack this shape invites: our host in the address, someone else's in the param.
+    expect(resolveEmbed(
+      "https://w.soundcloud.com/player/?url=https%3A%2F%2Fevil.example%2Flogin")).toBeNull();
+  });
+
+  test("a bare profile is refused rather than framed empty", () => {
+    expect(resolveEmbed("https://soundcloud.com/artist")).toBeNull();
+  });
+
+  test("path traversal and injected characters are refused", () => {
+    expect(resolveEmbed("https://soundcloud.com/artist/../../evil")).toBeNull();
+    expect(resolveEmbed("https://soundcloud.com/artist/track?x=1#y")).not.toBeNull();
+    expect(src("https://soundcloud.com/artist/track?x=1#y")).not.toContain("x=1");
+  });
+
+  test("a lookalike host is not soundcloud", () => {
+    expect(resolveEmbed("https://soundcloud.com.evil.example/a/b")).toBeNull();
+  });
+});
+
+describe("bandcamp", () => {
+  test("an embed URL keeps only its album reference", () => {
+    const e = resolveEmbed("https://bandcamp.com/EmbeddedPlayer/album=123456/size=small/");
+    expect(e.provider).toBe("bandcamp");
+    expect(e.src).toBe(
+      "https://bandcamp.com/EmbeddedPlayer/album=123456/size=large/bgcol=333333/"
+      + "linkcol=ffffff/tracklist=false/transparent=true/");
+  });
+
+  test("a track reference works too", () => {
+    expect(resolveEmbed("https://bandcamp.com/EmbeddedPlayer/track=99/").src).toContain("track=99");
+  });
+
+  test("an artist album page is refused — it carries no id to embed", () => {
+    expect(resolveEmbed("https://artist.bandcamp.com/album/the-record")).toBeNull();
+  });
+
+  test("a non-numeric reference is refused", () => {
+    expect(resolveEmbed("https://bandcamp.com/EmbeddedPlayer/album=abc/")).toBeNull();
+  });
+
+  test("a lookalike host is not bandcamp", () => {
+    expect(resolveEmbed("https://bandcamp.com.evil.example/EmbeddedPlayer/album=1/")).toBeNull();
+  });
+});
+
+describe("audio providers", () => {
+  test("are exactly the two that play sound", () => {
+    expect([...AUDIO_PROVIDERS].sort()).toEqual(["bandcamp", "soundcloud"]);
+  });
+
+  test("every audio provider emits a host the allowlist names", () => {
+    for (const u of ["https://soundcloud.com/a/b", "https://bandcamp.com/EmbeddedPlayer/album=1/"]) {
+      expect(EMBED_HOSTS).toContain(new URL(resolveEmbed(u).src).hostname);
+    }
   });
 });

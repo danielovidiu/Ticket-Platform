@@ -2180,23 +2180,33 @@ async def list_projects():
 
 
 @api.get("/events")
-async def list_events(upcoming: bool = True):
+async def list_events(upcoming: Optional[bool] = None):
+    """Published events. `upcoming` is a tri-state, not a boolean.
+
+    Omitted means EVERY published event, newest first — the "All" tab. It used to default
+    to True, so there was no way to ask for the whole programme in one request and the
+    page had to choose a half. Every caller in this repo passes the parameter explicitly,
+    so nothing changes shape underneath them; an outside consumer calling bare /events
+    now gets past events too, which is the point of the parameter being three-valued.
+    """
     now_iso = now_utc().isoformat()
     query = {"is_published": True}
     # An event stays "upcoming" for its whole duration, not just until it starts —
     # judged by ends_at, falling back to starts_at only when no end time is set.
-    if upcoming:
+    if upcoming is True:
         query["$or"] = [
             {"ends_at": {"$gte": now_iso}},
             {"ends_at": None, "starts_at": {"$gte": now_iso}},
             {"ends_at": {"$exists": False}, "starts_at": {"$gte": now_iso}},
         ]
-    else:
+    elif upcoming is False:
         query["$or"] = [
             {"ends_at": {"$lt": now_iso}},
             {"ends_at": None, "starts_at": {"$lt": now_iso}},
             {"ends_at": {"$exists": False}, "starts_at": {"$lt": now_iso}},
         ]
+    # upcoming is None: no time filter at all.
+    # All and Past both read newest-first; only Upcoming counts forwards from now.
     items = await db.events.find(query, {"_id": 0}).sort("starts_at", 1 if upcoming else -1).to_list(200)
     # Batch-fetch albums for every listed event at once instead of N+1, so cards can
     # show a cover photo without a per-event round trip.

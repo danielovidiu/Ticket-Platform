@@ -7,25 +7,63 @@ const fmtDate = (iso) => {
   return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 };
 
+const TAB_LABELS = { all: "All", upcoming: "Upcoming", past: "Past" };
+
+// The tab drives one query parameter, and "all" is the absence of it — /events treats
+// `upcoming` as a tri-state where omitted means the whole programme.
+const QUERY = { all: "", upcoming: "?upcoming=true", past: "?upcoming=false" };
+
+/**
+ * Whether an event has finished, judged the same way the server judges it: by `ends_at`,
+ * falling back to `starts_at` when no end time is set.
+ *
+ * This used to be read off the active tab, which was sound while the only two tabs were
+ * "upcoming" and "past" and a list could only hold one kind. The All tab mixes them, so
+ * the question has to be asked of each event instead — otherwise every row on All claims
+ * the status of whichever tab happened to be selected.
+ */
+const isPast = (e) => new Date(e.ends_at || e.starts_at).getTime() < Date.now();
+
 export default function Events() {
   const [events, setEvents] = useState([]);
-  const [tab, setTab] = useState("upcoming");
+  // Which tabs exist and which one opens is a CMS setting. Until it arrives there is no
+  // tab bar and no fetch: guessing a default here would show one slice of the programme
+  // and then swap it under the visitor a moment later.
+  const [settings, setSettings] = useState(null);
+  const [tab, setTab] = useState(null);
 
   useEffect(() => {
-    http.get(`/events?upcoming=${tab === "upcoming"}`).then((r) => setEvents(r.data)).catch(() => {});
+    http.get("/cms/events-settings")
+      .then((r) => { setSettings(r.data); setTab(r.data.default_tab); })
+      .catch(() => { setSettings({ tabs: ["all", "upcoming", "past"], default_tab: "all" }); setTab("all"); });
+  }, []);
+
+  useEffect(() => {
+    if (!tab) return;
+    http.get(`/events${QUERY[tab] ?? ""}`).then((r) => setEvents(r.data)).catch(() => {});
   }, [tab]);
+
+  const tabs = settings?.tabs || [];
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
       <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Programme</div>
       <div className="flex flex-wrap items-end justify-between gap-6 mt-3">
         <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter">Events</h1>
-        <div className="flex gap-2">
-          <button onClick={() => setTab("upcoming")} data-testid="tab-upcoming"
-                  className={`px-4 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${tab==="upcoming" ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>Upcoming</button>
-          <button onClick={() => setTab("past")} data-testid="tab-past"
-                  className={`px-4 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${tab==="past" ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>Past</button>
-        </div>
+        {/* One tab is not a choice, so the bar only appears when there is something to
+            choose between. An editor who leaves a single tab enabled gets that filter
+            applied silently rather than a control that cannot be changed. */}
+        {tabs.length > 1 && (
+          <div className="flex gap-2" data-testid="event-tabs">
+            {tabs.map((t) => (
+              <button key={t} onClick={() => setTab(t)} data-testid={`tab-${t}`}
+                      aria-pressed={tab === t}
+                      className={`px-4 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${tab === t ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>
+                {TAB_LABELS[t] || t}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="mt-12 divide-y divide-ink/10 border-y border-ink/10">
@@ -42,9 +80,9 @@ export default function Events() {
             <div className="col-span-6 md:col-span-2 font-mono-x text-xs text-right text-ink-2">
               {/* Same rule as the event page: sold out and nearly-gone are worth saying,
                   the exact count is not published. */}
-              {tab === "upcoming"
-                ? (e.total_available <= 0 ? "SOLD OUT" : e.total_available < 10 ? "ONLY A FEW LEFT" : "ON SALE")
-                : "ARCHIVED"}
+              {isPast(e)
+                ? "ARCHIVED"
+                : (e.total_available <= 0 ? "SOLD OUT" : e.total_available < 10 ? "ONLY A FEW LEFT" : "ON SALE")}
             </div>
           </Link>
         ))}
