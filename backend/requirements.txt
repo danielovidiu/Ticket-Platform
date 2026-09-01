@@ -35,7 +35,7 @@ charset-normalizer==3.5.1
     #   requests
 click==8.4.2
     # via uvicorn
-cryptography==50.0.0
+cryptography==50.0.1
     # via
     #   -r requirements.in
     #   pyjwt
@@ -74,7 +74,7 @@ idna==3.19
     #   requests
 motor==3.7.1
     # via -r requirements.in
-nh3==0.3.6
+nh3==0.3.7
     # via -r requirements.in
 pillow==12.3.0
     # via
@@ -82,13 +82,13 @@ pillow==12.3.0
     #   reportlab
 pycparser==3.0
     # via cffi
-pydantic==2.13.4
+pydantic==2.13.5
     # via
     #   -r requirements.in
     #   fastapi
     #   vercel
     #   vercel-sandbox
-pydantic-core==2.46.4
+pydantic-core==2.46.5
     # via pydantic
 pyjwt==2.13.0
     # via
@@ -119,7 +119,7 @@ starlette==1.6.0
     # via
     #   -r requirements.in
     #   fastapi
-stripe==15.5.1
+stripe==15.6.0
     # via -r requirements.in
 typing-extensions==4.16.0
     # via
