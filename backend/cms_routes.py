@@ -393,6 +393,15 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             decls.append(f"  --section-y: {_css_value(s['sectionY'])};")
         if s.get("containerX"):
             decls.append(f"  --container-x: {_css_value(s['containerX'])};")
+        # Clamped, not trusted: this lands in a stylesheet every visitor loads, and a
+        # nav at 200px would push the header off the page with no way back except the
+        # CMS the header is needed to reach.
+        nav_size = (theme or {}).get("nav_size")
+        if nav_size is not None:
+            try:
+                decls.append(f"  --nav-size: {max(8, min(32, int(nav_size)))}px;")
+            except (TypeError, ValueError):
+                pass
         if (theme or {}).get("radius") is not None:
             decls.append(f"  --radius: {int((theme or {}).get('radius') or 0)}px;")
         decls.append(
@@ -933,6 +942,11 @@ def _default_theme():
             "mono": "IBM Plex Mono",
         },
         "spacing": {"sectionY": "6rem", "containerX": "2.5rem"},
+        # The header nav's type size, in px. A theme value rather than a hardcoded class
+        # because how big the menu should be depends on how many items are in it and how
+        # long their labels are — both of which an editor changes, and neither of which
+        # is knowable when the class is written.
+        "nav_size": 11,
         "radius": 0,
         "button_style": "sharp",  # sharp | pill
     }

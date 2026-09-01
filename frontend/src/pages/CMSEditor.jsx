@@ -1242,6 +1242,17 @@ export function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsCh
                     testId={`font-${k}`} onChange={(v) => setFont(k, v)} />
       ))}
 
+      <label className="block">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">
+          Menu text size: {theme.nav_size ?? 11}px
+        </div>
+        <input type="range" min="8" max="32" value={theme.nav_size ?? 11} data-testid="theme-nav-size"
+               onChange={(e) => onChange({ nav_size: Number(e.target.value) })} className="w-full" />
+        <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
+          The header nav. The phone menu follows it up but never below its own size.
+        </div>
+      </label>
+
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Your fonts</div>
       <FontManager fonts={customFonts} onChanged={onFontsChanged} />
 

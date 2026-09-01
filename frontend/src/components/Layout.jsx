@@ -162,7 +162,11 @@ const Header = ({ cmsNav, navFailed }) => {
         <Link to="/" data-testid="logo-link" className="font-display text-xl md:text-2xl font-bold tracking-tighter uppercase shrink-0">
           SUPERSANITY
         </Link>
-        <nav className="hidden lg:flex items-center gap-x-5 min-w-0 overflow-x-auto no-scrollbar font-mono-x text-[11px] uppercase tracking-[0.18em]">
+        {/* Size comes from the theme (--nav-size), not a fixed class: how big the menu
+            should be depends on how many items it holds and how long their labels are,
+            both of which an editor changes. 11px is the value it shipped with, so a
+            theme saved before this existed renders exactly as it did. */}
+        <nav className="hidden lg:flex items-center gap-x-5 min-w-0 overflow-x-auto no-scrollbar font-mono-x uppercase tracking-[0.18em] text-[length:var(--nav-size,11px)]">
           {nav.map((n) => (
             <NavLink key={n.route} to={n.route} end={n.route === "/"} data-testid={`nav-${n.label.toLowerCase()}`}
               className={({ isActive }) => `whitespace-nowrap ${isActive ? "text-ink" : "text-ink-3 hover:text-ink transition-colors"}`}>
@@ -180,7 +184,7 @@ const Header = ({ cmsNav, navFailed }) => {
       </div>
       {open && (
         <div className="lg:hidden hairline-b bg-page">
-          <div className="px-6 py-6 flex flex-col gap-4 font-mono-x uppercase text-sm">
+          <div className="px-6 py-6 flex flex-col gap-4 font-mono-x uppercase text-[length:max(var(--nav-size,11px),0.875rem)]">
             {nav.map((n) => <NavLink key={n.route} to={n.route} onClick={() => setOpen(false)} className="text-ink-2">{n.label}</NavLink>)}
             <CartLink onNavigate={() => setOpen(false)} />
             {user ? (
