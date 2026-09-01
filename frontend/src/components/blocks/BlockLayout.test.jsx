@@ -270,10 +270,18 @@ describe("full width", () => {
     expect(capped(c)).toBeTruthy();
   });
 
-  test("the gutters survive going full width", () => {
-    // They are not spacing between blocks — they keep text off the edge of a phone, and
-    // there is no horizontal spacer to put them back with.
+  test("the gutters go with the cap — full width means edge to edge", () => {
+    // This asserted the opposite until the label was taken at its word. A toggle saying
+    // "edge to edge" that left 40px on each side was a promise the code did not keep.
     const c = draw("events_grid", { ...BLOCK_DEFAULTS.events_grid(), full_width: true });
+    const frame = c.querySelector("section > div");
+    expect([...frame.classList]).not.toContain("px-6");
+    expect([...frame.classList]).not.toContain("md:px-10");
+  });
+
+  test("a contained block still has its gutters", () => {
+    // The default is unchanged: text off the edge of a phone, unless asked otherwise.
+    const c = draw("events_grid", BLOCK_DEFAULTS.events_grid());
     expect(c.querySelector(".px-6")).toBeTruthy();
   });
 });

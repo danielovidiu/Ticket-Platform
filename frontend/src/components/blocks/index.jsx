@@ -33,9 +33,10 @@ const aspectClass = (v, fallback = "aspect-square") => ASPECTS[v] || fallback;
  * `py-24` and `py-16` produced a 40-unit gap nobody chose and nobody could change. Every
  * block is now flush, and the Spacer block is the one control for the space between them.
  *
- * The HORIZONTAL gutters stay. They are not spacing between blocks — they are what keeps
- * text off the edge of a phone screen, and Spacer only has a height, so there would be
- * nothing to restore them with.
+ * The HORIZONTAL gutters stay by DEFAULT. They are not spacing between blocks — they are
+ * what keeps text off the edge of a phone screen, and Spacer only has a height, so there
+ * is nothing to restore them with. A block set FULL WIDTH drops them deliberately, the
+ * way the hero's full frame always has — see `Frame`.
  *
  * Two insets survive on purpose and are not inter-block spacing: the hero's text inset
  * over its own background image, and the "Image not set" editor placeholder.
@@ -63,7 +64,14 @@ function Container({ children, className = "" }) {
  * wide is one the eye loses its place in.
  */
 function Frame({ full, narrow = false, className = "", children }) {
-  const measure = full ? "" : narrow ? "max-w-[900px]" : "max-w-[1400px]";
+  // Full width means what the hero has always meant by it: the block goes edge to edge,
+  // gutters included. The first version kept the side padding when full, so a toggle
+  // labelled "edge to edge" left 40px of gap on each side — a label the code did not keep.
+  //
+  // The consequence is real and is the editor's to make: a text block set full width puts
+  // its prose against the screen edge. That is why the cap is the default.
+  if (full) return <div className={`w-full ${className}`}>{children}</div>;
+  const measure = narrow ? "max-w-[900px]" : "max-w-[1400px]";
   return <div className={`w-full mx-auto px-6 md:px-10 ${measure} ${className}`}>{children}</div>;
 }
 
