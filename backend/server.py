@@ -5051,7 +5051,9 @@ async def security_headers(request: Request, call_next):
 #    three hrefs typed into Layout.jsx. Without the bump migrate_footer_pages never runs
 #    on an already-initialised database, and the first deploy renders an EMPTY Legal
 #    column — the pages are all still there, nothing marks them as belonging in it.
-SCHEMA_VERSION = 9
+# 10: the header nav's type size moved from the theme document to the site settings, so
+#     it sits with the header's other control instead of under Theme.
+SCHEMA_VERSION = 10
 
 
 async def init_app():
@@ -5201,6 +5203,11 @@ async def init_indexes():
         await migrate_footer_pages()
     except Exception:
         logger.exception("migrate_footer_pages failed")
+
+    try:
+        await migrate_nav_size_to_site_settings()
+    except Exception:
+        logger.exception("migrate_nav_size_to_site_settings failed")
 
     try:
         await migrate_user_names()
@@ -5359,6 +5366,31 @@ async def migrate_gallery_albums():
         )
 
     logger.info("Gallery migrated into %d album(s): %d item(s) filed", len(created), len(legacy))
+
+
+async def migrate_nav_size_to_site_settings():
+    """Carry the header nav's type size out of the theme document.
+
+    It was a theme value, which is where typography belongs in the abstract and the last
+    place anyone looked for it — the header's other control sits in the Site pane. The
+    value moves; the CSS variable it produces does not, because it has to arrive in the
+    render-blocking stylesheet or the nav paints at the default and then jumps.
+
+    Only runs when the site settings have no size of their own, so an operator who has
+    already set one in the new place is never overwritten by the old one.
+    """
+    site = await db.site_settings.find_one({"_id": "site"}, {"_id": 0, "nav_size": 1}) or {}
+    if site.get("nav_size") is not None:
+        return 0
+    theme = await db.cms_theme.find_one({"doc_id": "theme_current"}, {"_id": 0}) or {}
+    existing = ((theme.get("published") or {}).get("nav_size")
+                or (theme.get("draft") or {}).get("nav_size"))
+    if existing is None:
+        return 0
+    await db.site_settings.update_one(
+        {"_id": "site"}, {"$set": {"nav_size": int(existing)}}, upsert=True)
+    logger.info("Moved nav_size %s from the theme to the site settings", existing)
+    return 1
 
 
 async def migrate_footer_pages():

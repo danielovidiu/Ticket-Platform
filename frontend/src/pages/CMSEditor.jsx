@@ -856,7 +856,12 @@ function SiteContentEditor() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    http.get("/admin/cms/site").then((r) => setState(r.data)).catch(() => {});
+    http.get("/admin/cms/site").then((r) => {
+      setState(r.data);
+      if (r.data?.nav_size) {
+        document.documentElement.style.setProperty("--nav-size", `${r.data.nav_size}px`);
+      }
+    }).catch(() => {});
   }, []);
 
   if (!state) return <div className="text-[11px] text-ink-4 font-mono-x uppercase tracking-[0.2em]">Loading…</div>;
@@ -887,6 +892,25 @@ function SiteContentEditor() {
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Wordmarks</div>
       <Field label="Header" k="header_wordmark" />
       <Field label="Footer" k="wordmark" hint="Separate on purpose — one need not follow the other" />
+      <label className="block">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">
+          Menu text size: {state.nav_size ?? 11}px
+        </div>
+        <input type="range" min="8" max="32" value={state.nav_size ?? 11} data-testid="site-nav-size"
+               onChange={(e) => {
+                 const px = Number(e.target.value);
+                 // Painted immediately as well as saved. The size reaches visitors through
+                 // the render-blocking stylesheet, which this already-loaded page will not
+                 // re-fetch — so without this the slider moves, the value saves, and the
+                 // header does not budge until a reload. That is exactly how the previous
+                 // version of this control read as broken.
+                 document.documentElement.style.setProperty("--nav-size", `${px}px`);
+                 save({ nav_size: px });
+               }} className="w-full" />
+        <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
+          The header nav. The phone menu follows it up but never below its own size.
+        </div>
+      </label>
 
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Footer</div>
       <label className="block">
@@ -1360,17 +1384,6 @@ export function ThemeEditor({ theme, onChange, onPublish, customFonts, onFontsCh
         <FontPicker key={k} label={label} value={theme.fonts?.[k] || ""} custom={customFonts}
                     testId={`font-${k}`} onChange={(v) => setFont(k, v)} />
       ))}
-
-      <label className="block">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">
-          Menu text size: {theme.nav_size ?? 11}px
-        </div>
-        <input type="range" min="8" max="32" value={theme.nav_size ?? 11} data-testid="theme-nav-size"
-               onChange={(e) => onChange({ nav_size: Number(e.target.value) })} className="w-full" />
-        <div className="mt-1 font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
-          The header nav. The phone menu follows it up but never below its own size.
-        </div>
-      </label>
 
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Your fonts</div>
       <FontManager fonts={customFonts} onChanged={onFontsChanged} />

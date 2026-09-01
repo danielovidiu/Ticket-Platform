@@ -240,8 +240,9 @@ const Header = ({ cmsNav, navFailed, site }) => {
 // spacing decided by a component rather than by the person composing the page. The page
 // ends where its last block ends, and the hairline is the join.
 //
-// The footer's own `py-14` stays. That is its internal breathing room rather than space
-// between it and the page, the same call as the hero's text inset.
+// Its own padding is `py-5` — the header's value, so the two bars sit at the same
+// weight. It was py-14, which made the footer more than twice the header's height for
+// the same reason nothing else on the page had a say in its own spacing.
 const Footer = ({ site }) => {
   const s = site || {};
   const pages = s.pages || [];
@@ -256,7 +257,7 @@ const Footer = ({ site }) => {
     <footer className="hairline">
       {/* Two columns before four: at md, quarter-width columns are narrower than
           the wordmark itself, which then spills into its neighbour. */}
-      <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-14 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
+      <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
         <div>
           <div className="font-display text-2xl uppercase tracking-tighter">{s.wordmark || ""}</div>
           {s.description && <p className="mt-4 text-ink-3 text-sm max-w-xs">{s.description}</p>}

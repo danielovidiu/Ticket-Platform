@@ -279,6 +279,7 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         """The site's own words: the two wordmarks, and everything the footer says apart
         from its links — those are CMS pages."""
         header_wordmark: str = ""
+        nav_size: Optional[int] = None
         wordmark: str = ""
         description: str = ""
         legal_heading: str = ""
@@ -473,6 +474,10 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         """The published theme, as the stylesheet the document links in <head>."""
         t = await db.cms_theme.find_one({"doc_id": "theme_current"}, {"_id": 0})
         theme = (t or {}).get("published") or _default_theme()
+        # Merged in rather than read from the theme document: the value is a site setting
+        # now, but it has to reach the browser through the render-blocking stylesheet or
+        # the nav paints at the default size and then jumps.
+        theme = {**theme, "nav_size": (await _site_settings())["nav_size"]}
         fonts = await _fonts_sorted()
         css = _theme_css(theme, fonts)
 
@@ -521,6 +526,9 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         # Two fields on purpose rather than one shared value: the header and the footer
         # say the same thing today, and nothing should force them to say it forever.
         "header_wordmark": "SUPERSANITY",
+        # The header nav's type size. It lived in the theme document, which is where
+        # typography belongs in the abstract and the last place anyone looked for it.
+        "nav_size": 11,
         "wordmark": "SUPERSANITY",
         "description": "A Bucharest music & performance collective. "
                        "Programming, artists, box office — one door.",
@@ -568,6 +576,13 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         cleaned = {k: v for k, v in cleaned.items() if v not in ("", None)}
         cleaned["social"] = {k: str(v).strip() for k, v in (patch.get("social") or {}).items()
                              if str(v or "").strip()}
+        # Clamped here as well as in the stylesheet: a nav at 200px pushes the header off
+        # the page, and the CMS that would undo it is reached through that header.
+        if patch.get("nav_size") is not None:
+            try:
+                cleaned["nav_size"] = max(8, min(32, int(patch["nav_size"])))
+            except (TypeError, ValueError):
+                cleaned.pop("nav_size", None)
         await db.site_settings.update_one({"_id": "site"}, {"$set": cleaned}, upsert=True)
         return {**await _site_settings(), "pages": await _footer_pages()}
 

@@ -108,10 +108,11 @@ describe("the join between the page and the footer", () => {
     expect([...footer().classList].some((c) => /^mt-/.test(c))).toBe(false);
   });
 
-  test("it keeps its own internal padding", () => {
-    // That is the footer's breathing room, not space between it and the page — the same
-    // call as the hero's text inset.
-    expect(footer().querySelector(".py-14")).toBeTruthy();
+  test("its own padding matches the header's", () => {
+    // Breathing room inside the bar rather than space between it and the page. It was
+    // py-14, which made the footer more than twice the header's height.
+    expect(footer().querySelector(".py-5")).toBeTruthy();
+    expect(footer().querySelector(".py-14")).toBeNull();
   });
 
   test("the hairline is still the join", () => {
