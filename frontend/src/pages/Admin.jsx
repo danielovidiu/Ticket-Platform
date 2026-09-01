@@ -938,12 +938,74 @@ function TicketList() {
   );
 }
 
+/**
+ * The discipline vocabulary every artist's tags are drawn from. Lives here rather than
+ * in its own tab because it is only ever edited while thinking about artists.
+ *
+ * Removing one does NOT strip it from the artists already carrying it — the server is
+ * explicit about that. It stops being offered; the artists keep what they had, and the
+ * form marks those values so they can be cleared on purpose.
+ */
+function DisciplineManager({ disciplines, onChange }) {
+  const [adding, setAdding] = useState("");
+  const save = async (next) => {
+    try {
+      const { data } = await http.put("/admin/artists/disciplines", { disciplines: next });
+      onChange(data.disciplines);
+    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+  };
+  const add = () => {
+    const v = adding.trim();
+    if (!v) return;
+    if (disciplines.includes(v)) { toast.error("Already on the list"); return; }
+    setAdding(""); save([...disciplines, v]);
+  };
+  return (
+    <div className="border border-ink/10 p-4" data-testid="discipline-manager">
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
+        Artistic disciplines
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {disciplines.map((d) => (
+          <span key={d} className="px-3 py-1 text-xs font-mono-x uppercase tracking-[0.15em] border border-ink/20 flex items-center gap-2">
+            {d}
+            <button type="button" onClick={() => save(disciplines.filter((x) => x !== d))}
+                    className="text-ink-4 hover:text-ink" aria-label={`Remove ${d}`}
+                    data-testid={`discipline-remove-${d}`}>×</button>
+          </span>
+        ))}
+        {disciplines.length === 0 && <span className="text-xs text-ink-4">None yet.</span>}
+      </div>
+      <div className="mt-3 flex gap-2">
+        <input value={adding} onChange={(e) => setAdding(e.target.value)}
+               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+               placeholder="Add a discipline…" className="input-x flex-1"
+               data-testid="discipline-add-input" />
+        <button type="button" onClick={add} className="btn-primary shrink-0"
+                data-testid="discipline-add">Add</button>
+      </div>
+    </div>
+  );
+}
+
 function Artists() {
   const [items, setItems] = useState([]);
   const [form, setForm] = useState(null);
+  const [disciplines, setDisciplines] = useState([]);
+  const [albums, setAlbums] = useState([]);
+  const [projects, setProjects] = useState([]);
   const load = () => http.get("/admin/artists").then((r) => setItems(r.data));
-  useEffect(() => { load(); }, []);
-  const emptyForm = () => ({ name: "", slug: "", bio: "", image_url: "", links: {} });
+  useEffect(() => {
+    load();
+    // The form's three pickers. Fetched once with the tab rather than per open, so
+    // reopening the form doesn't re-request a list that has not changed.
+    http.get("/admin/artists/disciplines").then((r) => setDisciplines(r.data.disciplines)).catch(() => {});
+    http.get("/admin/albums").then((r) => setAlbums(r.data)).catch(() => {});
+    http.get("/admin/projects").then((r) => setProjects(r.data)).catch(() => {});
+  }, []);
+  const emptyForm = () => ({ name: "", slug: "", bio: "", image_url: "", links: {},
+                             disciplines: [], album_ids: [], project_ids: [],
+                             other_project_name: "", other_project_url: "" });
   const save = async () => {
     try {
       const links = Object.fromEntries(Object.entries(form.links || {}).filter(([, v]) => v));
@@ -954,17 +1016,28 @@ function Artists() {
       } else {
         await http.post("/admin/artists", body);
       }
-      setForm(null); load(); toast.success("Saved");
+      setForm(null); load();
+      // A project link is stored on the project, so the picker's own list is now stale.
+      http.get("/admin/projects").then((r) => setProjects(r.data)).catch(() => {});
+      toast.success("Saved");
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
   };
   const del = async (id) => { if (!confirm("Delete?")) return; await http.delete(`/admin/artists/${id}`); load(); };
   return (
     <div>
-      <button onClick={() => setForm(emptyForm())} className="btn-accent">+ NEW ARTIST</button>
+      <DisciplineManager disciplines={disciplines} onChange={setDisciplines} />
+      <button onClick={() => setForm(emptyForm())} className="btn-accent mt-6">+ NEW ARTIST</button>
       <div className="mt-6 space-y-2">
         {items.map((a) => (
           <div key={a.artist_id} className="border border-ink/10 p-3 flex justify-between items-center">
-            <div className="font-display uppercase">{a.name} · <span className="text-ink-4 text-sm">{a.slug}</span></div>
+            <div>
+              <div className="font-display uppercase">{a.name} · <span className="text-ink-4 text-sm">{a.slug}</span></div>
+              {(a.disciplines || []).length > 0 && (
+                <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
+                  {a.disciplines.join(" · ")}
+                </div>
+              )}
+            </div>
             <div className="flex gap-2">
               <button onClick={() => setForm({ ...emptyForm(), ...a })} className="btn-primary text-xs">Edit</button>
               <button onClick={() => del(a.artist_id)} className="btn-primary text-xs">Del</button>
@@ -972,15 +1045,30 @@ function Artists() {
           </div>
         ))}
       </div>
-      {form && <ArtistForm form={form} setForm={setForm} onSave={save} onClose={() => setForm(null)} />}
+      {form && <ArtistForm form={form} setForm={setForm} onSave={save} onClose={() => setForm(null)}
+                           disciplines={disciplines} albums={albums} projects={projects} />}
     </div>
   );
 }
 
-function ArtistForm({ form, setForm, onSave, onClose }) {
+function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums, projects }) {
   const bioRef = useRef(null);
   const setF = (k, v) => setForm({ ...form, [k]: v });
   const setLink = (k, v) => setForm({ ...form, links: { ...(form.links || {}), [k]: v } });
+  // MultiSelect hands `onChange` a functional updater (see its comment about two ticks
+  // in one render) — except "Clear selection", which passes a bare []. Accept both, or
+  // clearing stores a function as the value.
+  const setList = (k) => (next) => setForm((f) => ({
+    ...f,
+    [k]: typeof next === "function" ? next(f[k] || []) : next,
+  }));
+  // A discipline retired from the vocabulary while this artist still carries it stays
+  // offered, marked, so it can be cleared on purpose instead of vanishing on save.
+  const disciplineOptions = [
+    ...disciplines.map((d) => ({ value: d, label: d })),
+    ...(form.disciplines || []).filter((d) => !disciplines.includes(d))
+      .map((d) => ({ value: d, label: `${d} (retired)` })),
+  ];
   return (
     <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4 overflow-auto">
       <div className="border border-ink/20 bg-surface p-6 w-full max-w-2xl max-h-[90vh] overflow-auto">
@@ -991,11 +1079,52 @@ function ArtistForm({ form, setForm, onSave, onClose }) {
         <div className="mt-4 grid grid-cols-2 gap-3">
           <input placeholder="Name" value={form.name} onChange={(e) => setF("name", e.target.value)} className="input-x" />
           <input placeholder="Slug" value={form.slug} onChange={(e) => setF("slug", e.target.value)} className="input-x" />
-          <input placeholder="Image URL" value={form.image_url} onChange={(e) => setF("image_url", e.target.value)} className="input-x col-span-2" />
+          <div className="col-span-2">
+            <ImageField value={form.image_url} onChange={(v) => setF("image_url", v)}
+                        label="Photo" testId="artist-image" />
+          </div>
+          <div className="col-span-2">
+            <MultiSelect label="Disciplines" allLabel="None chosen" testId="artist-disciplines"
+                         options={disciplineOptions}
+                         selected={form.disciplines || []}
+                         onChange={setList("disciplines")} />
+          </div>
           <div className="col-span-2">
             <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-1">Bio</div>
             <FormatToolbar textareaRef={bioRef} value={form.bio} onChange={(v) => setF("bio", v)} />
             <textarea ref={bioRef} placeholder="Bio" value={form.bio} onChange={(e) => setF("bio", e.target.value)} className="input-x w-full" rows={4} />
+            <div className="text-[10px] text-ink-4 mt-1">
+              The artist page shows the first 200 characters, with a “see more” for the rest.
+            </div>
+          </div>
+          <div className="col-span-2">
+            <MultiSelect label="Supersanity projects" allLabel="None chosen" testId="artist-projects"
+                         options={projects.map((p) => ({ value: p.project_id, label: p.title }))}
+                         selected={form.project_ids || []}
+                         onChange={setList("project_ids")} />
+          </div>
+          <div className="col-span-2">
+            <MultiSelect label="Galleries (albums this artist appears in)"
+                         allLabel="None chosen" testId="artist-albums"
+                         options={albums.map((a) => ({
+                           value: a.album_id,
+                           label: `${a.title}${a.count ? ` (${a.count})` : ""}`,
+                         }))}
+                         selected={form.album_ids || []}
+                         onChange={setList("album_ids")} />
+          </div>
+          <div className="col-span-2 mt-2">
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">
+              Other project (outside Supersanity)
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <input placeholder="Project name" value={form.other_project_name || ""}
+                     onChange={(e) => setF("other_project_name", e.target.value)}
+                     className="input-x" data-testid="artist-other-name" />
+              <input placeholder="https://…" value={form.other_project_url || ""}
+                     onChange={(e) => setF("other_project_url", e.target.value)}
+                     className="input-x" data-testid="artist-other-url" />
+            </div>
           </div>
           <div className="col-span-2 mt-2">
             <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Social links (leave blank to hide on the artist's page)</div>
@@ -1013,32 +1142,91 @@ function ArtistForm({ form, setForm, onSave, onClose }) {
   );
 }
 
+const EMPTY_PROJECT = { title: "", slug: "", description: "", year: new Date().getFullYear(),
+                        image_url: "", artist_ids: [], is_past: true };
+
+/**
+ * Projects were create-and-delete only, so an artist list set at creation could never be
+ * corrected — and the artist<->project link is the one thing that most needs to change.
+ * The form now doubles as the editor, the same way the artist form does.
+ */
 function Projects() {
   const [items, setItems] = useState([]);
-  const [f, setF] = useState({ title: "", slug: "", description: "", year: 2024, image_url: "", artist_ids: [], is_past: true });
+  const [artists, setArtists] = useState([]);
+  const [f, setF] = useState(EMPTY_PROJECT);
   const descRef = useRef(null);
   const load = () => http.get("/admin/projects").then((r) => setItems(r.data));
-  useEffect(() => { load(); }, []);
-  const save = async () => { await http.post("/admin/projects", f); setF({ title: "", slug: "", description: "", year: 2024, image_url: "", artist_ids: [], is_past: true }); load(); };
-  const del = async (id) => { await http.delete(`/admin/projects/${id}`); load(); };
+  useEffect(() => {
+    load();
+    http.get("/admin/artists").then((r) => setArtists(r.data)).catch(() => {});
+  }, []);
+  const save = async () => {
+    try {
+      if (f.project_id) {
+        const body = { ...f };
+        delete body.project_id; delete body.created_at;
+        await http.patch(`/admin/projects/${f.project_id}`, body);
+      } else {
+        await http.post("/admin/projects", f);
+      }
+      setF(EMPTY_PROJECT); load(); toast.success("Saved");
+    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+  };
+  const del = async (id) => {
+    if (!confirm("Delete?")) return;
+    await http.delete(`/admin/projects/${id}`);
+    if (f.project_id === id) setF(EMPTY_PROJECT);
+    load();
+  };
+  const nameOf = (id) => artists.find((a) => a.artist_id === id)?.name || id;
   return (
     <div>
-      <div className="border border-ink/10 p-4 grid grid-cols-2 gap-3">
+      <div className="border border-ink/10 p-4 grid grid-cols-2 gap-3" data-testid="project-form">
+        <div className="col-span-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
+          {f.project_id ? `Editing ${f.title}` : "New project"}
+        </div>
         <input placeholder="Title" value={f.title} onChange={(e) => setF({...f, title: e.target.value})} className="input-x" />
         <input placeholder="Slug" value={f.slug} onChange={(e) => setF({...f, slug: e.target.value})} className="input-x" />
         <input type="number" placeholder="Year" value={f.year} onChange={(e) => setF({...f, year: Number(e.target.value)})} className="input-x" />
-        <input placeholder="Image URL" value={f.image_url} onChange={(e) => setF({...f, image_url: e.target.value})} className="input-x" />
+        <div className="col-span-2">
+          <ImageField value={f.image_url} onChange={(v) => setF({...f, image_url: v})}
+                      label="Image" testId="project-image" />
+        </div>
         <div className="col-span-2">
           <FormatToolbar textareaRef={descRef} value={f.description} onChange={(v) => setF({...f, description: v})} />
           <textarea ref={descRef} placeholder="Description" value={f.description} onChange={(e) => setF({...f, description: e.target.value})} className="input-x w-full" rows={2} />
         </div>
-        <button onClick={save} className="btn-accent col-span-2">ADD</button>
+        <div className="col-span-2">
+          <MultiSelect label="Artists" allLabel="None chosen" testId="project-artists"
+                       options={artists.map((a) => ({ value: a.artist_id, label: a.name }))}
+                       selected={f.artist_ids || []}
+                       onChange={(next) => setF((cur) => ({
+                         ...cur,
+                         artist_ids: typeof next === "function" ? next(cur.artist_ids || []) : next,
+                       }))} />
+        </div>
+        <button onClick={save} className={f.project_id ? "btn-accent" : "btn-accent col-span-2"}>
+          {f.project_id ? "SAVE" : "ADD"}
+        </button>
+        {f.project_id && (
+          <button onClick={() => setF(EMPTY_PROJECT)} className="btn-primary">CANCEL</button>
+        )}
       </div>
       <div className="mt-4 space-y-2">
         {items.map((p) => (
-          <div key={p.project_id} className="border border-ink/10 p-3 flex justify-between">
-            <div className="font-display uppercase">{p.title} · <span className="text-ink-4 text-sm">{p.year}</span></div>
-            <button onClick={() => del(p.project_id)} className="btn-primary text-xs">Del</button>
+          <div key={p.project_id} className="border border-ink/10 p-3 flex justify-between items-center">
+            <div>
+              <div className="font-display uppercase">{p.title} · <span className="text-ink-4 text-sm">{p.year}</span></div>
+              {(p.artist_ids || []).length > 0 && (
+                <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
+                  {p.artist_ids.map(nameOf).join(" · ")}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setF({ ...EMPTY_PROJECT, ...p })} className="btn-primary text-xs">Edit</button>
+              <button onClick={() => del(p.project_id)} className="btn-primary text-xs">Del</button>
+            </div>
           </div>
         ))}
       </div>

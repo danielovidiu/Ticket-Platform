@@ -143,6 +143,42 @@ export function renderInline(t) {
   return parts;
 }
 
+/**
+ * The same text with every mark taken off — headings, list bullets, emphasis, and the
+ * label out of a `[text](url)` link. Newlines collapse to single spaces.
+ *
+ * This is what an excerpt has to be built from. Slicing the markdown source directly
+ * cuts through `**bold**` and `[label](url)` and renders the wreckage, and the cut lands
+ * in a different place than the reader counts it — a 200-character limit that spends 30
+ * of them on syntax the reader never sees is not a 200-character limit.
+ */
+export function richToPlain(md) {
+  if (!md) return "";
+  return String(md)
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")               // headings
+    .replace(/^\s*([-*]|\d+[.)])\s+/gm, "")           // list bullets
+    .replace(/\[(.+?)\]\((.+?)\)/g, "$1")             // links -> their label
+    .replace(/(\*\*|~~|__)(.+?)\1/g, "$2")            // bold / strike / underline
+    .replace(/\*(.+?)\*/g, "$1")                      // italic
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * `text` cut to at most `limit` characters on a word boundary, plus whether anything
+ * was left behind. The caller needs both: a "see more" control that appears when there
+ * is nothing more to see is worse than no control at all.
+ */
+export function excerpt(md, limit = 200) {
+  const plain = richToPlain(md);
+  if (plain.length <= limit) return { text: plain, truncated: false };
+  const cut = plain.slice(0, limit);
+  // Back up to the last space so the excerpt doesn't end mid-word. If there isn't one
+  // (a single very long token), take the hard cut rather than returning nothing.
+  const space = cut.lastIndexOf(" ");
+  return { text: (space > limit * 0.6 ? cut.slice(0, space) : cut).trimEnd(), truncated: true };
+}
+
 /** Wraps (or unwraps, if the selection is already wrapped) the current textarea
  * selection with `marker` on both sides. Falls back to wrapping nothing (cursor
  * position) when there's no selection, so typing continues between the markers. */

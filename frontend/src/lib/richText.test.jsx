@@ -7,7 +7,7 @@
  * the author had not written.
  */
 import { render, screen } from "@testing-library/react";
-import { renderRich } from "./richText";
+import { renderRich, richToPlain, excerpt } from "./richText";
 
 const html = (md) => {
   const { container } = render(<div>{renderRich(md)}</div>);
@@ -110,5 +110,68 @@ describe("inline formatting still works", () => {
   test("formatting works inside a list item", () => {
     const c = html("- **bold** item");
     expect(c.querySelector("li strong").textContent).toBe("bold");
+  });
+});
+
+/**
+ * The excerpt the artist page's collapsed bio is built from. The property under test is
+ * that the reader's 200 characters are 200 characters of *text* — not of markdown source
+ * with the marks counted in, and never a cut through the middle of one.
+ */
+describe("richToPlain", () => {
+  test("takes the marks off without eating the words", () => {
+    expect(richToPlain("**bold** and *italic* and ~~gone~~ and __under__"))
+      .toBe("bold and italic and gone and under");
+  });
+
+  test("keeps a link's label and drops its URL", () => {
+    expect(richToPlain("see [the site](https://example.com) now"))
+      .toBe("see the site now");
+  });
+
+  test("drops heading hashes and list bullets", () => {
+    expect(richToPlain("## Title\n- one\n- two")).toBe("Title one two");
+    expect(richToPlain("1. first\n2. second")).toBe("first second");
+  });
+
+  test("collapses newlines to single spaces", () => {
+    expect(richToPlain("a\n\n\nb")).toBe("a b");
+  });
+
+  test("empty in, empty out", () => {
+    expect(richToPlain("")).toBe("");
+    expect(richToPlain(null)).toBe("");
+  });
+});
+
+describe("excerpt", () => {
+  test("short text is not truncated and gets no see-more", () => {
+    const r = excerpt("Berlin-based collective.", 200);
+    expect(r.text).toBe("Berlin-based collective.");
+    expect(r.truncated).toBe(false);
+  });
+
+  test("long text is cut to the limit and reports it", () => {
+    const r = excerpt("word ".repeat(100), 200);
+    expect(r.text.length).toBeLessThanOrEqual(200);
+    expect(r.truncated).toBe(true);
+  });
+
+  test("the cut lands on a word boundary", () => {
+    const r = excerpt("alpha bravo charlie delta echo foxtrot", 20);
+    expect(r.text).toBe("alpha bravo charlie");
+    expect(r.truncated).toBe(true);
+  });
+
+  test("a single unbroken token is cut hard rather than lost", () => {
+    const r = excerpt("x".repeat(500), 200);
+    expect(r.text.length).toBe(200);
+    expect(r.truncated).toBe(true);
+  });
+
+  test("markdown syntax does not count against the limit", () => {
+    // 40 characters of text wearing 20 characters of marks.
+    const md = "**" + "a".repeat(40) + "**";
+    expect(excerpt(md, 50).truncated).toBe(false);
   });
 });

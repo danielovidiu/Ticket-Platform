@@ -20,6 +20,8 @@
 # door   = require_admin_or_door    authed = any signed-in user
 admin  GET    /api/admin/artists
 admin  POST   /api/admin/artists
+admin  GET    /api/admin/artists/disciplines
+admin  PUT    /api/admin/artists/disciplines
 admin  DELETE /api/admin/artists/{artist_id}
 admin  PATCH  /api/admin/artists/{artist_id}
 admin  GET    /api/admin/audit
@@ -69,6 +71,7 @@ admin  POST   /api/admin/orders/{reservation_id}/refund
 admin  GET    /api/admin/projects
 admin  POST   /api/admin/projects
 admin  DELETE /api/admin/projects/{project_id}
+admin  PATCH  /api/admin/projects/{project_id}
 admin  GET    /api/admin/shop/orders
 admin  PATCH  /api/admin/shop/orders/{order_id}
 admin  GET    /api/admin/shop/products
