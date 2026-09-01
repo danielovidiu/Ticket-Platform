@@ -168,7 +168,7 @@ export const BLOCK_DEFAULTS = {
     second_cta_label: "",
     second_cta_href: "",
     align: "left",
-    content_y: "bottom",
+    content_offset: 100,
     height_vh: 85,
   }),
   rich_text: () => ({ content: "## New heading\n\nParagraph text with **bold** words and [links](#)." }),

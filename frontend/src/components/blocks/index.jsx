@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import DOMPurify from "dompurify";
@@ -162,6 +162,44 @@ const casing = (props) => (props.text_case === undefined ? "uppercase" : props.t
 const CONTENT_Y = { top: "justify-start", middle: "justify-center", bottom: "justify-end" };
 const contentY = (props, fallback) => CONTENT_Y[props.content_y] || fallback;
 
+/** Where the named steps sit on the 0-100 scale that replaced them. */
+const CONTENT_Y_AS_PERCENT = { top: 0, middle: 50, bottom: 100 };
+
+/**
+ * How far down the block its text sits, as a percentage of the block's own height.
+ *
+ * Three named steps could put a hero's words at the top, the middle or the bottom of the
+ * image and nowhere else — and on a photograph the one place they need to go is usually
+ * none of those three, because a face or a horizon is in the way.
+ *
+ * A block that predates the slider takes the position its old step meant, so nothing
+ * moves on upgrade. `fallback` is what a block with neither carries.
+ */
+export function contentOffset(props, fallback = 100) {
+  const raw = Number(props.content_offset);
+  if (Number.isFinite(raw)) return Math.min(100, Math.max(0, raw));
+  const named = CONTENT_Y_AS_PERCENT[props.content_y];
+  return named === undefined ? fallback : named;
+}
+
+/**
+ * Two spacers either side of the content, growing in proportion.
+ *
+ * Absolute positioning with `top: P%` would be the obvious way and it can overflow: at
+ * 100% a block of text taller than its section hangs out of the bottom, and the section
+ * clips it. Flex-grow shares out only the space that is actually free, so the content is
+ * placed proportionally when there is room and simply fills the block when there is not.
+ */
+function VerticalPlacement({ offset, children, testId }) {
+  return (
+    <>
+      <div style={{ flexGrow: offset }} aria-hidden="true" data-testid={testId && `${testId}-space-before`} />
+      {children}
+      <div style={{ flexGrow: 100 - offset }} aria-hidden="true" data-testid={testId && `${testId}-space-after`} />
+    </>
+  );
+}
+
 const overlayMode = (props) => (props.overlay === undefined ? "gradient" : props.overlay === true ? "solid" : props.overlay || "none");
 
 /**
@@ -221,7 +259,10 @@ function Hero({ props }) {
   );
 
   const body = (
-    <Container className="relative pb-16 md:pb-24">
+    // Symmetric padding: the text used to be pinned to the bottom, so only bottom
+    // padding mattered. It can sit anywhere now, and at 0% it would otherwise start
+    // hard against the top edge.
+    <Container className="relative py-16 md:py-24">
       <div className={`flex flex-col ${align}`}>
         {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-3 mb-6`}>{props.eyebrow}</div>}
         {props.heading && (
@@ -243,13 +284,22 @@ function Hero({ props }) {
   // Full frame spans the viewport, as the hero always has. Turned off, the whole block —
   // image included — is held inside the same 1400px frame the Image block's "Full width"
   // toggles against, so the two controls mean the same thing in both places.
+  // 100 = flush with the bottom, which is where the hero has always put its words.
+  const offset = contentOffset(props, 100);
+  const placed = <VerticalPlacement offset={offset} testId="hero">{body}</VerticalPlacement>;
+
   if (fullFrame) {
-    return <section className={`relative overflow-hidden flex flex-col ${contentY(props, "justify-end")}`} style={minHeight} data-testid="hero">{media}{body}</section>;
+    return (
+      <section className="relative overflow-hidden flex flex-col" style={minHeight} data-testid="hero"
+               data-content-offset={offset}>
+        {media}{placed}
+      </section>
+    );
   }
   return (
-    <section data-testid="hero">
-      <div className={`max-w-[1400px] mx-auto relative overflow-hidden flex flex-col ${contentY(props, "justify-end")} border border-ink/10`} style={minHeight}>
-        {media}{body}
+    <section data-testid="hero" data-content-offset={offset}>
+      <div className="max-w-[1400px] mx-auto relative overflow-hidden flex flex-col border border-ink/10" style={minHeight}>
+        {media}{placed}
       </div>
     </section>
   );
@@ -709,6 +759,106 @@ function Split({ props }) {
  * the zeroing described on Container: with none, the heading would sit against the edge
  * of its own background image, and a Spacer between blocks could not put it back.
  */
+/** The most of its spare height the photo will use up drifting. Under 1 so the movement
+ *  eases off before it reaches an edge rather than stopping dead against one. */
+const PARALLAX_TRAVEL = 0.8;
+
+/**
+ * The photo behind a band, drifting as the page scrolls.
+ *
+ * NOT `background-attachment: fixed`, which is what this replaces and which was wrong in
+ * two ways that both trace to the same rule: a fixed background's positioning area is
+ * the VIEWPORT, not the element.
+ *
+ *   IT ZOOMED. `cover` sized the photo to cover the viewport's full height while the
+ *   band showed a window 45vh tall, so the image arrived blown up — measured at 1.72x on
+ *   a 981x505 band in a 989x1123 viewport. And it could not be fixed by choosing a
+ *   smaller background-size: a viewport-pinned image MUST cover the viewport, or a band
+ *   sitting anywhere else on screen would show gaps. The zoom was the price of the
+ *   technique, not a mistake in using it.
+ *
+ *   IT WAS INVISIBLE ON PHONES. iOS Safari and most mobile browsers ignore the property
+ *   outright, so the band had to hide the photo below md and collapsed to a flat colour.
+ *
+ * An ordinary <img> sized to cover the band has neither problem. It is drawn slightly
+ * taller than the band and translated by a fraction of the band's progress across the
+ * viewport, which is the drift the effect was for. The overscan is usually free: a photo
+ * wider than the band is already width-limited, so making the box 24% taller does not
+ * scale it at all.
+ */
+function ParallaxPhoto({ src, alt = "" }) {
+  const frameRef = useRef(null);
+  const imgRef = useRef(null);
+  const [drift, setDrift] = useState(0);
+
+  /* The photo is fitted to the band's WIDTH and left at its own aspect, with a floor of
+   * the band's height. A landscape photo in a wide band therefore comes out taller than
+   * it needs to be, and that surplus — not a fixed percentage — is the room it drifts
+   * in. Movement is bought with height the image already had, so the scale never rises
+   * above a plain cover.
+   *
+   * The alternative, drawing it a fixed 24% taller, costs 24% zoom exactly when the band
+   * is too narrow to supply the surplus for free: measured at 1.24x on a 375x365 phone
+   * band. A still photograph correctly framed beats a moving one that is too big, so
+   * where there is no surplus there is no drift. */
+  const measure = useCallback(() => {
+    const el = frameRef.current;
+    const img = imgRef.current;
+    if (!el || !img) return;
+    const r = el.getBoundingClientRect();
+    const vh = window.innerHeight || 0;
+    if (!vh || !r.height) return;
+
+    const surplus = Math.max(0, (img.offsetHeight - r.height) / 2);
+    if (!surplus) { setDrift(0); return; }
+
+    // -1 as the band enters from below, +1 once it has left above. The band's own height
+    // is in the denominator so a tall band drifts across the same span as a short one.
+    const travel = (vh + r.height) / 2;
+    const progress = ((vh / 2) - (r.top + r.height / 2)) / travel;
+    const clamped = Math.max(-1, Math.min(1, progress));
+    setDrift(clamped * surplus * PARALLAX_TRAVEL);
+  }, []);
+
+  useEffect(() => {
+    // Someone who has asked for less motion gets a still photograph, correctly framed —
+    // which is the half of this that matters.
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (reduced?.matches) return undefined;
+
+    let queued = false;
+    const onScroll = () => {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(() => { queued = false; measure(); });
+    };
+    measure();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [measure]);
+
+  return (
+    <div ref={frameRef} className="absolute inset-0 overflow-hidden" data-testid="image-band-fixed">
+      {/* h-auto keeps the photo's own proportions so any surplus height is real rather
+          than invented; min-h-full is the floor that stops a wide panorama leaving a gap,
+          and object-cover crops rather than stretches when that floor is what applies. */}
+      <img
+        ref={imgRef}
+        src={src}
+        alt={alt}
+        onLoad={measure}
+        data-testid="image-band-parallax-img"
+        className="absolute left-0 top-1/2 w-full h-auto min-h-full max-w-none object-cover will-change-transform"
+        style={{ transform: `translate3d(0, calc(-50% + ${drift}px), 0)` }}
+      />
+    </div>
+  );
+}
+
 function ImageBand({ props }) {
   const h = props.height === "short" ? "min-h-[30vh]"
     : props.height === "tall" ? "min-h-[60vh]"
@@ -722,20 +872,15 @@ function ImageBand({ props }) {
   const inner = (
     <div className={`relative overflow-hidden ${h} flex flex-col ${contentY(props, "justify-center")}`} data-testid="image-band">
       {props.image_url && (
-        // Two ways to carry the same photo, because a fixed background is not an <img>.
-        //
-        // `bg-fixed` pins it to the viewport so the band scrolls over a stationary image.
-        // Mobile browsers — iOS Safari in particular — IGNORE background-attachment, and
-        // what they render instead is a badly-cropped still. So below md the fixed
-        // variant shows no photo at all rather than a broken version of the effect.
+        // One photograph either way; the toggle only decides whether it moves. See
+        // ParallaxPhoto for why this is no longer a fixed background.
         props.fixed_bg ? (
-          <div className="absolute inset-0 hidden md:block" data-testid="image-band-fixed">
-            <div className="absolute inset-0 bg-fixed bg-center bg-cover"
-                 style={{ backgroundImage: `url(${mediaUrl(props.image_url)})` }} />
+          <>
+            <ParallaxPhoto src={mediaUrl(props.image_url)} />
             <div className="absolute inset-0"
                  style={{ backgroundColor: props.overlay_color || "#050505", opacity }}
                  data-testid="image-band-overlay" />
-          </div>
+          </>
         ) : (
           <div className="absolute inset-0">
             <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" />
@@ -745,16 +890,21 @@ function ImageBand({ props }) {
           </div>
         )
       )}
+      {/* No max-w on the text. It was capped at 4xl for the heading and xl for the body,
+          so on a wide band a line broke less than halfway across and the rest of the
+          photograph sat empty beside it — the words looked pasted onto a corner rather
+          than set on the image. The safe area IS the Container's padding; inside it the
+          text is free to use the full measure. */}
       <Container className="relative py-16 md:py-24">
-        <div className={`flex flex-col ${align}`}>
+        <div className={`flex flex-col w-full ${align}`}>
           {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-3 mb-4`}>{props.eyebrow}</div>}
           {props.heading && (
-            <h2 className={`font-display text-4xl md:text-6xl ${upper} tracking-tighter font-bold max-w-4xl whitespace-pre-wrap`}
+            <h2 className={`font-display text-4xl md:text-6xl ${upper} tracking-tighter font-bold w-full whitespace-pre-wrap`}
                 data-testid="image-band-heading">
               {props.heading}
             </h2>
           )}
-          {props.body && <div className="mt-6 max-w-xl">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed text-lg" })}</div>}
+          {props.body && <div className="mt-6 w-full">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed text-lg" })}</div>}
           {props.cta_label && (
             <div className="mt-8">
               <Link to={props.cta_href || "#"} className={props.cta_style === "accent" ? "btn-accent" : "btn-primary"}>{props.cta_label}</Link>

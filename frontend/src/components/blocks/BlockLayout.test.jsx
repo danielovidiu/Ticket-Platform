@@ -191,29 +191,65 @@ describe("the container fills its flex parent", () => {
 });
 
 describe("vertical text position", () => {
-  const yClass = (c) => [...c.querySelector('[data-testid="hero"]').classList]
-    .find((x) => x.startsWith("justify-"));
+  /* The hero's is a percentage now — three named steps could put its words in three
+   * places and nowhere else, and on a photograph the spot they need is usually none of
+   * the three, because a face or a horizon is in the way.
+   *
+   * It is read off the two spacers that place the text rather than off a class: flex-grow
+   * shares out only the space that is actually free, so text taller than its block fills
+   * it instead of hanging out of the bottom the way `top: 100%` would. */
+  const heroOffset = (c) => Number(c.querySelector('[data-testid="hero"]').dataset.contentOffset);
+  const beforeGrow = (c) => c.querySelector('[data-testid="hero-space-before"]').style.flexGrow;
+  const afterGrow = (c) => c.querySelector('[data-testid="hero-space-after"]').style.flexGrow;
   const bandY = (c) => [...c.querySelector('[data-testid="image-band"]').classList]
     .find((x) => x.startsWith("justify-"));
 
-  test("the hero still pins to the bottom when unset", () => {
+  test("the hero still sits at the bottom when unset", () => {
     // Absent means the position it shipped with; nothing published may move.
-    expect(yClass(draw("hero", { heading: "H" }))).toBe("justify-end");
+    const c = draw("hero", { heading: "H" });
+    expect(heroOffset(c)).toBe(100);
+    expect(beforeGrow(c)).toBe("100");
+    expect(afterGrow(c)).toBe("0");
   });
 
+  test("a hero published under a named step keeps exactly where it sat", () => {
+    // The upgrade path. These three were the whole vocabulary before the slider.
+    expect(heroOffset(draw("hero", { heading: "H", content_y: "top" }))).toBe(0);
+    expect(heroOffset(draw("hero", { heading: "H", content_y: "middle" }))).toBe(50);
+    expect(heroOffset(draw("hero", { heading: "H", content_y: "bottom" }))).toBe(100);
+  });
+
+  test("the slider wins over the old step where both are present", () => {
+    expect(heroOffset(draw("hero", { heading: "H", content_y: "top", content_offset: 62 }))).toBe(62);
+  });
+
+  test("the spacers split in proportion, so 30% means 30% down", () => {
+    const c = draw("hero", { heading: "H", content_offset: 30 });
+    expect(beforeGrow(c)).toBe("30");
+    expect(afterGrow(c)).toBe("70");
+  });
+
+  test("out-of-range values are clamped rather than breaking the layout", () => {
+    expect(heroOffset(draw("hero", { heading: "H", content_offset: 400 }))).toBe(100);
+    expect(heroOffset(draw("hero", { heading: "H", content_offset: -20 }))).toBe(0);
+  });
+
+  test("a value that is not a number falls back rather than rendering NaN", () => {
+    const c = draw("hero", { heading: "H", content_offset: "sideways" });
+    expect(heroOffset(c)).toBe(100);
+    expect(beforeGrow(c)).toBe("100");
+  });
+
+  // The band kept the three steps: it is a strip of fixed height, not a full screen, so
+  // there is far less room in which a percentage would mean anything different.
   test("the band still centres when unset", () => {
     expect(bandY(draw("image_band", { heading: "H" }))).toBe("justify-center");
   });
 
   test.each([["top", "justify-start"], ["middle", "justify-center"], ["bottom", "justify-end"]])(
-    "%s maps to %s", (pos, cls) => {
-      expect(yClass(draw("hero", { heading: "H", content_y: pos }))).toBe(cls);
+    "the band's %s maps to %s", (pos, cls) => {
       expect(bandY(draw("image_band", { heading: "H", content_y: pos }))).toBe(cls);
     });
-
-  test("an unknown value falls back rather than dropping the class", () => {
-    expect(yClass(draw("hero", { heading: "H", content_y: "sideways" }))).toBe("justify-end");
-  });
 });
 
 /**
@@ -303,19 +339,61 @@ describe("image band, fixed background", () => {
     expect(c.querySelector('[data-testid="image-band-fixed"]')).toBeNull();
   });
 
-  test("set, it becomes a fixed background instead of an img", () => {
+  /* It is an <img> that drifts, not `background-attachment: fixed`, and the reasons are
+   * two bugs that both came from the same rule: a fixed background's positioning area is
+   * the VIEWPORT, not the element.
+   *
+   *   It zoomed — `cover` sized the photo to the viewport's full height while the band
+   *   showed a 45vh window, measured at 1.72x. That could not be tuned away: a
+   *   viewport-pinned image must cover the viewport or bands elsewhere on screen show
+   *   gaps, so the zoom was the price of the technique.
+   *
+   *   It was invisible on phones — mobile browsers ignore the property, so the photo had
+   *   to be hidden below md and the band went flat.
+   */
+  test("set, it is still one photograph, carried by an img", () => {
     const c = band({ image_url: "/x.jpg", fixed_bg: true });
-    const fixed = c.querySelector('[data-testid="image-band-fixed"]');
-    expect(fixed).toBeTruthy();
-    expect(c.querySelector("img")).toBeNull();
-    expect(fixed.querySelector(".bg-fixed")).toBeTruthy();
+    const layer = c.querySelector('[data-testid="image-band-fixed"]');
+    expect(layer).toBeTruthy();
+    const img = layer.querySelector('[data-testid="image-band-parallax-img"]');
+    expect(img.tagName).toBe("IMG");
+    expect(img.getAttribute("src")).toContain("/x.jpg");
+    // Nothing left that a mobile browser refuses to honour.
+    expect(layer.querySelector(".bg-fixed")).toBeNull();
   });
 
-  test("it is hidden below md, where the effect does not work", () => {
-    const fixed = band({ image_url: "/x.jpg", fixed_bg: true })
+  test("it is not hidden on phones", () => {
+    const layer = band({ image_url: "/x.jpg", fixed_bg: true })
       .querySelector('[data-testid="image-band-fixed"]');
-    expect([...fixed.classList]).toContain("hidden");
-    expect([...fixed.classList]).toContain("md:block");
+    expect([...layer.classList]).not.toContain("hidden");
+    const img = layer.querySelector('[data-testid="image-band-parallax-img"]');
+    expect([...img.classList]).not.toContain("md:hidden");
+    expect([...img.classList]).not.toContain("hidden");
+  });
+
+  test("the photo keeps its own proportions, with the band height only as a floor", () => {
+    // This is what stops it zooming. Fitted to the band's WIDTH and left at its natural
+    // aspect, any surplus height is real rather than invented — and that surplus, not a
+    // fixed percentage, is the only room it drifts in. `min-h-full` is the floor that
+    // keeps a wide panorama from leaving a gap; object-cover crops rather than stretches
+    // when that floor is what applies.
+    const img = band({ image_url: "/x.jpg", fixed_bg: true })
+      .querySelector('[data-testid="image-band-parallax-img"]');
+    const cls = [...img.classList];
+    expect(cls).toContain("h-auto");
+    expect(cls).toContain("min-h-full");
+    expect(cls).toContain("w-full");
+    expect(cls).toContain("object-cover");
+    // Never a fixed taller box: on a band too narrow to supply surplus for free, drawing
+    // one 24% taller cost 24% zoom — measured at 1.24x on a 375x365 phone band.
+    expect(img.style.height).toBe("");
+  });
+
+  test("it starts centred, so an unscrolled band is framed like a plain cover", () => {
+    const img = band({ image_url: "/x.jpg", fixed_bg: true })
+      .querySelector('[data-testid="image-band-parallax-img"]');
+    expect([...img.classList]).toContain("top-1/2");
+    expect(img.style.transform).toMatch(/calc\(-50% \+ 0px\)/);
   });
 
   test("the overlay still dims it", () => {

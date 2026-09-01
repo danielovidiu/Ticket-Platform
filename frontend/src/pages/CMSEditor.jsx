@@ -3,7 +3,7 @@ import { http } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home, CalendarRange } from "lucide-react";
-import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize, HERO_HEIGHT_LIMITS, heroHeight } from "../components/blocks";
+import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize, HERO_HEIGHT_LIMITS, heroHeight, contentOffset } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
 import { THEME_PRESETS, presetIdFor, themeChoicePatch } from "../lib/themePresets";
 import { failingPairs, AA_TEXT } from "../lib/contrast";
@@ -1114,7 +1114,11 @@ const FIELDS = {
     { k: "second_cta_label", label: "Secondary CTA label" },
     { k: "second_cta_href", label: "Secondary CTA link" },
     { k: "align", label: "Text align (horizontal)", type: "select", options: ["left", "center", "right"] },
-    { k: "content_y", label: "Text position (vertical)", type: "select", options: ["top", "middle", "bottom"], fallback: "bottom" },
+    // Was a top/middle/bottom select. Three steps could put a hero's words in three
+    // places and nowhere else, and on a photograph the spot they need is usually none of
+    // the three, because a face or a horizon is in the way. `contentOffset` still reads
+    // the old field, so a hero published under a name keeps exactly where it sat.
+    { k: "content_offset", label: "Text position — down from the top", type: "offset", fallback: 100 },
     // Replaces a short/medium/tall select. Those were 50/70/85vh, and `heroHeight`
     // still resolves them, so a hero published under a name keeps its exact height.
     { k: "height_vh", label: "Height (% of screen)", type: "size", unit: "vh" },
@@ -1373,6 +1377,28 @@ function PropsEditor({ block, onChange }) {
                   ? (Number(v[f.k]) || f.limits.fallback)
                   : (f.breakpoint ? heroHeadingSize(v)[f.breakpoint] : heroHeight(v))}
               />
+            ) : f.type === "offset" ? (
+              /* A slider from the top of the image to the bottom, with the three places
+                 the old select offered marked on it — so the control both replaces it
+                 and shows where its values used to land. */
+              <div>
+                <div className="flex items-center gap-3">
+                  <input type="range" min={0} max={100} step={1}
+                         value={contentOffset(v, f.fallback)}
+                         onChange={(e) => commitField(f.k)(Number(e.target.value))}
+                         data-testid={testId} className="flex-1" />
+                  <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 w-12 text-right">
+                    {contentOffset(v, f.fallback)}%
+                  </span>
+                </div>
+                <div className="mt-1 flex justify-between font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5">
+                  {[["Top", 0], ["Middle", 50], ["Bottom", 100]].map(([label, at]) => (
+                    <button key={at} type="button" onClick={() => commitField(f.k)(at)}
+                            data-testid={`${testId}-${at}`}
+                            className="hover:text-ink">{label}</button>
+                  ))}
+                </div>
+              </div>
             ) : f.type === "range" ? (
               <div className="flex items-center gap-3">
                 <input type="range" min={f.min ?? 0} max={f.max ?? 100} value={v[f.k] ?? f.fallback ?? 0}
