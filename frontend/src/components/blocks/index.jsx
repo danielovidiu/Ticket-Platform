@@ -122,8 +122,33 @@ const casing = (props) => (props.text_case === undefined ? "uppercase" : props.t
  */
 const overlayMode = (props) => (props.overlay === undefined ? "gradient" : props.overlay === true ? "solid" : props.overlay || "none");
 
+/**
+ * Hero height, as a percentage of the viewport.
+ *
+ * vh rather than the px the heading sizes use, and for the opposite reason. A heading
+ * needs px because 96px is right on a laptop and unreadable on a 375px phone — the same
+ * number is the wrong size at both ends. A hero is the other way round: it is a
+ * viewport-filling element by construction, so a fixed 600px is most of a phone screen
+ * and a third of a laptop, and only a proportion means the same thing on both.
+ *
+ * It also keeps the three named steps this replaces exact. They WERE vh, so a hero
+ * published as "tall" resolves to 85 and renders at the height it always did.
+ */
+export const HERO_HEIGHT_LIMITS = { min: 10, max: 100, fallback: 85 };
+
+const LEGACY_HEIGHTS = { short: 50, medium: 70, tall: 85 };
+
+export function heroHeight(props) {
+  const raw = props.height_vh;
+  if (raw === undefined || raw === null || raw === "" || Number.isNaN(Number(raw))) {
+    return LEGACY_HEIGHTS[props.height] ?? HERO_HEIGHT_LIMITS.fallback;
+  }
+  // clampPx rounds and clamps; the name is about how it is usually used, not the unit.
+  return clampPx(raw, HERO_HEIGHT_LIMITS);
+}
+
 function Hero({ props }) {
-  const h = props.height === "short" ? "min-h-[50vh]" : props.height === "medium" ? "min-h-[70vh]" : "min-h-[85vh]";
+  const minHeight = { minHeight: `${heroHeight(props)}vh` };
   const align = props.align === "center" ? "text-center items-center" : props.align === "right" ? "text-right items-end" : "text-left items-start";
   const size = heroHeadingSize(props);
   const upper = casing(props);
@@ -177,11 +202,11 @@ function Hero({ props }) {
   // image included — is held inside the same 1400px frame the Image block's "Full width"
   // toggles against, so the two controls mean the same thing in both places.
   if (fullFrame) {
-    return <section className={`relative overflow-hidden ${h} flex flex-col justify-end`} data-testid="hero">{media}{body}</section>;
+    return <section className="relative overflow-hidden flex flex-col justify-end" style={minHeight} data-testid="hero">{media}{body}</section>;
   }
   return (
     <section data-testid="hero">
-      <div className={`max-w-[1400px] mx-auto relative overflow-hidden ${h} flex flex-col justify-end border border-ink/10`}>
+      <div className="max-w-[1400px] mx-auto relative overflow-hidden flex flex-col justify-end border border-ink/10" style={minHeight}>
         {media}{body}
       </div>
     </section>

@@ -11,7 +11,7 @@
  */
 import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { BLOCK_RENDERERS, BlockRenderer } from "./index";
+import { BLOCK_RENDERERS, BlockRenderer, heroHeight, HERO_HEIGHT_LIMITS } from "./index";
 import { BLOCK_DEFAULTS } from "../../lib/cms";
 
 vi.mock("../../api", () => ({
@@ -105,5 +105,50 @@ describe("image band", () => {
     expect(band({ cta_label: "" }).querySelector("a")).toBeNull();
     expect(band({ cta_label: "Go", cta_href: "/events" }).querySelector("a"))
       .toHaveAttribute("href", "/events");
+  });
+});
+
+/**
+ * The hero's height, now a number rather than one of three names.
+ *
+ * The property that matters is that the names still resolve. A hero published as "tall"
+ * has to render at the height it always did — the old select's three options were 50, 70
+ * and 85vh, and nothing about a stored page changed when the control did.
+ */
+describe("hero height", () => {
+  test("the names it replaced still resolve to their old values", () => {
+    expect(heroHeight({ height: "short" })).toBe(50);
+    expect(heroHeight({ height: "medium" })).toBe(70);
+    expect(heroHeight({ height: "tall" })).toBe(85);
+  });
+
+  test("a hero with no height at all falls back rather than collapsing", () => {
+    expect(heroHeight({})).toBe(HERO_HEIGHT_LIMITS.fallback);
+  });
+
+  test("a typed number wins over the legacy name", () => {
+    expect(heroHeight({ height: "tall", height_vh: 30 })).toBe(30);
+  });
+
+  test("it is clamped, not trusted", () => {
+    expect(heroHeight({ height_vh: 5000 })).toBe(HERO_HEIGHT_LIMITS.max);
+    expect(heroHeight({ height_vh: -10 })).toBe(HERO_HEIGHT_LIMITS.min);
+  });
+
+  test("junk falls back instead of producing NaNvh", () => {
+    for (const bad of ["", null, undefined, "abc", {}]) {
+      expect(Number.isFinite(heroHeight({ height_vh: bad, height: "medium" }))).toBe(true);
+    }
+    expect(heroHeight({ height_vh: "abc", height: "medium" })).toBe(70);
+  });
+
+  test("0 is clamped to the minimum, not read as absent", () => {
+    // A hero of zero height is a hero nobody can see; `||` would have sent it to 85.
+    expect(heroHeight({ height_vh: 0 })).toBe(HERO_HEIGHT_LIMITS.min);
+  });
+
+  test("it reaches the rendered element as a vh min-height", () => {
+    const c = draw("hero", { heading: "H", height_vh: 42 });
+    expect(c.querySelector('[data-testid="hero"]').style.minHeight).toBe("42vh");
   });
 });

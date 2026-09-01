@@ -3,7 +3,7 @@ import { http } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home, CalendarRange } from "lucide-react";
-import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize } from "../components/blocks";
+import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize, HERO_HEIGHT_LIMITS, heroHeight } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
 import { THEME_PRESETS, presetIdFor, themeChoicePatch } from "../lib/themePresets";
 import { failingPairs, AA_TEXT } from "../lib/contrast";
@@ -928,7 +928,9 @@ const FIELDS = {
     { k: "second_cta_label", label: "Secondary CTA label" },
     { k: "second_cta_href", label: "Secondary CTA link" },
     { k: "align", label: "Align", type: "select", options: ["left", "center", "right"] },
-    { k: "height", label: "Height", type: "select", options: ["short", "medium", "tall"] },
+    // Replaces a short/medium/tall select. Those were 50/70/85vh, and `heroHeight`
+    // still resolves them, so a hero published under a name keeps its exact height.
+    { k: "height_vh", label: "Height (% of screen)", type: "size", unit: "vh" },
   ],
   rich_text: [{ k: "content", label: "Content (markdown-ish)", type: "textarea", rows: 12, format: true }],
   image: [
@@ -1045,9 +1047,7 @@ function FormattedTextareaField({ f, value, onCommit, testId }) {
  * The placeholder shows what the block renders at TODAY when nothing has been set, which
  * for a hero saved before this existed is its old named step rather than a guess.
  */
-function SizeField({ value, breakpoint, block, onCommit, testId }) {
-  const limits = HERO_SIZE_LIMITS[breakpoint];
-  const current = heroHeadingSize(block)[breakpoint];
+function SizeField({ value, limits, current, unit = "px", onCommit, testId }) {
   const isSet = value !== undefined && value !== null && value !== "";
   const { local, onChange, flush } = useDebouncedField(isSet ? String(value) : "", (text) => {
     const trimmed = text.trim();
@@ -1073,7 +1073,7 @@ function SizeField({ value, breakpoint, block, onCommit, testId }) {
           data-testid={`${testId}-number`}
           className="input-x !py-1 !px-2 !text-xs w-14 text-right font-mono-x"
         />
-        <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">px</span>
+        <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{unit}</span>
       </div>
     </div>
   );
@@ -1138,8 +1138,12 @@ function PropsEditor({ block, onChange }) {
                 <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{v[f.k] ?? f.fallback ?? "#050505"}</span>
               </div>
             ) : f.type === "size" ? (
-              <SizeField value={v[f.k]} breakpoint={f.breakpoint} block={v}
-                         onCommit={commitField(f.k)} testId={testId} />
+              <SizeField
+                value={v[f.k]} testId={testId} onCommit={commitField(f.k)}
+                unit={f.unit || "px"}
+                limits={f.breakpoint ? HERO_SIZE_LIMITS[f.breakpoint] : HERO_HEIGHT_LIMITS}
+                current={f.breakpoint ? heroHeadingSize(v)[f.breakpoint] : heroHeight(v)}
+              />
             ) : f.type === "range" ? (
               <div className="flex items-center gap-3">
                 <input type="range" min={f.min ?? 0} max={f.max ?? 100} value={v[f.k] ?? f.fallback ?? 0}
