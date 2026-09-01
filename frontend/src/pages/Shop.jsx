@@ -4,7 +4,7 @@ import { http } from "../api";
 import { mediaUrl } from "../lib/media";
 import { ron } from "../lib/cart";
 
-const GENDERS = ["unisex", "men", "women"];
+const GENDERS = ["men", "unisex", "women"];   // A-Z, matching the shop admin
 
 function ProductCard({ p }) {
   const cover = (p.images || [])[0];

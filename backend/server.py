@@ -2081,10 +2081,16 @@ async def delete_my_account(request: Request, response: Response, user=Depends(g
 # set: the live list is a single editable setting, so adding "Aerial" is an edit in the
 # admin rather than a redeploy — the same bargain get_vat_rate makes for the VAT rate.
 DISCIPLINES_DEFAULT = [
-    "DJ", "Live Act", "Producer", "Vocalist", "Dancer", "Choreographer",
-    "Visual Artist", "Light Design", "VJ", "Sound Design", "Performance Art",
-    "Installation", "Photographer", "Curator",
+    "Choreographer", "Curator", "Dancer", "DJ", "Installation", "Light Design",
+    "Live Act", "Performance Art", "Photographer", "Producer", "Sound Design",
+    "Visual Artist", "VJ", "Vocalist",
 ]
+
+
+def _alpha(value: str) -> tuple:
+    """Sort key for a vocabulary a person reads: case-insensitive, with the original as a
+    tiebreak so "DJ" and "dj" have a stable order rather than an arbitrary one."""
+    return (value.casefold(), value)
 
 
 async def get_disciplines() -> List[str]:
@@ -2096,12 +2102,19 @@ async def get_disciplines() -> List[str]:
     """
     doc = await db.site_settings.find_one({"_id": "artists"}, {"_id": 0, "disciplines": 1})
     if doc and isinstance(doc.get("disciplines"), list):
-        return [str(d) for d in doc["disciplines"]]
+        # Sorted on read as well as on write: a value stored before this was the rule, or
+        # edited into the database directly, still comes back in order.
+        return sorted((str(d) for d in doc["disciplines"]), key=_alpha)
     return list(DISCIPLINES_DEFAULT)
 
 
 async def set_disciplines(values: List[str]) -> List[str]:
-    """Replace the vocabulary. Blanks and duplicates are dropped, order is the caller's.
+    """Replace the vocabulary. Blanks and duplicates are dropped and the result is A-Z.
+
+    Sorted rather than kept in the order typed: this is a list to FIND a discipline in,
+    not a ranking, and it is read in three places — the manager, the artist form's
+    multiselect, and the artist page. An order that depends on the sequence someone
+    added them in is an order none of those three can explain.
 
     Deliberately does NOT touch `artists.disciplines`. Retiring a discipline stops it
     being offered on new edits; it does not reach into every artist who already had it
@@ -2113,6 +2126,7 @@ async def set_disciplines(values: List[str]) -> List[str]:
         v = (v or "").strip()
         if v and v not in cleaned:
             cleaned.append(v)
+    cleaned.sort(key=_alpha)
     await db.site_settings.update_one(
         {"_id": "artists"}, {"$set": {"disciplines": cleaned}}, upsert=True
     )
@@ -4158,6 +4172,15 @@ async def _sync_artist_projects(artist_id: str, project_ids: List[str]) -> None:
     )
 
 
+def _sort_artist_disciplines(payload: dict) -> None:
+    """A-Z, in place. The multiselect stores them in the order they were clicked, which
+    is nobody's idea of an order by the time it reaches the artist's page. Canonicalised
+    on write so every reader gets the same list without each one having to sort it."""
+    if isinstance(payload.get("disciplines"), list):
+        payload["disciplines"] = sorted(
+            (str(d) for d in payload["disciplines"]), key=_alpha)
+
+
 def _check_artist_payload(patch: dict) -> None:
     """Reject an outside link that is not one. Everything else on an artist is prose an
     admin is trusted with; a URL ends up in an href, which is a different bargain."""
@@ -4201,6 +4224,7 @@ async def admin_list_artists(user=Depends(require_admin)):
 async def admin_create_artist(body: ArtistIn, user=Depends(require_admin)):
     a = body.model_dump()
     _check_artist_payload(a)
+    _sort_artist_disciplines(a)
     # Write-through, not a column: the artist document never stores this.
     project_ids = a.pop("project_ids", None) or []
     a["artist_id"] = new_id("art")
@@ -4217,6 +4241,7 @@ async def admin_update_artist(artist_id: str, body: ArtistPatchIn, user=Depends(
     `artist_id`, so a rename of the primary key was one request away."""
     patch = body.model_dump(exclude_unset=True)
     _check_artist_payload(patch)
+    _sort_artist_disciplines(patch)
     # Absent means "leave the project links alone"; [] means "remove them all". Popping
     # it here is what keeps it out of the `$set` — it is an edge, not a field.
     project_ids = patch.pop("project_ids", None)

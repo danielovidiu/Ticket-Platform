@@ -60,7 +60,23 @@ export default function ArtistDetail() {
   useEffect(() => { http.get(`/artists/${slug}`).then((r) => setA(r.data)).catch(() => {}); }, [slug]);
   if (!a) return <div className="p-16 text-center font-mono-x text-ink-4">Loading…</div>;
 
-  const links = Object.entries(a.links || {}).filter(([, v]) => v);
+  // Ordered by SOCIAL_PLATFORMS, not by the key order of the stored object.
+  //
+  // `links` is a bag whose iteration order is whatever the admin form happened to write,
+  // so sorting the constant alone changed the form's fields and left these buttons in
+  // insertion order — the artist above still read YouTube, Facebook, SoundCloud,
+  // Instagram. Walking the vocabulary instead means one A-Z list drives both.
+  //
+  // Anything stored under a key the vocabulary does not know still renders, after the
+  // known ones and sorted, rather than disappearing because it was not in the list.
+  const stored = Object.entries(a.links || {}).filter(([, v]) => v);
+  const known = SOCIAL_PLATFORMS
+    .map((p) => stored.find(([k]) => k === p.key))
+    .filter(Boolean);
+  const unknown = stored
+    .filter(([k]) => !SOCIAL_PLATFORMS.some((p) => p.key === k))
+    .sort(([a1], [b1]) => a1.localeCompare(b1));
+  const links = [...known, ...unknown];
   const disciplines = a.disciplines || [];
   const projects = a.projects || [];
   const albums = a.albums || [];
