@@ -50,7 +50,8 @@
     "blobupload": {
       "root": "blob-upload",
       "entrypoint": "index.js",
-      "runtime": "node"
+      "runtime": "node",
+      "framework": "express"
     }
   },
   "redirects": [
