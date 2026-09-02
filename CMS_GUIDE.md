@@ -17,6 +17,7 @@ depends on the visitor's window.
 - [Video / audio](#video--audio-embed) · [Marquee](#marquee) · [CTA banner](#cta-banner)
 - [Contact form](#contact-form) · [Newsletter](#newsletter) · [Custom HTML](#custom-html) · [Spacer](#spacer)
 - [Pages, slugs, roles](#pages-slugs-and-roles) · [Theme and fonts](#theme-and-fonts)
+- [Upload limits](#upload-limits) — how large a file may be, and why it varies
 
 ---
 
@@ -335,6 +336,10 @@ background-style video: autoplay on, loop on, controls off.
 Only these four providers embed, and the allow-list is enforced server-side as well as in
 the browser. A URL from anywhere else is refused rather than rendered.
 
+An uploaded file is subject to a size ceiling that depends on where the site is hosted —
+see [Upload limits](#upload-limits). The editor tells you the number before the upload
+starts, and refuses a file over it immediately rather than part way through.
+
 ---
 
 ## Marquee
@@ -472,6 +477,42 @@ Publishing the theme is separate from publishing a page.
 Uploaded fonts (WOFF2 / WOFF / TTF / OTF, 5 MB max) are served with the theme stylesheet
 so the page never flashes a fallback face. The format is read from the file's signature
 rather than trusted from its name.
+
+---
+
+## Upload limits
+
+The ceiling on a single file is **not one number**, because it depends on what sits
+between the browser and storage. The editor asks the server before every upload and shows
+you the answer, so you should never have to work it out — this section is here for when
+the number is smaller than you expected.
+
+| Where the site runs | Ceiling | Why |
+|---|---|---|
+| A normal server (VPS, or local development) | **100 MB** | The file comes straight to the application, so the application's own limit is the only one. |
+| Serverless, direct-to-storage working | **100 MB** | The browser sends the file to blob storage directly. It never passes through the application, so nothing in between can refuse it. |
+| Serverless, direct-to-storage off | **4 MB** | Every byte has to fit inside one request, and the platform rejects a body over roughly 4.5 MB at the edge — before any of the site's own code runs. |
+
+**Today the beta deployment is the third row.** The direct-to-storage route is built but
+not yet working, so video uploads there are capped at 4 MB until it is, or until the site
+moves to its own server — where the 100 MB path already works.
+
+### What this means in practice
+
+A 4 MB cap is a real constraint on video, and the honest advice is to compress rather than
+to wait: at 1080p, roughly 1.5 Mbps gets you about 20 seconds, which is enough for the
+short looping background clips the hero and video blocks are designed around. Longer
+pieces are better hosted on YouTube or Vimeo and embedded by URL, which has no size limit
+at all and costs the site nothing to serve.
+
+Images are unaffected in practice — the editor compresses them before upload, and a
+processed image lands well under any of these ceilings.
+
+### If an upload is refused
+
+The message names both numbers: the size of your file and the limit. That check happens in
+the browser before a single byte is sent, so a refusal is instant. An upload that instead
+runs for a while and *then* fails is a different problem and worth reporting.
 
 ---
 

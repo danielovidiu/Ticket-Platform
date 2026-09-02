@@ -31,8 +31,11 @@ export function uploadConfig() {
     configPromise = http.get("/uploads/config")
       .then((r) => r.data)
       // A deployment too old to answer is one without direct upload, which is the safe
-      // reading — it means "use the path that has always existed".
-      .catch(() => ({ max_bytes: 25 * 1024 * 1024, direct_upload: false }));
+      // reading — it means "use the path that has always existed". The ceiling that goes
+      // with it is the serverless request-body limit, not a bigger number we would only
+      // be guessing: too low costs the editor a compress step, too high costs it a long
+      // upload that fails at the end.
+      .catch(() => ({ max_bytes: 4 * 1024 * 1024, direct_upload: false }));
   }
   return configPromise;
 }

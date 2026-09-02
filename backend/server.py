@@ -552,6 +552,31 @@ VIDEO_CONTENT_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/quickt
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 64 * 1024
 
+# What a serverless platform will carry in a request body before anything of ours runs.
+# Measured, not quoted: the documented figure is ~4.5 MB and rejection happens at the
+# edge, so the ceiling advertised to the editor is set below it rather than at it.
+PLATFORM_BODY_LIMIT_BYTES = 4 * 1024 * 1024
+
+# The browser-straight-to-blob route is off unless a deployment says otherwise, because
+# a route that exists but hangs is worse than one that was never offered: the editor
+# picks it, waits, and gets nothing. Turn it on with DIRECT_BLOB_UPLOAD=1 once
+# /api/blob-upload answers on that deployment.
+DIRECT_BLOB_UPLOAD = os.environ.get("DIRECT_BLOB_UPLOAD", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _upload_limits(is_local: bool, direct_enabled: bool) -> tuple:
+    """`(max_bytes, direct_upload)` for a deployment shaped like this one.
+
+    Pure, and separate from the route, so the combinations this deployment is not in can
+    still be asserted. The one that matters is blob storage without a working direct
+    route: the file must then fit in a serverless request body, and claiming otherwise
+    costs the editor a long upload before the failure.
+    """
+    direct = direct_enabled and not is_local
+    if direct or is_local:
+        return MAX_UPLOAD_BYTES, direct
+    return PLATFORM_BODY_LIMIT_BYTES, False
+
 # What Pillow must report for a file the client called an image. Keyed by the declared
 # type so the two can be compared: a PNG announced as a JPEG is not a mistake worth
 # tolerating, it is the shape of a polyglot.
@@ -4716,15 +4741,26 @@ async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
 async def upload_config(user=Depends(require_admin_or_editor)):
     """What this deployment can actually accept, so the editor stops guessing.
 
-    `max_bytes` is this process's ceiling. `direct_upload` says whether the browser may
-    send a large file straight to blob storage instead of through here — which it must,
-    on a platform that refuses a request body over about 4.5 MB long before this function
-    is reached. Without the flag the editor has no way to tell a deployment that can take
-    a 100 MB video from one that cannot, and finds out by watching an upload fail.
+    `max_bytes` is what the editor may actually offer, which is not always this process's
+    ceiling. Three cases, and the difference between them is the whole point of the
+    endpoint:
+
+    * Local disk (a VPS, or a laptop): the request comes straight here, so the ceiling is
+      ours — the full MAX_UPLOAD_BYTES.
+    * Blob storage with the direct route working: the file never passes through this
+      process at all, so again the full ceiling.
+    * Blob storage without it: every byte has to fit in a serverless request body, and
+      the platform refuses anything much over PLATFORM_BODY_LIMIT_BYTES before this
+      function is even reached. Advertising 100 MB here would be a lie the editor only
+      discovers by watching a long upload fail.
+
+    So the third case reports the small number. A 90 MB video is then refused up front,
+    with the size named, instead of being accepted and lost.
     """
+    max_bytes, direct = _upload_limits(storage.is_local(), DIRECT_BLOB_UPLOAD)
     return {
-        "max_bytes": MAX_UPLOAD_BYTES,
-        "direct_upload": not storage.is_local(),
+        "max_bytes": max_bytes,
+        "direct_upload": direct,
         "direct_upload_url": "/api/blob-upload",
     }
 
