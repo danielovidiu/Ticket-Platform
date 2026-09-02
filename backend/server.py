@@ -4712,6 +4712,23 @@ async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
     return {"ok": True}
 
 
+@api.get("/uploads/config")
+async def upload_config(user=Depends(require_admin_or_editor)):
+    """What this deployment can actually accept, so the editor stops guessing.
+
+    `max_bytes` is this process's ceiling. `direct_upload` says whether the browser may
+    send a large file straight to blob storage instead of through here — which it must,
+    on a platform that refuses a request body over about 4.5 MB long before this function
+    is reached. Without the flag the editor has no way to tell a deployment that can take
+    a 100 MB video from one that cannot, and finds out by watching an upload fail.
+    """
+    return {
+        "max_bytes": MAX_UPLOAD_BYTES,
+        "direct_upload": not storage.is_local(),
+        "direct_upload_url": "/api/blob-upload",
+    }
+
+
 @api.post("/admin/uploads")
 async def admin_upload_media(
     file: UploadFile = File(...),
