@@ -273,7 +273,16 @@ const Footer = ({ site }) => {
     <footer className="hairline">
       <div className="max-w-[1400px] mx-auto edge-inset py-3">
         {topRow && (
-        <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-3">
+        /* `items-end`, not `items-start`. The two sides of this row are different
+           heights — a 24px wordmark, sometimes a paragraph under it, against a single
+           12px line of links — and aligning their TOPS hung the links in the air with a
+           gap beneath them, while the wordmark reached down to the rule. Aligning the
+           bottoms puts both on the rule, which is the edge a reader sees.
+
+           A plain block comment rather than a braced JSX one: this sits inside
+           `topRow && ( … )`, which is expression context, and braces there open an
+           object literal instead of a comment. */
+        <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
           {(s.wordmark || s.description) && (
           <div className="min-w-0">
             {/* Smaller where the room is tight, and `break-words` as the last resort: a

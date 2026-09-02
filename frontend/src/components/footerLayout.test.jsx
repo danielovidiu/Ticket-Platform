@@ -202,6 +202,16 @@ describe("the two footer rows read as a pair", () => {
     expect(cls(nav)).toMatch(/\btext-right\b/);
   });
 
+  test("the links sit on the rule, not at the top of the row", async () => {
+    // The two sides are different heights: a 24px wordmark, sometimes a paragraph under
+    // it, against one 12px line of links. Aligning tops left the links floating with a
+    // gap beneath them while the wordmark reached down to the rule.
+    const footer = await draw();
+    const row = within(footer).getByTestId("footer-legal").parentElement;
+    expect(row.className).toMatch(/\bitems-end\b/);
+    expect(row.className).not.toMatch(/\bitems-start\b/);
+  });
+
   test("the links stay right even with nothing to push against", async () => {
     // justify-between needs a left sibling. Both fields feeding it can be emptied, and
     // `ml-auto` is what keeps the group off the left margin when they are.
