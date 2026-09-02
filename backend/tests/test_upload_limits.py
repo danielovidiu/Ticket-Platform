@@ -38,6 +38,13 @@ class TestTheAdvertisedCeiling:
         # The file never passes through this process, so the body limit does not apply.
         assert _upload_limits(is_local=False, direct_enabled=True) == (MAX_UPLOAD_BYTES, True)
 
+    def test_the_flag_defaults_on(self):
+        # It shipped off while /api/blob-upload did not answer. It answers now, so a
+        # blob deployment that sets nothing gets the large ceiling rather than the small
+        # one — the point of the whole exercise.
+        import server
+        assert server.DIRECT_BLOB_UPLOAD is True
+
     def test_the_flag_alone_does_not_enable_direct_upload(self):
         # Local storage has no blob to upload to; the flag must not switch the editor
         # onto a route that cannot exist here.

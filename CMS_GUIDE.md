@@ -499,17 +499,24 @@ the number is smaller than you expected.
 | Serverless, direct-to-storage working | **100 MB** | The browser sends the file to blob storage directly. It never passes through the application, so nothing in between can refuse it. |
 | Serverless, direct-to-storage off | **4 MB** | Every byte has to fit inside one request, and the platform rejects a body over roughly 4.5 MB at the edge — before any of the site's own code runs. |
 
-**Today the beta deployment is the third row.** The direct-to-storage route is built but
-not yet working, so video uploads there are capped at 4 MB until it is, or until the site
-moves to its own server — where the 100 MB path already works.
+**The beta deployment is the second row: 100 MB.** The direct-to-storage route took six
+attempts to get running and now answers, so the browser sends a large video straight to
+blob storage and the 4.5 MB request limit never applies to it.
 
 ### What this means in practice
 
-A 4 MB cap is a real constraint on video, and the honest advice is to compress rather than
-to wait: at 1080p, roughly 1.5 Mbps gets you about 20 seconds, which is enough for the
-short looping background clips the hero and video blocks are designed around. Longer
-pieces are better hosted on YouTube or Vimeo and embedded by URL, which has no size limit
-at all and costs the site nothing to serve.
+You can upload a real video — up to 100 MB — rather than a compressed fragment. The file
+goes from your browser to storage directly, so the progress bar is real and a large upload
+does not tie up the site.
+
+Two things still argue for restraint. A visitor on a phone has to download whatever you
+upload, so a 90 MB background loop is a slow page for them however fast it was to publish;
+short clips at a modest bitrate are usually the better choice. And anything long-form —
+a full set, an interview — is still better hosted on YouTube or Vimeo and embedded by URL,
+which has no size limit at all and costs the site nothing to serve.
+
+If the direct route is ever switched off (`DIRECT_BLOB_UPLOAD=0`), the editor drops back
+to the third row automatically and tells you the smaller number before you pick a file.
 
 Images are unaffected in practice — the editor compresses them before upload, and a
 processed image lands well under any of these ceilings.
