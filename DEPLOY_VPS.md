@@ -229,7 +229,8 @@ server {
     include /etc/nginx/cloudflare-ips.conf;
     real_ip_header CF-Connecting-IP;
 
-    client_max_body_size 25M;          # media uploads go through here
+    client_max_body_size 100M;         # media uploads go through here — keep in step
+                                       # with MAX_UPLOAD_BYTES in backend/server.py
 
     # Security headers for the DOCUMENT. The FastAPI middleware sets its own on /api
     # responses, but the page a browser could frame is this static build, served by

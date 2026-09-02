@@ -544,7 +544,12 @@ if storage.is_local():
 
 IMAGE_CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
 VIDEO_CONTENT_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov"}
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+# 100 MB, which is what a short video actually weighs. Reachable on a VPS, where nginx
+# is the only thing in front; NOT reachable on Vercel, whose platform refuses any request
+# body over about 4.5 MB before this process is reached at all — measured, not assumed:
+# a 4 MB body gets a 401 from this app, a 5 MB body gets a 413 from the edge. Hosted
+# uploads that large need the browser to talk to blob storage directly.
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 64 * 1024
 
 # What Pillow must report for a file the client called an image. Keyed by the declared
@@ -569,8 +574,8 @@ async def _read_capped(upload: UploadFile, limit: int = MAX_UPLOAD_BYTES) -> byt
     that disk-then-RAM rather than pure RAM, but a limit enforced after the fact is a
     limit on what gets stored, not on what gets sent.
 
-    nginx also caps the body at 25 MB on the VPS (`client_max_body_size`); this covers the
-    paths where nothing is in front.
+    nginx caps the body too on the VPS (`client_max_body_size`, kept in step with this in
+    DEPLOY_VPS.md); this covers the paths where nothing is in front.
     """
     chunks, total = [], 0
     while chunk := await upload.read(UPLOAD_CHUNK_BYTES):

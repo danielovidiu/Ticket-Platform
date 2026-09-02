@@ -184,7 +184,18 @@ export const BLOCK_DEFAULTS = {
   }),
   contact_form: () => ({ heading: "Say hello", success_message: "Sent." }),
   newsletter: () => ({ heading: "Subscribe", body: "Occasional emails.", cta_label: "Subscribe" }),
-  video: () => ({ url: "", file_url: "", poster_url: "", caption: "", autoplay: false, loop: false, muted: true, controls: true, aspect: "16:9" }),
+  // A new video block is a silent looping backdrop, not a player: muted, looping, inline,
+  // no chrome, edge to edge, and portrait once the screen is. That is how video is used
+  // on the sites this one is modelled on — as moving imagery rather than as something a
+  // visitor is asked to press play on. Every one of these is still a toggle, and blocks
+  // published before this keep whatever they were saved with.
+  video: () => ({
+    url: "", file_url: "", poster_url: "",
+    file_url_mobile: "", poster_url_mobile: "",
+    caption: "",
+    autoplay: true, loop: true, muted: true, controls: false,
+    aspect: "16:9", aspect_mobile: "9:16", full_width: true,
+  }),
   image_band: () => ({
     eyebrow: "", heading: "Statement over an image.", body: "", image_url: "",
     overlay_color: "#050505", overlay_opacity: 50, height: "medium", align: "left",

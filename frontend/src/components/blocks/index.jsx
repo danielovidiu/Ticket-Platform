@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import DOMPurify from "dompurify";
@@ -23,6 +23,11 @@ export const ASPECTS = {
   "21:9": "aspect-[21/9]",
   "3:2": "aspect-[3/2]",
   "16:10": "aspect-[16/10]",
+  // Portrait ratios, added for video: a phone held upright wants a tall container, and
+  // 16:9 on a 375px screen is a 211px strip. 9:16 is the mirror of the landscape default;
+  // 4:5 is the gentler crop when a full-height video is too much.
+  "9:16": "aspect-[9/16]",
+  "4:5": "aspect-[4/5]",
 };
 const aspectClass = (v, fallback = "aspect-square") => ASPECTS[v] || fallback;
 
@@ -567,6 +572,28 @@ function audioHeight(embed, props) {
   return byProvider[embed.kind === "playlist" ? "playlist" : "track"];
 }
 
+/** True while the viewport is below Tailwind's `md`, which is where the mobile cut and
+ *  the portrait aspect take over.
+ *
+ * A media query rather than two <video> elements hidden by CSS: a hidden element still
+ * downloads its source, so the CSS approach would pull BOTH cuts on every visit — which
+ * on a 100MB pair is the whole point of having two of them, wasted. */
+const MOBILE_QUERY = "(max-width: 767px)";
+
+function useIsMobileViewport() {
+  const subscribe = useCallback((fn) => {
+    const mq = window.matchMedia?.(MOBILE_QUERY);
+    if (!mq) return () => {};
+    mq.addEventListener("change", fn);
+    return () => mq.removeEventListener("change", fn);
+  }, []);
+  return useSyncExternalStore(
+    subscribe,
+    () => (window.matchMedia?.(MOBILE_QUERY)?.matches ?? false),
+    () => false,   // server render: assume desktop, which is the wider default
+  );
+}
+
 function VideoEmbed({ props, preview }) {
   // Browsers refuse to start an unmuted video on their own, so autoplay forces muted
   // rather than offering a combination that would silently never play.
@@ -574,7 +601,27 @@ function VideoEmbed({ props, preview }) {
   const loop = !!props.loop;
   const muted = autoplay || !!props.muted;
   const controls = props.controls !== false;
-  const aspect = aspectClass(props.aspect, "aspect-video");
+
+  /* One shape for a wide screen and another for a tall one.
+   *
+   * A single ratio cannot serve both: 16:9 on a 375px phone is a 211px strip, which is
+   * the complaint this answers. The reference site (alexandermcqueen.com, measured) runs
+   * 16:9 at 1440 wide and 9:16 at 375 — the container follows the DEVICE's orientation
+   * so the video fills the screen either way, rather than keeping one ratio and shrinking.
+   *
+   * `aspect_mobile` absent falls back to the desktop ratio, which is exactly what every
+   * video block did before this existed, so nothing published changes shape. */
+  const isMobile = useIsMobileViewport();
+  const desktopAspect = aspectClass(props.aspect, "aspect-video");
+  const aspect = isMobile
+    ? aspectClass(props.aspect_mobile || props.aspect, "aspect-video")
+    : desktopAspect;
+
+  /* The mobile cut, when there is one. Chosen in JS rather than with CSS so only the
+   * file that will actually be shown is downloaded. */
+  const fileUrl = (isMobile && props.file_url_mobile) || props.file_url;
+  const posterUrl = (isMobile && props.file_url_mobile && props.poster_url_mobile)
+    || props.poster_url;
   const caption = props.caption
     ? <div className="mt-2 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-4">{props.caption}</div>
     : null;
@@ -583,13 +630,16 @@ function VideoEmbed({ props, preview }) {
   // specific of the two, and the only one that autoplays without a third-party player's
   // chrome over it. CSP `media-src` covers 'self' and the blob store, so a file that came
   // from /admin/uploads plays and an arbitrary pasted host is refused by the browser.
-  if (props.file_url) {
+  if (fileUrl) {
     return (
       <section><Frame full={props.full_width}>
-        <div className={`${aspect} border border-ink/10 bg-scrim overflow-hidden`}>
+        {/* No border when it bleeds: a hairline around a full-bleed video is a line down
+            the side of the screen, not a frame. */}
+        <div className={`${aspect} ${props.full_width ? "" : "border border-ink/10"} bg-scrim overflow-hidden`}>
           <video
-            src={mediaUrl(props.file_url)}
-            poster={props.poster_url ? mediaUrl(props.poster_url) : undefined}
+            key={fileUrl}
+            src={mediaUrl(fileUrl)}
+            poster={posterUrl ? mediaUrl(posterUrl) : undefined}
             className="w-full h-full object-cover"
             autoPlay={autoplay}
             muted={muted}

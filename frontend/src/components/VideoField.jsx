@@ -24,7 +24,12 @@ const ACCEPT = { prefix: "video/", message: "Choose a video — use the image bl
  * the deployed function's body limit fails and says to compress it, rather than being
  * retried twice on its way to the same refusal.
  */
-export default function VideoField({ value, posterValue, onPatch, label = "Video file", testId = "video-field" }) {
+export default function VideoField({
+  value, posterValue, onPatch, label = "Video file", testId = "video-field",
+  // Which props this field writes. Defaulted so every existing call site is unchanged,
+  // and overridable so the same control can carry a second, mobile cut of the same video.
+  fileKey = "file_url", posterKey = "poster_url",
+}) {
   const inputRef = useRef(null);
 
   const send = useCallback(async (file) => {
@@ -40,9 +45,9 @@ export default function VideoField({ value, posterValue, onPatch, label = "Video
   }, []);
 
   const onDone = useCallback((data) => {
-    onPatch({ file_url: data.url, poster_url: data.has_poster ? data.thumbnail_url : "" });
+    onPatch({ [fileKey]: data.url, [posterKey]: data.has_poster ? data.thumbnail_url : "" });
     toast.success("Video uploaded");
-  }, [onPatch]);
+  }, [onPatch, fileKey, posterKey]);
 
   const upload = useSingleUpload({ send, onDone, accept: ACCEPT });
 
@@ -53,7 +58,7 @@ export default function VideoField({ value, posterValue, onPatch, label = "Video
         <input
           placeholder="Paste an MP4/WebM URL, or upload →"
           value={value || ""}
-          onChange={(e) => onPatch({ file_url: e.target.value })}
+          onChange={(e) => onPatch({ [fileKey]: e.target.value })}
           className="input-x flex-1 min-w-[12rem]"
           data-testid={`${testId}-url`}
         />
@@ -62,7 +67,7 @@ export default function VideoField({ value, posterValue, onPatch, label = "Video
           {upload.busy ? upload.label : "Upload"}
         </button>
         {value && (
-          <button type="button" onClick={() => onPatch({ file_url: "", poster_url: "" })}
+          <button type="button" onClick={() => onPatch({ [fileKey]: "", [posterKey]: "" })}
                   className="btn-primary shrink-0" data-testid={`${testId}-clear`}>Clear</button>
         )}
         <input ref={inputRef} type="file" accept="video/mp4,video/webm,video/quicktime" className="hidden"

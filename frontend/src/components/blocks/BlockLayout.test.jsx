@@ -279,11 +279,11 @@ describe("full width", () => {
   // spans the viewport, the words stay in the frame so a heading is not 1400px wide on a
   // desktop. Their toggle is about the block, not about every element inside it.
   const TEXT_STAYS_FRAMED = new Set(["hero", "image_band"]);
-  // Edge to edge by nature, and so unset means bleeding: a ticker runs off both sides,
-  // and a page's backdrop covers the page. For these two, turning the toggle OFF is what
-  // caps them. `_background` also names its own key, because it frames the whole block
-  // rather than a band of content inside one.
-  const BLEEDS_BY_DEFAULT = new Set(["marquee", "_background"]);
+  // Edge to edge by nature, and so unset means bleeding: a ticker runs off both sides, a
+  // page's backdrop covers the page, and a video is imagery rather than a framed player.
+  // For these, turning the toggle OFF is what caps them. `_background` also names its own
+  // key, because it frames the whole block rather than a band of content inside one.
+  const BLEEDS_BY_DEFAULT = new Set(["marquee", "_background", "video"]);
   const FULL_KEY = { hero: "full_frame", _background: "full_frame" };
 
   const types = Object.keys(BLOCK_RENDERERS).filter((t) => !NO_CONTROL.has(t));
