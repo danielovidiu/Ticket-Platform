@@ -1308,6 +1308,10 @@ class ArtistIn(ApiModel):
     # can appear in the album for a night they did not headline, and one event may have
     # several albums, so the link is its own decision.
     album_ids: List[str] = Field(default_factory=list, max_length=MAX_ARTIST_ALBUMS)
+    # Resident or guest. A vocabulary of exactly two, closed on purpose: it drives a
+    # filter on the roster, and a third value nobody planned for would silently create a
+    # tab-less group of artists reachable only from "All".
+    collab: str = "resident"
     # One outside project of the artist's own — their band, their label, their studio.
     # This is NOT the retired `projects` collection: that was a Supersanity-side record
     # with its own page furniture, and this is a name and a link the artist gives us.
@@ -1356,6 +1360,10 @@ class EventIn(ApiModel):
     ends_at: Optional[str] = None
     doors_open_at: Optional[str] = None
     image_url: str = ""
+    # The shape the cover is cropped to, everywhere the event appears. Chosen with the
+    # image rather than by each page that shows it, so one event cannot be 4:3 on its own
+    # page and 1:1 in a grid.
+    image_aspect: str = "4:3"
     artist_ids: List[str] = []
     max_tickets_per_user: int = 4
     is_published: bool = False
@@ -1392,6 +1400,7 @@ class EventPatchIn(ApiModel):
     ends_at: Optional[str] = None
     doors_open_at: Optional[str] = None
     image_url: Optional[str] = None
+    image_aspect: Optional[str] = None
     artist_ids: Optional[List[str]] = None
     max_tickets_per_user: Optional[int] = None
     is_published: Optional[bool] = None
@@ -1413,6 +1422,7 @@ class ArtistPatchIn(ApiModel):
     links: Optional[dict] = None
     disciplines: Optional[List[str]] = Field(default=None, max_length=MAX_DISCIPLINES)
     album_ids: Optional[List[str]] = Field(default=None, max_length=MAX_ARTIST_ALBUMS)
+    collab: Optional[str] = None
     other_project_name: Optional[str] = None
     other_project_url: Optional[str] = None
 
@@ -3630,6 +3640,7 @@ async def admin_list_events(user=Depends(require_admin)):
 @api.post("/admin/events")
 async def admin_create_event(body: EventIn, user=Depends(require_admin)):
     e = body.model_dump()
+    _check_image_aspect(e)
     e["event_id"] = new_id("evt")
     waves = []
     for w in e.get("waves", []):
@@ -3662,6 +3673,7 @@ async def admin_update_event(event_id: str, body: EventPatchIn, user=Depends(req
     `{"is_published": true}` would blank the title along the way.
     """
     patch = body.model_dump(exclude_unset=True)
+    _check_image_aspect(patch)
 
     # An explicit `"waves": null` means "leave the lineup alone", not "delete every wave" —
     # the destructive reading of a field a client may well send as empty.
@@ -4226,6 +4238,32 @@ def _sort_artist_disciplines(payload: dict) -> None:
             (str(d) for d in payload["disciplines"]), key=_alpha)
 
 
+COLLAB_VALUES = ("resident", "guest")
+# Mirrors ASPECTS in frontend/src/components/blocks/index.jsx. A value not in that map
+# renders as no aspect class at all, which silently collapses the image to nothing.
+IMAGE_ASPECTS = ("1:1", "4:3", "3:4", "16:9", "21:9", "3:2", "16:10")
+
+
+def _check_collab(payload: dict) -> None:
+    """Refuse a collab outside the two the filter knows about.
+
+    The roster's tabs are built from this vocabulary, so a third value would put an
+    artist in a group with no tab to reach it — visible under "All" and nowhere else,
+    with nothing to say why.
+    """
+    if "collab" not in payload or payload["collab"] is None:
+        return
+    if payload["collab"] not in COLLAB_VALUES:
+        raise HTTPException(400, f"Collab must be one of: {', '.join(COLLAB_VALUES)}")
+
+
+def _check_image_aspect(payload: dict) -> None:
+    if "image_aspect" not in payload or payload["image_aspect"] is None:
+        return
+    if payload["image_aspect"] not in IMAGE_ASPECTS:
+        raise HTTPException(400, f"Image format must be one of: {', '.join(IMAGE_ASPECTS)}")
+
+
 def _check_artist_payload(patch: dict) -> None:
     """Reject an outside link that is not one. Everything else on an artist is prose an
     admin is trusted with; a URL ends up in an href, which is a different bargain."""
@@ -4256,6 +4294,7 @@ async def admin_list_artists(user=Depends(require_admin)):
 async def admin_create_artist(body: ArtistIn, user=Depends(require_admin)):
     a = body.model_dump()
     _check_artist_payload(a)
+    _check_collab(a)
     _sort_artist_disciplines(a)
     a["artist_id"] = new_id("art")
     a["created_at"] = now_utc().isoformat()
@@ -4269,6 +4308,7 @@ async def admin_update_artist(artist_id: str, body: ArtistPatchIn, user=Depends(
     `artist_id`, so a rename of the primary key was one request away."""
     patch = body.model_dump(exclude_unset=True)
     _check_artist_payload(patch)
+    _check_collab(patch)
     _sort_artist_disciplines(patch)
     if patch:
         await db.artists.update_one({"artist_id": artist_id}, {"$set": patch})
@@ -5044,7 +5084,11 @@ async def security_headers(request: Request, call_next):
 #     entirely and run NONE of its migrations. That is not hypothetical — it happened on
 #     the dev database while these were being written, and the symptom was an Archive
 #     link that would not go away. They merged in order and took one number each.
-SCHEMA_VERSION = 13
+# 14: artists carry a `collab` of resident or guest, and the roster filters on it.
+#     Without the bump migrate_artist_collab never runs, every existing artist stays
+#     untagged, and the Residents and Guests tabs come back empty on a site whose roster
+#     is full.
+SCHEMA_VERSION = 14
 
 
 async def init_app():
@@ -5189,6 +5233,11 @@ async def init_indexes():
         await migrate_gallery_ordering()
     except Exception:
         logger.exception("migrate_gallery_ordering failed")
+
+    try:
+        await migrate_artist_collab()
+    except Exception:
+        logger.exception("migrate_artist_collab failed")
 
     try:
         await migrate_drop_archive_page()
@@ -5396,6 +5445,25 @@ async def migrate_gallery_albums():
         )
 
     logger.info("Gallery migrated into %d album(s): %d item(s) filed", len(created), len(legacy))
+
+
+async def migrate_artist_collab():
+    """Give every artist that predates the field a collab of "resident".
+
+    The roster's tabs are built from this vocabulary, so an artist without one would be
+    reachable from "All" and from neither of the other two — present on the site but
+    absent from both halves of the filter, with nothing to say why.
+
+    Resident is the right default rather than a neutral one: these are the artists the
+    collective already had when the distinction was introduced, which is what resident
+    means. Guests get retagged by hand, which is a smaller job than the reverse.
+    """
+    r = await db.artists.update_many(
+        {"collab": {"$in": [None, ""]}}, {"$set": {"collab": "resident"}}
+    )
+    if r.modified_count:
+        logger.info("Set %d artist(s) to resident", r.modified_count)
+    return r.modified_count
 
 
 async def migrate_drop_archive_page():

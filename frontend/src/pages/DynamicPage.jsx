@@ -51,9 +51,26 @@ export default function DynamicPage({ slugOverride, home }) {
     );
   }
 
+  /* The page background is lifted out of the run of blocks.
+   *
+   * It has to paint under everything else, and a negative z-index cannot do that here:
+   * the app wraps its pages in an opaque `.App` div, and an in-flow block box's
+   * background paints above negative-z content. Placing the two explicitly — backdrop at
+   * z-0, blocks at z-10 — puts both in the positioned painting step, where tree order and
+   * z-index decide rather than an ancestor's fill.
+   *
+   * Only the first is used. Two backdrops would stack with one invisible under the other,
+   * and silently ignoring the extra beats rendering something nobody can see. */
+  const blocks = page.blocks || [];
+  const background = blocks.find((b) => b.type === "_background");
+  const rest = background ? blocks.filter((b) => b !== background) : blocks;
+
   return (
-    <div data-cms-page={page.slug || slug}>
-      {(page.blocks || []).map((b) => <BlockRenderer key={b.block_id} block={b} />)}
+    <div data-cms-page={page.slug || slug} className={background ? "relative" : undefined}>
+      {background && <BlockRenderer key={background.block_id} block={background} />}
+      <div className={background ? "relative z-10" : undefined}>
+        {rest.map((b) => <BlockRenderer key={b.block_id} block={b} />)}
+      </div>
     </div>
   );
 }

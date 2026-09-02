@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Play } from "lucide-react";
 import { renderRich } from "../lib/richText";
 import { mediaUrl } from "../lib/media";
+import { ASPECTS } from "../components/blocks";
 import { Lightbox } from "../components/ui/lightbox";
 import { getConsent } from "../components/CookieConsent";
 
@@ -209,7 +210,9 @@ export default function EventDetail() {
        version did. */
     <div className={`max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10 items-start ${soldOut ? "" : "pb-32 md:pb-12"}`}>
       <div className="md:col-span-7">
-        <div className="aspect-[4/3] overflow-hidden border border-ink/10">
+        {/* The shape the event itself carries. Hardcoded 4:3 until the format became an
+            event's own property; absent still means 4:3, so nothing published moves. */}
+        <div className={`${ASPECTS[event.image_aspect] || "aspect-[4/3]"} overflow-hidden border border-ink/10`}>
           <img src={mediaUrl(event.image_url)} alt={event.title} className="w-full h-full object-cover" />
         </div>
         <div className="mt-8 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-3">

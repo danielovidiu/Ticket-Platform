@@ -1127,6 +1127,14 @@ const FIELDS = {
     { k: "content", label: "Content (markdown-ish)", type: "textarea", rows: 12, format: true },
     { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
+  _background: [
+    { k: "image_url", label: "Photo", type: "image" },
+    { k: "_note", label: "", type: "note",
+      text: "Sits behind every other block on this page. Add it once — anything else you add lands on top of it." },
+    { k: "overlay_color", label: "Overlay colour", type: "color" },
+    { k: "overlay_opacity", label: "Overlay opacity", type: "range", min: 0, max: 100, fallback: 40 },
+    { k: "full_frame", label: "Full frame (edge to edge)", type: "checkbox" },
+  ],
   image: [
     { k: "image_url", label: "Image", type: "image" },
     { k: "caption", label: "Caption" },
@@ -1331,6 +1339,17 @@ function PropsEditor({ block, onChange }) {
         // which would fire the wrong one.
         if (f.type === "image") {
           return <ImageField key={key} label={f.label} value={v[f.k] || ""} onChange={commitField(f.k)} testId={testId} />;
+        }
+        // Prose, not a control. Some blocks do something the panel cannot show — the page
+        // background is behind everything rather than in the run of blocks — and a
+        // sentence in the panel beats an editor discovering it by publishing.
+        if (f.type === "note") {
+          return (
+            <p key={key} data-testid={`${testId}-note`}
+               className="text-[10px] leading-relaxed text-ink-4 border-l border-ink/20 pl-2">
+              {f.text}
+            </p>
+          );
         }
         // Same reason as the image field, plus one more: an upload fills the file and its
         // poster together, so this one commits a patch rather than a single value.
