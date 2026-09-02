@@ -12,8 +12,10 @@ import { Camera } from "lucide-react";
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 
-/** Tailwind-safe aspect utility from a friendly ratio label. */
-const ASPECTS = {
+/** Tailwind-safe aspect utility from a friendly ratio label. Exported because an event
+ * carries its own format now, and the event page needs the same map the blocks use — two
+ * copies would drift and one of them would render an image with no aspect at all. */
+export const ASPECTS = {
   "1:1": "aspect-square",
   "4:3": "aspect-[4/3]",
   "3:4": "aspect-[3/4]",
@@ -368,10 +370,14 @@ function EventsGrid({ props }) {
           // The first album's chosen cover, not just the first photo the event owns —
           // an album carries an explicit cover now, and this card is a tile for it.
           const cover = hasAlbum ? (e.albums?.[0]?.cover || e.gallery[0]) : null;
+          // The event's own format, applied to its card as well as its page — a shape
+          // chosen once with the image rather than separately by everything that shows
+          // it. Absent means the 16:10 these cards have always used.
+          const cardAspect = ASPECTS[e.image_aspect] || "aspect-[16/10]";
           return (
             <div key={e.event_id} className="group flex flex-col h-full border border-ink/10 bg-surface hover:border-ink transition-colors">
               {hasAlbum ? (
-                <button onClick={() => openAlbum(e)} data-testid={`events-grid-cover-${e.slug}`} className="aspect-[16/10] overflow-hidden relative block w-full text-left shrink-0">
+                <button onClick={() => openAlbum(e)} data-testid={`events-grid-cover-${e.slug}`} className={`${cardAspect} overflow-hidden relative block w-full text-left shrink-0`}>
                   {cover.media_type === "video" ? (
                     <video src={mediaUrl(cover.image_url)} className="w-full h-full object-cover" muted preload="metadata" />
                   ) : (
@@ -382,7 +388,7 @@ function EventsGrid({ props }) {
                   </div>
                 </button>
               ) : (
-                <Link to={`/events/${e.slug}`} className="aspect-[16/10] overflow-hidden block shrink-0">
+                <Link to={`/events/${e.slug}`} className={`${cardAspect} overflow-hidden block shrink-0`}>
                   <img src={mediaUrl(e.image_url)} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                 </Link>
               )}
@@ -859,6 +865,75 @@ function ParallaxPhoto({ src, alt = "" }) {
   );
 }
 
+/**
+ * The page's backdrop: one photograph behind everything else on it.
+ *
+ * Pinned rather than scrolling, so a long page keeps one image rather than dragging a
+ * very tall one past the reader. `sticky` and not `fixed`, which matters more than it
+ * sounds:
+ *
+ *   A `fixed` element is positioned against the VIEWPORT, so inside the CMS preview —
+ *   a scrolling panel occupying part of the screen — it would break out and cover the
+ *   whole editor, including the controls being used to edit it. Sticky is positioned
+ *   against its scrolling ancestor, which is the page on a live page and the preview
+ *   panel inside the editor, so one implementation is right in both.
+ *
+ * The negative margin is what keeps it OUT of the layout: a full-height element in
+ * normal flow would push every block down by a screenful. Taking that height back
+ * leaves the following blocks starting where they otherwise would, painting over it.
+ *
+ * It is NOT put behind the content with a negative z-index, which is the obvious way and
+ * does not work here: a negative-z child paints above its stacking context's own
+ * background but still below every in-flow block box, and this app wraps its pages in an
+ * opaque `.App` div. The backdrop went behind that and vanished. So DynamicPage places
+ * the two instead — this layer at z-0, the blocks above it at z-10 — which puts both in
+ * the positioned painting step, above any ancestor's background.
+ */
+function PageBackground({ props, preview }) {
+  const opacity = Math.min(100, Math.max(0, Number(props.overlay_opacity ?? 40))) / 100;
+  const full = props.full_frame !== false;
+
+  const layers = (
+    <div className={full ? "relative w-full h-full" : "relative w-full h-full max-w-[1400px] mx-auto"}>
+      {props.image_url ? (
+        <img src={mediaUrl(props.image_url)} alt="" data-testid="page-background-img"
+             className="absolute inset-0 w-full h-full object-cover" />
+      ) : null}
+      {/* Drawn even with no photo: the colour alone is a legitimate backdrop, and an
+          editor who sets the overlay first should see something happen. */}
+      <div className="absolute inset-0" data-testid="page-background-overlay"
+           style={{ backgroundColor: props.overlay_color || "#050505", opacity }} />
+    </div>
+  );
+
+  /* In the editor it is a band you can see and click, not the real backdrop.
+   *
+   * The preview renders one block per row, each in its own wrapper, so a sticky
+   * full-height layer would have a zero-height containing block to stick inside and would
+   * cover the blocks after it rather than sitting under them. Showing it as itself keeps
+   * it selectable and shows the photo and overlay being chosen; "View live" shows the
+   * composite. A band that lied about where it sits would be worse than one that is
+   * plainly a stand-in. */
+  if (preview) {
+    return (
+      <div className="relative h-56 overflow-hidden border border-dashed border-ink/25"
+           data-testid="page-background-preview">
+        {layers}
+        <div className="absolute inset-x-0 bottom-0 p-2 font-mono-x text-[9px] uppercase tracking-[0.2em] text-ink-2 bg-scrim/70">
+          Page background — every other block sits on top of this
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sticky top-0 h-screen -mb-[100vh] z-0 overflow-hidden pointer-events-none"
+         data-testid="page-background" aria-hidden="true">
+      {layers}
+    </div>
+  );
+}
+
 function ImageBand({ props }) {
   const h = props.height === "short" ? "min-h-[30vh]"
     : props.height === "tall" ? "min-h-[60vh]"
@@ -934,6 +1009,7 @@ export const BLOCK_RENDERERS = {
   newsletter: Newsletter,
   video: VideoEmbed,
   image_band: ImageBand,
+  _background: PageBackground,
   text_panel: TextPanel,
   custom_html: CustomHTML,
   spacer: Spacer,

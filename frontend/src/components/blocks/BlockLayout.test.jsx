@@ -28,6 +28,17 @@ const draw = (type, props) => {
   return container;
 };
 
+/** As `draw`, but as the CMS editor renders it. Only one block cares so far — the page
+ *  background, which cannot be its real self inside a per-block preview row. */
+const drawPreview = (type, props) => {
+  const { container } = render(
+    <MemoryRouter>
+      <BlockRenderer preview block={{ block_id: "b1", type, enabled: true, props: props ?? BLOCK_DEFAULTS[type]() }} />
+    </MemoryRouter>
+  );
+  return container;
+};
+
 // The hero's text inset and the image band's sit over their own background image; they
 // are internal composition, not the space between blocks, and a Spacer cannot restore
 // them. Everything else must be flush.
@@ -268,6 +279,12 @@ describe("full width", () => {
   // spans the viewport, the words stay in the frame so a heading is not 1400px wide on a
   // desktop. Their toggle is about the block, not about every element inside it.
   const TEXT_STAYS_FRAMED = new Set(["hero", "image_band"]);
+  // Edge to edge by nature, and so unset means bleeding: a ticker runs off both sides,
+  // and a page's backdrop covers the page. For these two, turning the toggle OFF is what
+  // caps them. `_background` also names its own key, because it frames the whole block
+  // rather than a band of content inside one.
+  const BLEEDS_BY_DEFAULT = new Set(["marquee", "_background"]);
+  const FULL_KEY = { hero: "full_frame", _background: "full_frame" };
 
   const types = Object.keys(BLOCK_RENDERERS).filter((t) => !NO_CONTROL.has(t));
   // The video block renders nothing at all without a source, so there would be no frame
@@ -278,17 +295,20 @@ describe("full width", () => {
 
   test.each(types)("%s is capped by default", (type) => {
     const c = draw(type, props(type));
-    // marquee is the exception in the other direction: a ticker is edge-to-edge by
-    // nature, so unset means bleeding and turning it OFF is what caps it.
-    if (type === "marquee") return expect(capped(c)).toBeNull();
+    if (BLEEDS_BY_DEFAULT.has(type)) return expect(capped(c)).toBeNull();
     expect(capped(c), `${type} has no width cap`).toBeTruthy();
   });
 
-  test.each(types.filter((t) => !TEXT_STAYS_FRAMED.has(t)))(
+  test.each(types.filter((t) => !TEXT_STAYS_FRAMED.has(t) && !BLEEDS_BY_DEFAULT.has(t)))(
     "%s drops its cap when set full width", (type) => {
-      const c = draw(type, { ...props(type), full_width: true });
+      const c = draw(type, { ...props(type), [FULL_KEY[type] || "full_width"]: true });
       expect(capped(c), `${type} ignored full_width`).toBeNull();
     });
+
+  test.each([...BLEEDS_BY_DEFAULT])("%s caps when its full-width toggle is switched off", (type) => {
+    const c = draw(type, { ...props(type), [FULL_KEY[type] || "full_width"]: false });
+    expect(capped(c), `${type} ignored being switched off`).toBeTruthy();
+  });
 
   test.each([...TEXT_STAYS_FRAMED])(
     "%s bleeds its background but keeps its text framed", (type) => {
@@ -300,11 +320,6 @@ describe("full width", () => {
       // ...but the words inside it still are.
       expect(capped(c), `${type} let its text run the full width`).toBeTruthy();
     });
-
-  test("marquee caps when full_width is switched off", () => {
-    const c = draw("marquee", { ...BLOCK_DEFAULTS.marquee(), full_width: false });
-    expect(capped(c)).toBeTruthy();
-  });
 
   test("the gutters go with the cap — full width means edge to edge", () => {
     // This asserted the opposite until the label was taken at its word. A toggle saying
@@ -466,5 +481,75 @@ describe("text panel", () => {
   test("the content renders as rich text", () => {
     expect(panel({ content: "**bold** words" }).querySelector("strong"))
       .toHaveTextContent("bold");
+  });
+});
+
+/**
+ * The page background, and the two things about it that are not obvious.
+ *
+ * It is the only block that does not sit in the run of blocks — everything else on the
+ * page paints on top of it — and it is the only one that renders something different in
+ * the editor than on the page.
+ */
+describe("the page background", () => {
+  const bg = (over) => draw("_background", { ...BLOCK_DEFAULTS._background(), ...over });
+
+  test("is pinned rather than scrolling", () => {
+    const el = bg({ image_url: "/x.jpg" }).querySelector('[data-testid="page-background"]');
+    expect([...el.classList]).toContain("sticky");
+    expect([...el.classList]).toContain("top-0");
+  });
+
+  test("takes its own height back out of the layout", () => {
+    // A full-height element in normal flow would push every block down by a screenful.
+    const el = bg({ image_url: "/x.jpg" }).querySelector('[data-testid="page-background"]');
+    expect([...el.classList]).toContain("h-screen");
+    expect([...el.classList]).toContain("-mb-[100vh]");
+  });
+
+  test("does not use a negative z-index", () => {
+    // The obvious way, and it does not work: a negative-z child paints above its stacking
+    // context's own background but still below every in-flow block box, and the app wraps
+    // its pages in an opaque .App div — so the backdrop went behind that and vanished.
+    // DynamicPage places it at z-0 and the blocks at z-10 instead.
+    const el = bg({ image_url: "/x.jpg" }).querySelector('[data-testid="page-background"]');
+    expect([...el.classList]).toContain("z-0");
+    expect([...el.classList].some((c) => c.startsWith("-z-"))).toBe(false);
+  });
+
+  test("never swallows a click meant for the content above it", () => {
+    const el = bg({ image_url: "/x.jpg" }).querySelector('[data-testid="page-background"]');
+    expect([...el.classList]).toContain("pointer-events-none");
+    expect(el.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  test("draws the overlay even with no photo, so the colour alone is usable", () => {
+    const c = bg({ image_url: "" });
+    expect(c.querySelector('[data-testid="page-background-img"]')).toBeNull();
+    expect(c.querySelector('[data-testid="page-background-overlay"]')).toBeTruthy();
+  });
+
+  test("the overlay's opacity is a percentage, clamped", () => {
+    const at = (v) => bg({ image_url: "/x.jpg", overlay_opacity: v })
+      .querySelector('[data-testid="page-background-overlay"]').style.opacity;
+    expect(at(0)).toBe("0");
+    expect(at(50)).toBe("0.5");
+    expect(at(400)).toBe("1");
+    expect(at(-20)).toBe("0");
+  });
+
+  test("full frame off holds it inside the same 1400px measure as everything else", () => {
+    const inner = bg({ image_url: "/x.jpg", full_frame: false })
+      .querySelector('[data-testid="page-background"]').firstElementChild;
+    expect([...inner.classList]).toContain("max-w-[1400px]");
+  });
+
+  test("in the editor it is a band you can see, not the real backdrop", () => {
+    // The preview renders one block per row, each in its own wrapper, so a sticky
+    // full-height layer would have a zero-height containing block to stick inside and
+    // would cover the blocks after it instead of sitting under them.
+    const c = drawPreview("_background", { ...BLOCK_DEFAULTS._background(), image_url: "/x.jpg" });
+    expect(c.querySelector('[data-testid="page-background-preview"]')).toBeTruthy();
+    expect(c.querySelector('[data-testid="page-background"]')).toBeNull();
   });
 });

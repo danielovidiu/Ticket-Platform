@@ -246,6 +246,10 @@ function Stats() {
 // is set) — matches the same rule the public /events feed uses, so admin status
 // never disagrees with what visitors actually see.
 
+// Mirrors IMAGE_ASPECTS in server.py and ASPECTS in components/blocks. A value outside
+// the map renders as no aspect class at all, which collapses the image to nothing.
+const EVENT_IMAGE_ASPECTS = ["1:1", "4:3", "3:4", "16:9", "21:9", "3:2", "16:10"];
+
 // Small labelled wrapper so every field in the tier card says what it is.
 function Field({ label, className = "", children }) {
   return (
@@ -262,7 +266,7 @@ function Events() {
   const [notice, setNotice] = useState(null);   // { event, kind } while composing
   const load = () => http.get("/admin/events").then((r) => setEvents(r.data));
   useEffect(() => { load(); }, []);
-  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ tier_id: 1, name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: "", access_until: "", access_from: "" }] });
+  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", image_aspect: "4:3", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ tier_id: 1, name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: "", access_until: "", access_from: "" }] });
   const save = async () => {
     try {
       if (form.event_id) {
@@ -603,6 +607,16 @@ function EventForm({ form, setForm, onSave, onClose }) {
           <input placeholder="City" value={form.city || ""} onChange={(e) => setF("city", e.target.value)} className="input-x" />
           <div className="col-span-2">
             <ImageField label="Cover image" value={form.image_url} onChange={(v) => setF("image_url", v)} testId="event-image" />
+            {/* Chosen with the image rather than by each page that shows it, so one event
+                cannot be 4:3 on its own page and square in a grid. It was hardcoded to
+                4:3 on the event page and set per-block everywhere else. */}
+            <label className="block mt-2 max-w-[16rem]">
+              <div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Image format</div>
+              <select value={form.image_aspect || "4:3"} onChange={(e) => setF("image_aspect", e.target.value)}
+                      className="input-x w-full" data-testid="event-image-aspect">
+                {EVENT_IMAGE_ASPECTS.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </label>
           </div>
           <div className="col-span-2">
             <FormatToolbar textareaRef={descRef} value={form.description} onChange={(v) => setF("description", v)} />
@@ -1125,7 +1139,7 @@ function Artists() {
     http.get("/admin/albums").then((r) => setAlbums(r.data)).catch(() => {});
   }, []);
   const emptyForm = () => ({ name: "", slug: "", bio: "", image_url: "", links: {},
-                             disciplines: [], album_ids: [],
+                             disciplines: [], album_ids: [], collab: "resident",
                              other_project_name: "", other_project_url: "" });
   const save = async () => {
     try {
@@ -1198,6 +1212,17 @@ function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums }) {
         <div className="mt-4 grid grid-cols-2 gap-3">
           <input placeholder="Name" value={form.name} onChange={(e) => setF("name", e.target.value)} className="input-x" />
           <input placeholder="Slug" value={form.slug} onChange={(e) => setF("slug", e.target.value)} className="input-x" />
+          {/* Two values, closed on the server too: the roster's tabs are built from this
+              vocabulary, so a third would put an artist in a group with no tab to reach
+              them. Defaults to resident, which is what every artist already on the site
+              was set to when the field arrived. */}
+          <Field label="Collab" className="col-span-2 md:col-span-1">
+            <select value={form.collab || "resident"} onChange={(e) => setF("collab", e.target.value)}
+                    className="input-x w-full" data-testid="artist-collab">
+              <option value="resident">Resident</option>
+              <option value="guest">Guest</option>
+            </select>
+          </Field>
           <div className="col-span-2">
             <ImageField value={form.image_url} onChange={(v) => setF("image_url", v)}
                         label="Photo" testId="artist-image" />

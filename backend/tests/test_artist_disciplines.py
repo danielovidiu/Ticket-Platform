@@ -242,3 +242,43 @@ class TestPickedGalleries:
         a = _mk_artist(admin, album_ids=[album_id])
         got = requests.get(f"{API}/artists/{a['slug']}", timeout=TIMEOUT).json()
         assert got["albums"] == []
+
+
+class TestCollab:
+    """Resident or guest, and nothing else.
+
+    The roster's tabs are built straight from this vocabulary, so a third value would put
+    an artist in a group with no tab to reach them — on the site, absent from both halves
+    of the filter, with nothing to say why. The server is where that is settled rather
+    than the dropdown, which is one client's opinion.
+    """
+
+    def test_an_artist_is_a_resident_unless_told_otherwise(self, admin):
+        # Which is also what the migration wrote onto every artist that predates the
+        # field: these are the people the collective already had.
+        assert _mk_artist(admin)["collab"] == "resident"
+
+    def test_a_guest_round_trips(self, admin):
+        assert _mk_artist(admin, collab="guest")["collab"] == "guest"
+
+    def test_it_can_be_changed_after_the_fact(self, admin):
+        a = _mk_artist(admin)
+        r = requests.patch(f"{API}/admin/artists/{a['artist_id']}", headers=admin,
+                           json={"collab": "guest"}, timeout=TIMEOUT)
+        assert r.status_code == 200, r.text
+        assert r.json()["collab"] == "guest"
+
+    @pytest.mark.parametrize("bad", ["Resident", "RESIDENT", "collaborator", "", "friend"])
+    def test_anything_outside_the_two_is_refused(self, admin, bad):
+        r = requests.post(f"{API}/admin/artists", headers=admin, timeout=TIMEOUT,
+                          json={"name": f"PYTEST {uuid.uuid4().hex[:6]}",
+                                "slug": f"pytest-{uuid.uuid4().hex[:8]}", "collab": bad})
+        assert r.status_code == 400, f"{bad!r} was accepted: {r.text}"
+
+    def test_the_public_roster_carries_it_so_the_page_can_filter(self, admin):
+        # The tabs filter a list the page already has rather than refetching per click,
+        # which only works if the value travels with the artist.
+        a = _mk_artist(admin, collab="guest")
+        roster = requests.get(f"{API}/artists", timeout=TIMEOUT).json()
+        mine = next(x for x in roster if x["artist_id"] == a["artist_id"])
+        assert mine["collab"] == "guest"

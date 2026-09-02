@@ -146,6 +146,7 @@ export function applyTheme(theme) {
 
 /** Default block props factory keyed by block type. */
 export const BLOCK_DEFAULTS = {
+  _background: () => ({ image_url: "", overlay_color: "#050505", overlay_opacity: 40, full_frame: true }),
   // `text_case: "as-typed"` and an explicit `heading_size` are deliberate on NEW blocks:
   // absent means "legacy", and the renderer keeps the old behaviour for blocks that
   // predate these fields so no published page changes appearance. See Hero in
@@ -200,6 +201,10 @@ export const BLOCK_DEFAULTS = {
 };
 
 export const BLOCK_LABELS = {
+  // Leading underscore on the TYPE, not the label: it is the page's backdrop rather
+  // than something in the run of blocks, and the name says so wherever a block type is
+  // printed. The label reads normally in the picker, which is sorted by label.
+  _background: "Background (page)",
   hero: "Hero",
   rich_text: "Rich text",
   image: "Image",

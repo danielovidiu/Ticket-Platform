@@ -210,3 +210,49 @@ class TestTheDoorReadsBothEnds:
         t = db.tickets.find_one({"qr_code": qr})
         assert t["status"] == "used"
         assert t.get("override_by"), "who decided has to be recorded on the ticket"
+
+
+class TestTheEventsImageFormat:
+    """The shape an event's cover is cropped to, chosen once with the image.
+
+    It was hardcoded — 4:3 on the event's own page, 16:10 on a card in a CMS grid — so
+    the same photograph was cropped two different ways depending on where you saw it.
+    The vocabulary is closed because a value outside it renders as no aspect class at
+    all, which collapses the image to nothing rather than falling back to a shape.
+    """
+
+    def test_it_defaults_to_the_shape_the_event_page_always_used(self, make_event):
+        assert make_event([_wave("GENERAL", 1)])["image_aspect"] == "4:3"
+
+    def test_a_chosen_format_round_trips(self, make_event):
+        assert make_event([_wave("GENERAL", 1)], image_aspect="1:1")["image_aspect"] == "1:1"
+
+    def test_it_can_be_changed_after_the_fact(self, admin_headers, make_event):
+        e = make_event([_wave("GENERAL", 1)])
+        r = requests.patch(f"{API}/admin/events/{e['event_id']}", headers=admin_headers,
+                           json={"image_aspect": "16:9"}, timeout=TIMEOUT)
+        assert r.status_code == 200, r.text
+        assert r.json()["image_aspect"] == "16:9"
+
+    @pytest.mark.parametrize("bad", ["7:3", "square", "16x9", "", "natural"])
+    def test_a_shape_the_renderer_cannot_draw_is_refused(self, admin_headers, bad):
+        # "natural" is in the Image BLOCK's vocabulary and not in this one: an event's
+        # cover is a crop, and letting it be natural would make card heights unpredictable.
+        body = {
+            "title": f"TEST_tier_{uuid.uuid4().hex[:8]}",
+            "slug": f"test-tier-{uuid.uuid4().hex[:10]}",
+            "description": "", "venue": "", "city": "",
+            "starts_at": _iso(days=7), "ends_at": _iso(days=7, hours=4),
+            "doors_open_at": _iso(days=7), "image_url": "", "artist_ids": [],
+            "max_tickets_per_user": 4, "is_published": False, "sold_out_message": "",
+            "waves": [], "image_aspect": bad,
+        }
+        r = requests.post(f"{API}/admin/events", headers=admin_headers, json=body, timeout=TIMEOUT)
+        assert r.status_code == 400, f"{bad!r} was accepted: {r.text}"
+
+    def test_the_public_feed_carries_it_so_a_card_can_use_it(self, make_event):
+        # The CMS events grid crops its cards to this, so it has to travel with the event.
+        e = make_event([_wave("GENERAL", 1)], image_aspect="3:2")
+        feed = requests.get(f"{API}/events", timeout=TIMEOUT).json()
+        mine = next(x for x in feed if x["event_id"] == e["event_id"])
+        assert mine["image_aspect"] == "3:2"
