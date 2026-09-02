@@ -57,14 +57,6 @@
   ],
   "rewrites": [
     {
-      "_comment": [
-        "BEFORE the /api catch-all, and that order is the whole point: everything under",
-        "/api goes to the Python service except this one path, which is a JavaScript",
-        "function. It exists because Vercel refuses a request body over ~4.5MB before a",
-        "function is reached, so a 100MB video cannot be posted to the API at all — the",
-        "browser has to send it straight to Blob, and only the JS SDK can mint the token",
-        "that authorises it. See frontend/api/blob-upload.js."
-      ],
       "source": "/api/blob-upload",
       "destination": {
         "service": "frontend"
