@@ -42,7 +42,13 @@ const drawPreview = (type, props) => {
 // The hero's text inset and the image band's sit over their own background image; they
 // are internal composition, not the space between blocks, and a Spacer cannot restore
 // them. Everything else must be flush.
-const KEEPS_INTERNAL_INSET = new Set(["hero", "image_band"]);
+//
+// The text panel joins them for a different reason: its inset is inside a scroll
+// container of FIXED height, so it cannot change the space between blocks — the block
+// occupies `height` either way. It only keeps the first and last lines off the scroll
+// edges. (It was previously invisible to this rule because it used `p-6`, and the
+// pattern below only matches `py-`, `pt-` and `pb-`.)
+const KEEPS_INTERNAL_INSET = new Set(["hero", "image_band", "text_panel"]);
 
 describe("no block carries vertical padding", () => {
   const types = Object.keys(BLOCK_RENDERERS);
@@ -433,6 +439,54 @@ describe("image band, fixed background", () => {
 describe("text panel", () => {
   const panel = (over) => draw("text_panel", { ...BLOCK_DEFAULTS.text_panel(), ...over })
     .querySelector('[data-testid="text-panel"]');
+
+  test("it draws no border", () => {
+    // It is a window onto text, not a boxed-off card. The border was the only thing
+    // making this block look unlike the rest of the page.
+    const cls = [...panel({}).classList].join(" ");
+    expect(cls).not.toMatch(/\bborder\b/);
+  });
+
+  test("it does not indent its text horizontally", () => {
+    // With no border drawn, side padding would be an unexplained indent: the panel's
+    // prose would not line up with any other block on the page.
+    const cls = [...panel({}).classList];
+    expect(cls).toContain("py-6");
+    expect(cls).not.toContain("p-6");
+  });
+
+  test("its prose is the same type as Rich text", () => {
+    // A reader should not be able to tell which of the two blocks they are in.
+    const el = draw("text_panel", { ...BLOCK_DEFAULTS.text_panel(), content: "Hello there." });
+    const para = el.querySelector("p");
+    const rich = draw("rich_text", { ...BLOCK_DEFAULTS.rich_text(), content: "Hello there." })
+      .querySelector("p");
+    for (const c of ["text-lg", "leading-relaxed", "text-ink-2"]) {
+      expect([...para.classList]).toContain(c);
+      expect([...rich.classList]).toContain(c);
+    }
+  });
+
+  test("but it keeps its own Width control, which Rich text's measure would override", () => {
+    // max-w-2xl is 672px. Copying it wholesale would cap "wide" (1200px) at narrower
+    // than "normal" (900px), making two of the three Width options do nothing.
+    const el = draw("text_panel", { ...BLOCK_DEFAULTS.text_panel(), width: "wide", content: "Body." });
+    const panelEl = el.querySelector('[data-testid="text-panel"]');
+    expect([...panelEl.classList]).toContain("max-w-[1200px]");
+    expect([...el.querySelector("p").classList]).not.toContain("max-w-2xl");
+  });
+
+  test("a list is set to the same measure as the paragraphs around it", () => {
+    // Lists used to be hardcoded to max-w-2xl, so widening the prose left the bullets
+    // behind at a different measure inside the same block.
+    const el = draw("text_panel", {
+      ...BLOCK_DEFAULTS.text_panel(), width: "wide", content: "Intro.\n\n- one\n- two",
+    });
+    const list = el.querySelector("ul");
+    expect(list).toBeTruthy();
+    expect([...list.classList]).not.toContain("max-w-2xl");
+    expect([...list.classList]).toContain("text-lg");
+  });
 
   test("it has a height and scrolls inside it", () => {
     const el = panel({ height: 400 });

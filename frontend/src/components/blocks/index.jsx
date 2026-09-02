@@ -764,14 +764,28 @@ function TextPanel({ props }) {
   return (
     <section>
       <Frame full={props.full_width}>
-        <div className={`${width} ${place} ${textAlign} overflow-y-auto border border-ink/10 p-6`}
+        {/* No border: the panel is a window onto text, not a boxed-off card. Vertical
+            padding stays — it keeps the first and last lines off the scroll edges — but
+            there is no horizontal padding, so the text lines up with every other block
+            on the page instead of sitting in an unexplained 24px indent that used to be
+            justified by a frame that is no longer drawn. */}
+        <div className={`${width} ${place} ${textAlign} overflow-y-auto py-6`}
              style={{ height }} data-testid="text-panel">
           {props.heading && (
             <h2 className="font-display text-2xl md:text-3xl uppercase tracking-tighter font-bold mb-4">
               {props.heading}
             </h2>
           )}
-          {renderRich(props.content, { paraClassName: "text-ink-2 leading-relaxed mt-4 first:mt-0" })}
+          {/* The same type as Rich text — `text-lg` and the same colour and leading —
+              because the two blocks hold the same kind of prose and a reader should not
+              be able to tell which one they are in. Rich text's `max-w-2xl` is
+              deliberately NOT copied: that caps a line at 672px, which would quietly
+              override this block's own Width control and make "wide" (1200px) render
+              identically to "narrow". Width is this block's to decide. */}
+          {renderRich(props.content, {
+            paraClassName: "text-ink-2 text-lg leading-relaxed mt-4 first:mt-0",
+            listClassName: "mt-4 space-y-1 text-ink-2 text-lg leading-relaxed",
+          })}
         </div>
       </Frame>
     </section>
