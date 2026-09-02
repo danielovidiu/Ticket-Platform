@@ -22,6 +22,18 @@ pick up an `api/` directory inside the frontend service. It did not: the deploym
 and nothing had been built as a function. Declaring it as its own service in `vercel.json`
 — `root`, `entrypoint`, `runtime` — is the shape the config actually supports.
 
+## The runtime value
+
+`node`, not `nodejs24.x`. The published `vercel.json` schema describes `runtime` as
+"e.g. nodejs24.x, python3.14", which is the vocabulary for a *lambda*, not for a service.
+A service takes one of `node`, `python`, `go`, `rust`, `ruby`, `container` — the CLI
+validates against that list and fails the build with "has invalid runtime" otherwise.
+The schema accepts the wrong value happily, so this one cannot be caught by validating
+the file; the first push of this service failed on exactly that.
+
+It could be left out altogether — `.js` implies `node` — but naming it makes the service
+say what it is beside the Python one above it.
+
 ## Auth
 
 The function does not decide who may upload. It asks the deployment's own `/api/auth/me`
