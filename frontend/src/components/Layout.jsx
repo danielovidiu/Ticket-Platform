@@ -278,16 +278,16 @@ const Footer = ({ site }) => {
           The gap is tighter on a phone for the same reason it was too big: 40px between
           columns is proportionate at 1400px wide and is a third of the screen at 375.
           Desktop keeps it. */}
-      <div className="max-w-[1400px] mx-auto edge-inset py-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-6 md:gap-10">
-        <div>
+      <div className="max-w-[1400px] mx-auto edge-inset py-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] sm:grid-cols-2 lg:grid-cols-5 gap-x-6 gap-y-6 md:gap-10">
+        <div className="lg:col-span-2">
           {/* Smaller where the columns are narrow, and `break-words` as the last resort:
               a brand name that wraps is survivable, one sliced off at the column edge is
               not. Neither is reached with the current wordmark — both are here because
               the next deployment's is a different length. */}
           <div className="font-display text-xl sm:text-2xl uppercase tracking-tighter break-words">{s.wordmark || ""}</div>
-          {s.description && <p className="mt-4 text-ink-3 text-sm max-w-xs">{s.description}</p>}
+          {s.description && <p className="mt-3 text-ink-3 text-sm max-w-prose">{s.description}</p>}
           {socialLinks.length > 0 && (
-            <div className="mt-5 flex flex-wrap gap-x-4 gap-y-2" data-testid="footer-social">
+            <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2" data-testid="footer-social">
               {socialLinks.map(([key, href, label]) => (
                 <a key={key} href={href} target="_blank" rel="noreferrer"
                    className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-3 hover:text-ink">
@@ -299,8 +299,11 @@ const Footer = ({ site }) => {
         </div>
         {pages.length > 0 && (
           <div data-testid="footer-legal">
-            <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-4">{s.legal_heading}</div>
-            <ul className="space-y-2 text-sm text-ink-2">
+            <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-2">{s.legal_heading}</div>
+            {/* A row that wraps, not a stack. Three links cost one line here and three
+                when stacked, and this column was one of the two setting the footer's
+                height. */}
+            <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-2">
               {pages.map((p) => (
                 <li key={p.slug}><Link to={`/${p.slug}`} className="hover:text-ink">{p.label}</Link></li>
               ))}
@@ -309,7 +312,7 @@ const Footer = ({ site }) => {
         )}
         {s.contact_email && (
           <div>
-            <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-4">{s.contact_heading}</div>
+            <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-2">{s.contact_heading}</div>
             {/* An address has no spaces to break at, so it needs an explicit rule
                 to wrap instead of running past its column. */}
             <p className="text-ink-2 text-sm break-words">{s.contact_email}</p>

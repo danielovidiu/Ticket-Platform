@@ -28,7 +28,7 @@ const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "Layout.j
 
 /** The footer's own grid line — the one carrying the four columns. */
 const footerGrid = () =>
-  SRC.split("\n").find((l) => l.includes("grid") && l.includes("lg:grid-cols-4")) ?? "";
+  SRC.split("\n").find((l) => l.includes("grid") && /lg:grid-cols-\d/.test(l)) ?? "";
 
 describe("footer columns", () => {
   test("the column count is driven by a minimum width, not hard-coded", () => {
@@ -50,9 +50,14 @@ describe("footer columns", () => {
     expect(Number(floor)).toBeLessThanOrEqual(165);
   });
 
-  test("four columns remain the cap on a wide screen", () => {
+  test("a fixed track count takes over on a wide screen", () => {
     // Without this, auto-fit would keep going: at 1400px a 150px floor allows eight.
-    expect(footerGrid()).toMatch(/lg:grid-cols-4/);
+    // Five tracks rather than four because the wordmark block spans two of them — its
+    // description reads as prose across that width instead of wrapping to three lines
+    // in a quarter-width column.
+    expect(footerGrid()).toMatch(/lg:grid-cols-5/);
+    expect(SRC, "the wordmark block should claim the extra track")
+      .toMatch(/lg:col-span-2/);
   });
 
   test("the wordmark can break rather than overflow", () => {
