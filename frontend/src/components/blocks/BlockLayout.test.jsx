@@ -80,7 +80,7 @@ describe("no block carries vertical padding", () => {
 
   test("the side gutters survive", () => {
     const container = draw("rich_text");
-    expect(container.querySelector(".px-6")).toBeTruthy();
+    expect(container.querySelector(".edge-inset")).toBeTruthy();
   });
 });
 
@@ -327,19 +327,17 @@ describe("full width", () => {
       expect(capped(c), `${type} let its text run the full width`).toBeTruthy();
     });
 
-  test("the gutters go with the cap — full width means edge to edge", () => {
-    // This asserted the opposite until the label was taken at its word. A toggle saying
-    // "edge to edge" that left 40px on each side was a promise the code did not keep.
+  test("the frame's own gutters go with the cap — full width reaches the edge", () => {
+    // The FRAME still surrenders its gutters, so the media inside it bleeds. What
+    // changed is that the text no longer goes with it — see the edge-inset suite below.
     const c = draw("events_grid", { ...BLOCK_DEFAULTS.events_grid(), full_width: true });
     const frame = c.querySelector("section > div");
-    expect([...frame.classList]).not.toContain("px-6");
-    expect([...frame.classList]).not.toContain("md:px-10");
+    expect([...frame.classList]).not.toContain("edge-inset");
   });
 
   test("a contained block still has its gutters", () => {
-    // The default is unchanged: text off the edge of a phone, unless asked otherwise.
     const c = draw("events_grid", BLOCK_DEFAULTS.events_grid());
-    expect(c.querySelector(".px-6")).toBeTruthy();
+    expect(c.querySelector(".edge-inset")).toBeTruthy();
   });
 });
 
@@ -605,5 +603,78 @@ describe("the page background", () => {
     const c = drawPreview("_background", { ...BLOCK_DEFAULTS._background(), image_url: "/x.jpg" });
     expect(c.querySelector('[data-testid="page-background-preview"]')).toBeTruthy();
     expect(c.querySelector('[data-testid="page-background"]')).toBeNull();
+  });
+});
+
+/**
+ * Text never touches the glass; photographs always may.
+ *
+ * Some screens curve at the edge, and a letter that reaches the glass loses a sliver of
+ * itself to the bend — which reads as a rendering fault, not as a design. A photograph
+ * loses the same two pixels and nobody can tell.
+ *
+ * So the rule is asymmetric on purpose, and these tests are the rule: with "Full width"
+ * on, every block below still holds its TYPE off the edge, and the named media keeps
+ * running to the corner. Hero and Image band are absent because they already did this —
+ * their image is `absolute inset-0` and their text sits in a Container — and they are
+ * what the rest were made to match.
+ */
+describe("text is held off the screen edge", () => {
+  const full = (type, over) =>
+    draw(type, { ...BLOCK_DEFAULTS[type](), full_width: true, ...over });
+
+  /** The inset is on the element itself or on something above it — either keeps the text
+   *  off the edge, and pinning which one would pin the markup rather than the rule. */
+  const inset = (el) => !!el?.closest(".edge-inset");
+  const text = (c, sel) => c.querySelector(sel);
+
+  test.each([
+    ["rich_text", "p", { content: "Body." }],
+    ["text_panel", "p", { content: "Body." }],
+    ["contact_form", "form", {}],
+    ["newsletter", "form", {}],
+    ["cta_banner", '[data-testid="cta-heading"]', { heading: "Come" }],
+    ["artists_grid", "h2", { heading: "Artists" }],
+    ["events_grid", "h2", { heading: "Events" }],
+    ["gallery_grid", "h2", { heading: "Gallery" }],
+    ["split", "h2", { heading: "Split" }],
+    ["video", '[data-testid="video-caption"]', { caption: "A caption", file_url: "/v.mp4" }],
+  ])("%s keeps its text inset at full width", (type, sel, over) => {
+    const c = full(type, over);
+    const el = text(c, sel);
+    expect(el, `${type}: no element matched ${sel}`).toBeTruthy();
+    expect(inset(el), `${type} put its text against the screen edge`).toBe(true);
+  });
+
+  test("a gallery photograph still reaches the edge", () => {
+    // The block the rule is asymmetric FOR. Insetting these would put a grey margin
+    // around a wall of photographs, which is the thing full width exists to avoid.
+    const c = full("gallery_grid", { heading: "Gallery" });
+    const fig = c.querySelector("figure");
+    if (fig) expect(inset(fig)).toBe(false);
+  });
+
+  test("a split's image is left at the edge while its text moves in", () => {
+    // Asked for explicitly: the fix applies to the words, not the picture.
+    const c = full("split", { heading: "Split", image_url: "/i.jpg" });
+    expect(inset(c.querySelector("img"))).toBe(false);
+    expect(inset(c.querySelector("h2"))).toBe(true);
+  });
+
+  test("the CTA banner moves its photograph in with its text", () => {
+    // The exception, and also asked for: on a phone the columns stack, so the text lands
+    // under the image. Insetting only the text would leave the image hanging past it.
+    const c = full("cta_banner", { heading: "Come", image_url: "/i.jpg" });
+    expect(inset(c.querySelector('[data-testid="cta-image"]'))).toBe(true);
+  });
+
+  test("nothing is inset twice when the block is not full width", () => {
+    // A capped block already sits inside the Frame's inset. A second helping would
+    // double the gutter and pull the text away from every other block on the page.
+    for (const type of ["rich_text", "contact_form", "newsletter", "artists_grid"]) {
+      const c = draw(type, { ...BLOCK_DEFAULTS[type](), full_width: false, heading: "H", content: "B." });
+      const nested = [...c.querySelectorAll(".edge-inset .edge-inset")];
+      expect(nested, `${type} applied the inset twice`).toEqual([]);
+    }
   });
 });

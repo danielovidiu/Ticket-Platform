@@ -99,6 +99,24 @@
   --success: #e1ff00;
   --border: rgba(255, 255, 255, 0.1);
 
+  /* --- How far text sits from the screen edge ----------------------------
+     Some screens are curved, and a letter that reaches the glass loses a
+     sliver of itself to the bend. Photographs can afford that — nobody misses
+     two pixels of a background — but type cannot: a clipped stem reads as a
+     rendering fault.
+
+     So the rule for the whole site is that MEDIA BLEEDS AND TEXT DOES NOT,
+     and this pair of values is the only place the distance is written down.
+     One token means one vertical line: every heading and every paragraph
+     starts at the same place whether its block runs edge to edge or is capped
+     at 1400px, which is what stops the inset reading as a patch.
+
+     The CMS writes over both from Site settings. Defaults are the shipped
+     values, not a fallback for a missing setting — a site that never touches
+     the sliders gets exactly this. */
+  --text-inset-sm: 16px;
+  --text-inset-lg: 24px;
+
   /* --- Channel mirrors ---------------------------------------------------
      Tailwind can only apply an opacity modifier (border-ink/15, bg-ink/5) to a
      colour it can see the channels of, so these carry the same three colours as
@@ -298,6 +316,22 @@ body {
 
 /* Utility spacers */
 .section-y { padding-top: 6rem; padding-bottom: 6rem; }
+
+/* The one inset. Applied to text, never to a photograph.
+   Deliberately a named class rather than repeated Tailwind arbitrary values:
+   it is a rule about the design, so it should be greppable as one thing and
+   changeable in one place. */
+.edge-inset {
+  padding-left: var(--text-inset-sm);
+  padding-right: var(--text-inset-sm);
+}
+
+@media (min-width: 768px) {
+  .edge-inset {
+    padding-left: var(--text-inset-lg);
+    padding-right: var(--text-inset-lg);
+  }
+}
 
 @layer base {
   [data-debug-wrapper="true"] { display: contents !important; }
