@@ -18,6 +18,9 @@ from PIL import Image
 
 from support import API, TIMEOUT, db
 
+# The real ceiling, not a copy of it — see TestSizeIsCappedWhileReading.
+from server import MAX_UPLOAD_BYTES
+
 
 # Runs on one worker, in order: the module's own xdist group. This is what
 # `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
@@ -162,20 +165,42 @@ class TestStoredBytesAreOurs:
 
 
 class TestSizeIsCappedWhileReading:
+    """The ceiling is read from the server rather than written here.
+
+    These used to send 26 MB against a hardcoded 25 MB. When the ceiling moved to 100 MB
+    for video, 26 MB became a perfectly acceptable upload and the tests would have gone on
+    passing for the wrong reason — a fake PNG is refused by the image sniffer with a 400,
+    which is not what they claim to be testing.
+    """
+
+    @staticmethod
+    def _over_the_cap():
+        # A megabyte past whatever the server currently allows.
+        return b"\x89PNG\r\n\x1a\n" + b"\x00" * (MAX_UPLOAD_BYTES + 1024 * 1024)
 
     def test_an_oversized_upload_is_refused_with_413(self, admin_headers):
-        """26 MB against a 25 MB ceiling. The status matters: 413 says "too large",
-        where the old 400 said "bad request" for a request that was fine apart from size.
-        """
-        blob = b"\x89PNG\r\n\x1a\n" + b"\x00" * (26 * 1024 * 1024)
-        r = _upload(admin_headers, blob, "x.png", "image/png")
+        """The status matters: 413 says "too large", where the old 400 said "bad request"
+        for a request that was fine apart from its size."""
+        r = _upload(admin_headers, self._over_the_cap(), "x.png", "image/png")
         assert r.status_code == 413, f"{r.status_code}: {r.text[:160]}"
+        assert str(MAX_UPLOAD_BYTES // (1024 * 1024)) in r.text, r.text[:160]
 
     def test_the_oversized_upload_was_not_stored(self, admin_headers):
         before = db.gallery.count_documents({})
-        blob = b"\x89PNG\r\n\x1a\n" + b"\x00" * (26 * 1024 * 1024)
-        _upload(admin_headers, blob, "x.png", "image/png")
+        _upload(admin_headers, self._over_the_cap(), "x.png", "image/png")
         assert db.gallery.count_documents({}) == before
+
+    def test_a_file_under_the_cap_gets_past_the_size_gate(self, admin_headers):
+        """Proves the ceiling actually moved, rather than the test merely agreeing with it.
+
+        Sent well past the old 25 MB limit. The bytes are not a real PNG, so the correct
+        answer is the image sniffer's 400 — what matters is that it is NOT a 413, which is
+        what the previous ceiling would have returned.
+        """
+        blob = b"\x89PNG\r\n\x1a\n" + b"\x00" * (30 * 1024 * 1024)
+        r = _upload(admin_headers, blob, "x.png", "image/png")
+        assert r.status_code != 413, "30 MB was refused as too large"
+        assert r.status_code == 400, f"{r.status_code}: {r.text[:160]}"
 
 
 class TestAccessIsUnchanged:

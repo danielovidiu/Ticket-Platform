@@ -1,8 +1,7 @@
 import { useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { http } from "../api";
 import { mediaUrl } from "../lib/media";
-import { captureVideoPoster } from "../lib/videoPoster";
+import { uploadVideo } from "../lib/uploadVideo";
 import { useSingleUpload } from "../lib/useUpload";
 
 const ACCEPT = { prefix: "video/", message: "Choose a video — use the image block for stills" };
@@ -19,30 +18,31 @@ const ACCEPT = { prefix: "video/", message: "Choose a video — use the image bl
  * The upload fills two props at once (the file and its poster), so it commits a patch
  * rather than a single value.
  *
- * It runs through the same pipeline as every other upload, with one thing it cannot do:
- * a video is not resized here, because a browser cannot transcode one. So a clip over
- * the deployed function's body limit fails and says to compress it, rather than being
- * retried twice on its way to the same refusal.
+ * A video is never resized: a browser cannot transcode one. A clip over the deployment's
+ * ceiling is refused with the number it exceeded rather than retried on its way to the
+ * same answer.
+ *
+ * The file may not go through the API at all. See lib/uploadVideo — on a platform that
+ * refuses a body over ~4.5MB, the browser sends it straight to blob storage instead, and
+ * only the poster frame comes this way.
  */
-export default function VideoField({ value, posterValue, onPatch, label = "Video file", testId = "video-field" }) {
+export default function VideoField({
+  value, posterValue, onPatch, label = "Video file", testId = "video-field",
+  // Which props this field writes. Defaulted so every existing call site is unchanged,
+  // and overridable so the same control can carry a second, mobile cut of the same video.
+  fileKey = "file_url", posterKey = "poster_url",
+}) {
   const inputRef = useRef(null);
 
-  const send = useCallback(async (file) => {
-    const fd = new FormData();
-    fd.append("file", file);
-    // A poster is what the block shows before playback starts, and the only thing it
-    // shows at all when autoplay is off. Null when the browser cannot decode the file;
-    // the upload still goes through, the block just opens on a black frame.
-    const poster = await captureVideoPoster(file);
-    if (poster) fd.append("poster", poster, "poster.jpg");
-    const { data } = await http.post("/admin/uploads", fd);
-    return data;
-  }, []);
+  // Which route the file takes is `uploadVideo`'s decision, not this component's: on
+  // Vercel a video has to go straight to blob storage because the platform will not carry
+  // a body that size, and everywhere else it goes through the API as it always has.
+  const send = useCallback((file) => uploadVideo(file), []);
 
-  const onDone = useCallback((data) => {
-    onPatch({ file_url: data.url, poster_url: data.has_poster ? data.thumbnail_url : "" });
+  const onDone = useCallback(({ url, poster_url }) => {
+    onPatch({ [fileKey]: url, [posterKey]: poster_url || "" });
     toast.success("Video uploaded");
-  }, [onPatch]);
+  }, [onPatch, fileKey, posterKey]);
 
   const upload = useSingleUpload({ send, onDone, accept: ACCEPT });
 
@@ -53,7 +53,7 @@ export default function VideoField({ value, posterValue, onPatch, label = "Video
         <input
           placeholder="Paste an MP4/WebM URL, or upload →"
           value={value || ""}
-          onChange={(e) => onPatch({ file_url: e.target.value })}
+          onChange={(e) => onPatch({ [fileKey]: e.target.value })}
           className="input-x flex-1 min-w-[12rem]"
           data-testid={`${testId}-url`}
         />
@@ -62,7 +62,7 @@ export default function VideoField({ value, posterValue, onPatch, label = "Video
           {upload.busy ? upload.label : "Upload"}
         </button>
         {value && (
-          <button type="button" onClick={() => onPatch({ file_url: "", poster_url: "" })}
+          <button type="button" onClick={() => onPatch({ [fileKey]: "", [posterKey]: "" })}
                   className="btn-primary shrink-0" data-testid={`${testId}-clear`}>Clear</button>
         )}
         <input ref={inputRef} type="file" accept="video/mp4,video/webm,video/quicktime" className="hidden"

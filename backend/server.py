@@ -544,7 +544,12 @@ if storage.is_local():
 
 IMAGE_CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
 VIDEO_CONTENT_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov"}
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+# 100 MB, which is what a short video actually weighs. Reachable on a VPS, where nginx
+# is the only thing in front; NOT reachable on Vercel, whose platform refuses any request
+# body over about 4.5 MB before this process is reached at all — measured, not assumed:
+# a 4 MB body gets a 401 from this app, a 5 MB body gets a 413 from the edge. Hosted
+# uploads that large need the browser to talk to blob storage directly.
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 64 * 1024
 
 # What Pillow must report for a file the client called an image. Keyed by the declared
@@ -569,8 +574,8 @@ async def _read_capped(upload: UploadFile, limit: int = MAX_UPLOAD_BYTES) -> byt
     that disk-then-RAM rather than pure RAM, but a limit enforced after the fact is a
     limit on what gets stored, not on what gets sent.
 
-    nginx also caps the body at 25 MB on the VPS (`client_max_body_size`); this covers the
-    paths where nothing is in front.
+    nginx caps the body too on the VPS (`client_max_body_size`, kept in step with this in
+    DEPLOY_VPS.md); this covers the paths where nothing is in front.
     """
     chunks, total = [], 0
     while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
@@ -4705,6 +4710,23 @@ async def admin_delete_gallery(gallery_id: str, user=Depends(require_admin)):
     await _drop_gallery_item(item)
     await _promote_next_cover(item)
     return {"ok": True}
+
+
+@api.get("/uploads/config")
+async def upload_config(user=Depends(require_admin_or_editor)):
+    """What this deployment can actually accept, so the editor stops guessing.
+
+    `max_bytes` is this process's ceiling. `direct_upload` says whether the browser may
+    send a large file straight to blob storage instead of through here — which it must,
+    on a platform that refuses a request body over about 4.5 MB long before this function
+    is reached. Without the flag the editor has no way to tell a deployment that can take
+    a 100 MB video from one that cannot, and finds out by watching an upload fail.
+    """
+    return {
+        "max_bytes": MAX_UPLOAD_BYTES,
+        "direct_upload": not storage.is_local(),
+        "direct_upload_url": "/api/blob-upload",
+    }
 
 
 @api.post("/admin/uploads")

@@ -59,6 +59,39 @@ Vercel returns the service's 404 rather than falling back to another top-level r
 
 Nothing creates the database ahead of time; `DB_NAME` is created on first write.
 
+## 2a. Large video: the client-upload route
+
+Vercel refuses any request body over about **4.5 MB** before a function is reached, so a
+video cannot be posted to the Python API at all. Measured on this project: a 4 MB body
+gets a `401` from the app, a 5 MB body gets a `413` from the edge. Relaying it in pieces
+does not help either — Blob's multipart upload wants **5 MiB parts**, which is larger than
+a request the platform will carry.
+
+So the browser sends large video **straight to Blob**, using a short-lived token minted by
+`frontend/api/blob-upload.js`. That file is JavaScript in an otherwise Python backend for
+one reason: Vercel's Python SDK has no `handleUpload`, and the token format is not
+documented well enough to reimplement.
+
+Three things have to line up, and all three are in the repo:
+
+| | Where |
+|---|---|
+| The function | `frontend/api/blob-upload.js` |
+| Its route, **before** the `/api` catch-all | `vercel.json` → `rewrites[0]` |
+| The browser's permission to reach Blob | `vercel.json` → CSP `connect-src https://*.blob.vercel-storage.com` |
+
+It authenticates by asking this deployment's own `/api/auth/me` with the caller's cookie,
+so "who may upload" has one implementation rather than two that can disagree. Content
+types are restricted to MP4/WebM/MOV and the size to 100 MB.
+
+**A file that arrives this way is not sniffed by the Python container check** — it never
+passes through it. The allow-list in that function is the whole of the gate, which is the
+trade the platform's limit forces.
+
+Without a Blob store connected, `GET /api/uploads/config` reports `direct_upload: false`
+and the editor uses the ordinary API route, which is what happens on a laptop and on the
+VPS.
+
 ## 2. Vercel Blob
 
 Uploaded gallery/artist media cannot live on the function's filesystem — it is read-only
@@ -85,7 +118,7 @@ Set these on the project (**Settings → Environment Variables**), not in a comm
 | `APP_ENV` | `development` | Leave it. It does **not** gate payments, and `production` additionally makes an explicit `CORS_ORIGINS` mandatory — see the warning below |
 | `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET` | `sk_…`, `whsec_…` | Both, to take payments. Without them the app starts only in simulator mode — see the warning below |
 | `LOCAL_FAKE_PAYMENTS`, `I_ACCEPT_FREE_TICKETS_IN_PUBLIC` | `1`, `1` | Simulator mode, for a deployment that sells nothing. **Both** are required here — the first on its own is refused. See the warning below |
-| `BLOB_READ_WRITE_TOKEN` | *(injected)* | Added automatically when the Blob store is connected |
+| `BLOB_READ_WRITE_TOKEN` | *(injected)* | Added automatically when the Blob store is connected. Also **required** by the client-upload route below — `handleUpload` signs its tokens with it, and OIDC credentials will not do. |
 | `RESEND_API_KEY`, `MAIL_FROM` | **effectively required in production** | Without them, mail lands in the `outbox` collection instead of being sent — see below. An SMTP backend exists but is the wrong fit for serverless |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | optional, **Production scope only** | Google sign-in. All three or none — see below |
 

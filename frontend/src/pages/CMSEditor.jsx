@@ -1195,10 +1195,15 @@ const FIELDS = {
     { k: "loop", label: "Loop", type: "checkbox" },
     { k: "muted", label: "Start muted", type: "checkbox" },
     { k: "controls", label: "Show player controls (uploaded files)", type: "checkbox" },
-    { k: "aspect", label: "Aspect ratio", type: "select", options: ["16:9", "21:9", "4:3", "1:1", "3:4", "16:10", "3:2"],
+    { k: "file_url_mobile", label: "Mobile cut (optional)", type: "video",
+      fileKey: "file_url_mobile", posterKey: "poster_url_mobile" },
+    { k: "aspect", label: "Aspect ratio — desktop", type: "select", options: ["16:9", "21:9", "4:3", "1:1", "3:4", "16:10", "3:2"],
       // SoundCloud and Bandcamp render as a fixed-height player strip and ignore this.
       // Hidden rather than left visible: a control that looks editable and changes
       // nothing is the same bug the hero's overlay boolean had.
+      when: (v) => !/soundcloud\.com|bandcamp\.com/i.test(v.url || "") },
+    { k: "aspect_mobile", label: "Aspect ratio — mobile", type: "select",
+      options: ["9:16", "4:5", "1:1", "3:4", "4:3", "16:9"],
       when: (v) => !/soundcloud\.com|bandcamp\.com/i.test(v.url || "") },
     { k: "embed_height", label: "Player height (px)",
       // The mirror of the rule above: only audio embeds are sized by height, and blank
@@ -1354,7 +1359,11 @@ function PropsEditor({ block, onChange }) {
         // Same reason as the image field, plus one more: an upload fills the file and its
         // poster together, so this one commits a patch rather than a single value.
         if (f.type === "video") {
-          return <VideoField key={key} label={f.label} value={v.file_url || ""} posterValue={v.poster_url || ""}
+          const fileKey = f.fileKey || "file_url";
+          const posterKey = f.posterKey || "poster_url";
+          return <VideoField key={key} label={f.label}
+                             value={v[fileKey] || ""} posterValue={v[posterKey] || ""}
+                             fileKey={fileKey} posterKey={posterKey}
                              onPatch={(patch) => onChange(blockId, patch, `${blockId}:${f.k}`)} testId={testId} />;
         }
         return (
