@@ -150,6 +150,52 @@ class TestTheProxyOverwritesTheForwardedHeader:
         )
 
 
+class TestConnectSrcReachesTheBlobApi:
+    """The CSP that broke the video upload, pinned so it cannot break it again.
+
+    A direct upload does NOT go to the blob store's own hostname. The browser talks to
+    `https://vercel.com/api/blob` — the SDK's `defaultVercelBlobApiUrl` — and only the
+    finished file is served from `<store>.public.blob.vercel-storage.com`. Allowing the
+    store host alone therefore looks complete and is not: the token was minted, the
+    upload began, and the transfer was refused by our own policy. The editor saw a
+    progress bar sitting at 0%, and the browser console said exactly why:
+
+        Connecting to 'https://vercel.com/api/blob' violates the following Content
+        Security Policy directive: "connect-src 'self' https://*.blob.vercel-storage.com"
+
+    Nothing in the application could have reported this. A CSP refusal happens in the
+    browser, before the request exists.
+    """
+
+    def test_vercel_csp_allows_the_blob_api_host(self):
+        csp = _vercel_headers()["Content-Security-Policy"]
+        m = re.search(r"connect-src ([^;\"]+)", csp)
+        assert m, "vercel.json has no connect-src"
+        connect = m.group(1)
+        assert "https://vercel.com" in connect, (
+            "the blob client uploads to https://vercel.com/api/blob; without it in "
+            f"connect-src every direct upload stalls at 0%: {connect}"
+        )
+
+    def test_the_store_host_is_still_allowed_too(self):
+        # Both are needed and they are not interchangeable: one carries the upload, the
+        # other serves the file afterwards.
+        csp = _vercel_headers()["Content-Security-Policy"]
+        assert "https://*.blob.vercel-storage.com" in re.search(r"connect-src ([^;\"]+)", csp).group(1)
+
+    def test_the_vps_csp_stays_narrow(self):
+        """Deliberately NOT kept in sync with vercel.json here.
+
+        On a VPS `storage.is_local()` is true, so there is no direct upload and no blob
+        host to reach — every byte goes to 'self'. Widening this one to match would grant
+        a permission that deployment has no use for.
+        """
+        m = re.search(r"connect-src ([^;\"]+)", _nginx_block())
+        assert m, "DEPLOY_VPS.md has no connect-src"
+        assert "vercel.com" not in m.group(1), \
+            "the VPS serves its own uploads; it has no reason to reach Vercel"
+
+
 class TestScriptSrcStaysStrict:
 
     def test_no_unsafe_inline_in_script_src(self):
