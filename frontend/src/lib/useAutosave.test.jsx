@@ -108,9 +108,11 @@ describe("ordering", () => {
     await flushTimers(15);          // first save now in flight
     value = "b";
     act(() => result.current.bump()); // lands mid-request
-    await flushTimers(200);
-
-    expect(save).toHaveBeenCalledWith("b");
+    // waitFor, not a fixed 200ms: the queued re-run is two 20ms intervals and a 50ms
+    // request away, which is comfortable on an idle machine and not on a loaded one.
+    // This failed roughly one full-suite run in four while the rest of the suite was
+    // competing for the same event loop — a flake in the clock, not in the hook.
+    await waitFor(() => expect(save).toHaveBeenCalledWith("b"), { timeout: 2000 });
   });
 });
 

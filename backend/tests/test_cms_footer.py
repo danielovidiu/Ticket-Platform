@@ -141,12 +141,30 @@ class TestTheSettings:
         assert got["wordmark"] == "FOOTER ONLY"
         assert got["header_wordmark"] != "FOOTER ONLY"
 
-    def test_a_blank_falls_back_rather_than_showing_nothing(self, editor):
-        """A footer with no wordmark and no copyright reads as broken, not as deliberate."""
+    def test_a_blank_clears_the_field(self, editor):
+        """Blank means blank. This asserted the opposite until it was changed on purpose.
+
+        The old rule was "a footer with no wordmark and no copyright reads as broken, not
+        as deliberate", and the route enforced it by discarding empty values. What that
+        produced was not a fallback: the field kept whatever custom text was already
+        there, so clearing the footer description in the CMS left the box empty, the
+        editor saying saved, and the site showing the old words. An edit that is refused
+        without saying so is worse than either behaviour it was choosing between.
+
+        The consequence is real and was accepted: an emptied wordmark now renders as an
+        empty corner. That is the editor's call to make.
+        """
         requests.put(f"{API}/admin/cms/site", headers=editor, timeout=TIMEOUT,
                      json={"wordmark": "   ", "copyright_name": ""})
         got = requests.get(f"{API}/cms/site", timeout=TIMEOUT).json()
-        assert got["wordmark"] and got["copyright_name"]
+        assert got["wordmark"] == ""
+        assert got["copyright_name"] == ""
+
+        # Put them back. Blanking used to be a no-op, so this test could leave the
+        # document however it liked; now it genuinely empties two fields that anything
+        # reading site settings afterwards would find missing.
+        requests.put(f"{API}/admin/cms/site", headers=editor, timeout=TIMEOUT,
+                     json={"wordmark": "SUPERSANITY", "copyright_name": "Supersanity"})
 
     def test_empty_social_entries_are_dropped(self, editor):
         requests.put(f"{API}/admin/cms/site", headers=editor, timeout=TIMEOUT,
