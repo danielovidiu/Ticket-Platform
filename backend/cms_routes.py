@@ -291,6 +291,10 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         from its links — those are CMS pages."""
         header_wordmark: str = ""
         nav_size: Optional[int] = None
+        # How far text sits from the screen edge, in px, at the two breakpoints. Media is
+        # unaffected and still bleeds — this is only ever applied to type.
+        text_inset_sm: Optional[int] = None
+        text_inset_lg: Optional[int] = None
         wordmark: str = ""
         description: str = ""
         legal_heading: str = ""
@@ -497,6 +501,19 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
                 decls.append(f"  --nav-size: {max(8, min(32, int(nav_size)))}px;")
             except (TypeError, ValueError):
                 pass
+        # Clamped like nav_size above, and for a sharper reason: this one is the distance
+        # between every word on the site and the edge of the screen. At 0 the problem it
+        # exists to solve comes straight back; past 64 the text column collapses on a
+        # phone. Both bounds are reachable only through a slider that cannot exceed them,
+        # so this is defence against a hand-edited value, not against the UI.
+        for key, prop in (("text_inset_sm", "--text-inset-sm"), ("text_inset_lg", "--text-inset-lg")):
+            raw = (theme or {}).get(key)
+            if raw is None:
+                continue
+            try:
+                decls.append(f"  {prop}: {max(0, min(64, int(raw)))}px;")
+            except (TypeError, ValueError):
+                pass
         if (theme or {}).get("radius") is not None:
             decls.append(f"  --radius: {int((theme or {}).get('radius') or 0)}px;")
         decls.append(
@@ -534,7 +551,13 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         # Merged in rather than read from the theme document: the value is a site setting
         # now, but it has to reach the browser through the render-blocking stylesheet or
         # the nav paints at the default size and then jumps.
-        theme = {**theme, "nav_size": (await _site_settings())["nav_size"]}
+        site = await _site_settings()
+        # Same reasoning as nav_size: these are site settings, but they have to arrive in
+        # the render-blocking stylesheet or every block paints at the default inset and
+        # then shifts sideways once the JS lands.
+        theme = {**theme, "nav_size": site["nav_size"],
+                 "text_inset_sm": site.get("text_inset_sm"),
+                 "text_inset_lg": site.get("text_inset_lg")}
         fonts = await _fonts_sorted()
         css = _theme_css(theme, fonts)
 
@@ -586,6 +609,11 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         # The header nav's type size. It lived in the theme document, which is where
         # typography belongs in the abstract and the last place anyone looked for it.
         "nav_size": 11,
+        # The distance between text and the edge of the screen, at the two breakpoints.
+        # These match the defaults written in index.css; the pair exists so a site can be
+        # tuned without a deploy, not so the two can drift.
+        "text_inset_sm": 16,
+        "text_inset_lg": 24,
         "wordmark": "SUPERSANITY",
         "description": "A Bucharest music & performance collective. "
                        "Programming, artists, box office — one door.",
@@ -640,6 +668,16 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
                 cleaned["nav_size"] = max(8, min(32, int(patch["nav_size"])))
             except (TypeError, ValueError):
                 cleaned.pop("nav_size", None)
+        # Assigned after the filter above, like nav_size, so the clamped number is what
+        # lands rather than the raw one. 0 is a legitimate setting — someone may genuinely
+        # want type at the edge — and it survives that filter, which tests membership of
+        # ("", None) rather than truthiness. Worth stating, because the two read alike.
+        for key in ("text_inset_sm", "text_inset_lg"):
+            if patch.get(key) is not None:
+                try:
+                    cleaned[key] = max(0, min(64, int(patch[key])))
+                except (TypeError, ValueError):
+                    cleaned.pop(key, None)
         await db.site_settings.update_one({"_id": "site"}, {"$set": cleaned}, upsert=True)
         return {**await _site_settings(), "pages": await _footer_pages()}
 

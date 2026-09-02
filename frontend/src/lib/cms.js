@@ -127,6 +127,11 @@ export function applyTheme(theme) {
   if (f.mono) root.style.setProperty("--font-mono", `"${f.mono}"`);
   if (s.sectionY) root.style.setProperty("--section-y", s.sectionY);
   if (s.containerX) root.style.setProperty("--container-x", s.containerX);
+  // The text inset, applied the same way the nav size is. `!= null` because 0 is a real
+  // setting: someone may want type at the very edge, and a truthiness test would quietly
+  // refuse them and leave the default in place.
+  if (theme.text_inset_sm != null) root.style.setProperty("--text-inset-sm", `${theme.text_inset_sm}px`);
+  if (theme.text_inset_lg != null) root.style.setProperty("--text-inset-lg", `${theme.text_inset_lg}px`);
   if (theme.radius !== undefined) root.style.setProperty("--radius", `${theme.radius}px`);
   // The header nav's size. It is a site setting now rather than a theme value, but a
   // theme published before that move still carries one — and this function's job is to

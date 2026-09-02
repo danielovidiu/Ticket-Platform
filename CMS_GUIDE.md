@@ -18,6 +18,7 @@ depends on the visitor's window.
 - [Contact form](#contact-form) · [Newsletter](#newsletter) · [Custom HTML](#custom-html) · [Spacer](#spacer)
 - [Pages, slugs, roles](#pages-slugs-and-roles) · [Theme and fonts](#theme-and-fonts)
 - [Upload limits](#upload-limits) — how large a file may be, and why it varies
+- [Text and the screen edge](#text-and-the-screen-edge) — why photos bleed and words do not
 
 ---
 
@@ -526,6 +527,59 @@ processed image lands well under any of these ceilings.
 The message names both numbers: the size of your file and the limit. That check happens in
 the browser before a single byte is sent, so a refusal is instant. An upload that instead
 runs for a while and *then* fails is a different problem and worth reporting.
+
+---
+
+## Text and the screen edge
+
+Phones curve at the edge of the glass. A photograph that runs into that curve loses a
+couple of pixels and nobody can tell. A **letter** that runs into it loses part of its
+stem, and that reads as something broken rather than as a design.
+
+So the site follows one rule, everywhere:
+
+> **Media bleeds to the edge. Text never does.**
+
+Turning **Full width** on still sends photographs, posters and video to the very edge of
+the screen — that is what the toggle is for, and nothing about it has changed. What it no
+longer does is take the words with them.
+
+### The distance is yours to set
+
+**Site → Text inset**, two sliders:
+
+| | Default | Range |
+|---|---|---|
+| Phone | **16 px** | 0 – 64 |
+| Desktop | **24 px** | 0 – 64 |
+
+They move every piece of text on the site together — headings, body copy, form fields, the
+hero — so everything stays on one vertical line. That single line is what makes the inset
+read as deliberate; setting blocks to different distances is what makes a page look
+unfinished, which is why there is one control rather than one per block.
+
+0 is allowed, and puts text back against the glass. The cap of 64 px exists because past
+it a phone has no column left to read in.
+
+### The three exceptions, and why
+
+| Block | What moves in |
+|---|---|
+| **Gallery**, **Events** | The heading only. The photographs and posters keep the corner — they are the block. |
+| **Split** | The text column only. The image keeps its own edge. |
+| **CTA banner** | Everything, image included. On a phone its two columns stack, so the text lands under the image; insetting only the text would leave the picture hanging past it and make the stack look like a mistake. |
+
+**Custom HTML** is left alone entirely, so you can still build something deliberately
+edge-to-edge there.
+
+### Against a full-page photo background
+
+The `_background` block is unaffected: it still covers the whole viewport, corner to
+corner, with no gap on any side. The text sitting on top of it moves in by the inset.
+
+That is the same relationship the **Hero** has always had between its photograph and its
+heading — the image fills the frame, the words sit inside it — which is why a page mixing
+the two reads as one design rather than as a patch.
 
 ---
 

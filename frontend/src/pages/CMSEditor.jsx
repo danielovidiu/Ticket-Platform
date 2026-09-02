@@ -926,6 +926,14 @@ function SiteContentEditor() {
       if (r.data?.nav_size) {
         document.documentElement.style.setProperty("--nav-size", `${r.data.nav_size}px`);
       }
+      // `!= null` rather than a truthiness test: 0 is a real setting here and would be
+      // skipped by the check above it, leaving the preview at the default while the
+      // saved value said otherwise.
+      for (const [key, prop] of [["text_inset_sm", "--text-inset-sm"], ["text_inset_lg", "--text-inset-lg"]]) {
+        if (r.data?.[key] != null) {
+          document.documentElement.style.setProperty(prop, `${r.data[key]}px`);
+        }
+      }
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -967,6 +975,31 @@ function SiteContentEditor() {
           The header nav. The phone menu follows it up but never below its own size.
         </div>
       </label>
+
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Text inset</div>
+      <div className="font-mono-x text-[9px] uppercase tracking-[0.15em] text-ink-5 leading-relaxed">
+        How far text sits from the edge of the screen. Photos are never inset — they keep
+        running to the corner, which is what a curved screen can afford to lose.
+      </div>
+      {[
+        { key: "text_inset_sm", prop: "--text-inset-sm", label: "Phone", fallback: 16 },
+        { key: "text_inset_lg", prop: "--text-inset-lg", label: "Desktop", fallback: 24 },
+      ].map(({ key, prop, label, fallback }) => (
+        <label className="block" key={key}>
+          <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">
+            {label}: {state[key] ?? fallback}px
+          </div>
+          <input type="range" min="0" max="64" value={state[key] ?? fallback} data-testid={`site-${key}`}
+                 onChange={(e) => {
+                   const px = Number(e.target.value);
+                   // Painted here as well as saved, for the same reason the nav size is:
+                   // the value reaches visitors through the render-blocking stylesheet,
+                   // which this already-loaded page will not re-fetch.
+                   document.documentElement.style.setProperty(prop, `${px}px`);
+                   save({ [key]: px });
+                 }} className="w-full" />
+        </label>
+      ))}
 
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Footer</div>
       <label className="block">

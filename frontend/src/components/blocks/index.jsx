@@ -56,7 +56,7 @@ function Container({ children, className = "" }) {
   // align left rendered its heading a third of the way across the screen: correctly
   // left-aligned, inside a box that was floating in the middle. Width first, then the
   // max-width caps it and mx-auto centres the capped box, which is what was always meant.
-  return <div className={`w-full max-w-[1400px] mx-auto px-6 md:px-10 ${className}`}>{children}</div>;
+  return <div className={`w-full max-w-[1400px] mx-auto edge-inset ${className}`}>{children}</div>;
 }
 
 /**
@@ -75,11 +75,32 @@ function Frame({ full, narrow = false, className = "", children }) {
   // gutters included. The first version kept the side padding when full, so a toggle
   // labelled "edge to edge" left 40px of gap on each side — a label the code did not keep.
   //
-  // The consequence is real and is the editor's to make: a text block set full width puts
-  // its prose against the screen edge. That is why the cap is the default.
+  // What CHANGED is what "edge to edge" is allowed to do to text. It used to put prose
+  // against the glass, and the comment here called that "the editor's to make" — but it
+  // is not really a choice anyone wants: on a curved screen the outermost letters lose a
+  // sliver to the bend, which reads as a rendering fault rather than as a design.
+  //
+  // So the frame still surrenders its gutters when full, and the MEDIA inside it still
+  // bleeds; the blocks wrap their text in `EdgeInset` instead. Photographs reach the
+  // corner, type does not.
   if (full) return <div className={`w-full ${className}`}>{children}</div>;
   const measure = narrow ? "max-w-[900px]" : "max-w-[1400px]";
-  return <div className={`w-full mx-auto px-6 md:px-10 ${measure} ${className}`}>{children}</div>;
+  return <div className={`w-full mx-auto edge-inset ${measure} ${className}`}>{children}</div>;
+}
+
+/**
+ * The text inset, applied only where the frame around it has surrendered its own.
+ *
+ * `full` is the block's own full-width flag, passed straight through. When it is off the
+ * Frame has already inset everything and a second helping would double the gutter, so
+ * this renders a bare wrapper; when it is on, this is the only thing standing between a
+ * paragraph and the edge of the screen.
+ *
+ * Media is deliberately left outside it. A gallery photograph, an event poster, a video:
+ * those are meant to touch the corner and lose nothing by it.
+ */
+function EdgeInset({ full, className = "", children }) {
+  return <div className={`${full ? "edge-inset" : ""} ${className}`.trim()}>{children}</div>;
 }
 
 // ---------------- Blocks ----------------
@@ -313,7 +334,11 @@ function Hero({ props }) {
 }
 
 function RichText({ props }) {
-  return <section><Frame full={props.full_width} narrow>{renderRich(props.content)}</Frame></section>;
+  return (
+    <section><Frame full={props.full_width} narrow>
+      <EdgeInset full={props.full_width}>{renderRich(props.content)}</EdgeInset>
+    </Frame></section>
+  );
 }
 
 function ImageBlock({ props }) {
@@ -337,7 +362,12 @@ function GalleryGrid({ props }) {
   useEffect(() => { http.get("/gallery").then((r) => setItems(r.data.slice(0, props.limit || 6))).catch(() => {}); }, [props.limit]);
   return (
     <section><Frame full={props.full_width}>
-      {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mb-8">{props.heading}</h2>}
+      {props.heading && (
+        <EdgeInset full={props.full_width}>
+          <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mb-8">{props.heading}</h2>
+        </EdgeInset>
+      )}
+      {/* Not inset: the photographs are the block, and they lose nothing at the corner. */}
       <div className="columns-1 md:columns-3 gap-4 space-y-4">
         {items.map((g) => (
           <figure key={g.gallery_id} className="break-inside-avoid border border-ink/10">
@@ -362,13 +392,16 @@ function EventsGrid({ props }) {
 
   return (
     <section><Frame full={props.full_width}>
-      <div className="flex items-end justify-between mb-10">
-        <div>
-          {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
-          {props.heading && <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
+      <EdgeInset full={props.full_width}>
+        <div className="flex items-end justify-between mb-10">
+          <div>
+            {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
+            {props.heading && <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
+          </div>
+          <Link to="/events" className="btn-primary">All events</Link>
         </div>
-        <Link to="/events" className="btn-primary">All events</Link>
-      </div>
+      </EdgeInset>
+      {/* Not inset: the posters were judged to look right against the edge. */}
       <div className={`grid grid-cols-1 ${cols} gap-6 items-stretch`}>
         {events.map((e) => {
           const hasAlbum = e.gallery && e.gallery.length > 0;
@@ -424,21 +457,25 @@ function ArtistsGrid({ props }) {
   const cols = props.layout === "grid-2" ? "md:grid-cols-2" : props.layout === "grid-4" ? "md:grid-cols-4" : "md:grid-cols-3";
   return (
     <section><Frame full={props.full_width}>
-      <div className="flex items-end justify-between mb-10">
-        <div>
-          {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
-          {props.heading && <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
+      {/* Heading AND grid, unlike Gallery and Events: an artist tile carries the artist's
+          NAME beneath it, so leaving the grid at the edge would leave that name there. */}
+      <EdgeInset full={props.full_width}>
+        <div className="flex items-end justify-between mb-10">
+          <div>
+            {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
+            {props.heading && <h2 className="font-display text-4xl md:text-6xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
+          </div>
+          <Link to="/artists" className="btn-primary">All artists</Link>
         </div>
-        <Link to="/artists" className="btn-primary">All artists</Link>
-      </div>
-      <div className={`grid grid-cols-2 ${cols} gap-4`}>
+        <div className={`grid grid-cols-2 ${cols} gap-4`}>
         {artists.map((a) => (
           <Link key={a.artist_id} to={`/artists/${a.slug}`} className="group block border border-ink/10">
             <div className={`${aspectClass(props.card_aspect, "aspect-square")} overflow-hidden`}><img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" /></div>
             <div className="p-4"><div className="font-display uppercase font-semibold">{a.name}</div></div>
           </Link>
         ))}
-      </div>
+        </div>
+      </EdgeInset>
     </Frame></section>
   );
 }
@@ -476,6 +513,11 @@ function CTABanner({ props }) {
   const upper = casing(props);
   return (
     <section><Frame full={props.full_width}>
+      {/* The whole element, photograph included — the one block where that was asked for.
+          On a phone the two columns collapse into one, so the text lands under the image
+          and starts at the edge; insetting only the text would leave the image hanging
+          past it and make the wrap look like a mistake rather than a stack. */}
+      <EdgeInset full={props.full_width}>
       <div className="grid md:grid-cols-2 gap-10 items-start">
         {props.image_url ? (
           <img src={mediaUrl(props.image_url)} alt={props.heading || ""}
@@ -499,6 +541,7 @@ function CTABanner({ props }) {
           )}
         </div>
       </div>
+      </EdgeInset>
     </Frame></section>
   );
 }
@@ -514,6 +557,7 @@ function ContactFormBlock({ props }) {
   };
   return (
     <section><Frame full={props.full_width} narrow>
+      <EdgeInset full={props.full_width}>
       {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter">{props.heading}</h2>}
       <form onSubmit={submit} className="border border-ink/10 bg-[color:var(--surface,#0F0F0F)] p-6 md:p-8 space-y-4 mt-6">
         <input required placeholder="NAME" value={f.name} onChange={(e) => setF({...f, name: e.target.value})} className="input-x" />
@@ -521,6 +565,7 @@ function ContactFormBlock({ props }) {
         <textarea required rows={5} placeholder="MESSAGE" value={f.message} onChange={(e) => setF({...f, message: e.target.value})} className="input-x" />
         <button disabled={busy} className="btn-accent w-full">{busy ? "SENDING…" : "SEND"}</button>
       </form>
+      </EdgeInset>
     </Frame></section>
   );
 }
@@ -543,6 +588,7 @@ function Newsletter({ props }) {
   };
   return (
     <section className="hairline"><Frame full={props.full_width} narrow>
+      <EdgeInset full={props.full_width}>
       {props.heading && <h2 className="font-display text-3xl md:text-4xl uppercase font-bold tracking-tighter">{props.heading}</h2>}
       {/* Rich text, like every other multi-line body field — this one rendered inline,
           so an author's line breaks were dropped in this block and kept in the next. */}
@@ -551,6 +597,7 @@ function Newsletter({ props }) {
         <input required type="email" placeholder="you@domain.com" value={email} onChange={(e) => setEmail(e.target.value)} className="input-x flex-1 min-w-[240px]" data-testid="newsletter-email" />
         <button disabled={busy} className="btn-accent" data-testid="newsletter-submit">{busy ? "…" : (props.cta_label || "Subscribe")}</button>
       </form>
+      </EdgeInset>
     </Frame></section>
   );
 }
@@ -622,8 +669,12 @@ function VideoEmbed({ props, preview }) {
   const fileUrl = (isMobile && props.file_url_mobile) || props.file_url;
   const posterUrl = (isMobile && props.file_url_mobile && props.poster_url_mobile)
     || props.poster_url;
+  // The caption is text and moves in; the video above it is media and does not.
   const caption = props.caption
-    ? <div className="mt-2 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-4">{props.caption}</div>
+    ? <EdgeInset full={props.full_width}>
+        <div className="mt-2 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-4"
+             data-testid="video-caption">{props.caption}</div>
+      </EdgeInset>
     : null;
 
   // An uploaded file wins over a pasted embed URL when both are set: it is the more
@@ -769,7 +820,7 @@ function TextPanel({ props }) {
             there is no horizontal padding, so the text lines up with every other block
             on the page instead of sitting in an unexplained 24px indent that used to be
             justified by a frame that is no longer drawn. */}
-        <div className={`${width} ${place} ${textAlign} overflow-y-auto py-6`}
+        <div className={`${width} ${place} ${textAlign} overflow-y-auto py-6 ${props.full_width ? "edge-inset" : ""}`}
              style={{ height }} data-testid="text-panel">
           {props.heading && (
             <h2 className="font-display text-2xl md:text-3xl uppercase tracking-tighter font-bold mb-4">
@@ -799,15 +850,16 @@ function Split({ props }) {
   return (
     <section><Frame full={props.full_width}>
       <div className={`grid md:grid-cols-2 gap-10 items-center ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}>
+        {/* The image is NOT inset: asked for explicitly, and it keeps the column edge. */}
         <div className={`${aspectClass(props.aspect, "aspect-square")} overflow-hidden border border-ink/10`}>
           {props.image_url ? <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-ink-5 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>}
         </div>
-        <div>
+        <EdgeInset full={props.full_width}>
           {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
           {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
           {props.body && <div className="mt-4">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed" })}</div>}
           {props.cta_label && <Link to={props.cta_href || "#"} className="mt-6 inline-block btn-primary">{props.cta_label}</Link>}
-        </div>
+        </EdgeInset>
       </div>
     </Frame></section>
   );
