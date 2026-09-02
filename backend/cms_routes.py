@@ -66,6 +66,15 @@ FONT_MAGIC = [
 # couple of megabytes is a desktop-format file uploaded by mistake.
 MAX_FONT_BYTES = 5 * 1024 * 1024
 
+# A font's URL is server-generated — a blob address or "/uploads/<uuid>.woff2" — so this
+# is a sanity bound, not an editorial one. Blob URLs comfortably exceed the 120 characters
+# the colour sanitiser allows, which is half of why that sanitiser must not be used on one.
+MAX_FONT_URL_CHARS = 2048
+# Characters that cannot appear in a URL sitting inside url("..."): the quotes and
+# whitespace that would close the token early, and the punctuation CSS uses to open and
+# close declarations and comments.
+_CSS_URL_FORBIDDEN = frozenset('"\'\\()<>;{} \t\r\n')
+
 # The family name is interpolated into a generated `font-family:` declaration, so it is
 # restricted to characters that cannot close a CSS string or escape the rule. The
 # frontend escapes as well; this is the control, that is the backstop.
@@ -358,8 +367,11 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             family, url = (f.get("family") or "").strip(), (f.get("url") or "").strip()
             if not family or not url:
                 continue
+            href = _css_url(url)
+            if not href:
+                continue
             hint = hints.get((f.get("format") or "").lower())
-            src = f'url("{_css_value(url)}")' + (f' format("{hint}")' if hint else "")
+            src = f'url("{href}")' + (f' format("{hint}")' if hint else "")
             out.append("\n".join([
                 "@font-face {",
                 f'  font-family: "{_css_value(family)}";',
@@ -392,8 +404,51 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
     def _css_value(value: str) -> str:
         """Custom property values land inside a declaration block, so a `}` or a comment
         opener in one would end the rule early and let an editor's colour field write
-        arbitrary CSS. Colours and lengths need none of those characters."""
+        arbitrary CSS. Colours and lengths need none of those characters.
+
+        NOT for URLs — see _css_url, and the bug that note describes."""
         return re.sub(r"[^A-Za-z0-9#(),.%/_\- ]", "", str(value or ""))[:120]
+
+    def _css_url(value: str) -> Optional[str]:
+        """A font file's address, ready to sit inside `url("...")`, or None if it is not
+        one this will vouch for.
+
+        This exists because _css_value was used here, and _css_value has no colon in its
+        allowlist. Run an absolute URL through it and
+
+            https://blob.example.com/uploads/font_ab12.ttf
+              becomes  https//blob.example.com/uploads/font_ab12.ttf
+
+        which is no longer absolute, so the browser resolves it against the stylesheet's
+        own address and asks for /api/cms/https/blob.example.com/... — a 404 on every
+        page load, and a site quietly rendering in a fallback face. The 120-character cap
+        was the second half of the same mistake: blob URLs run past it, and a truncated
+        URL 404s just as silently as a mangled one.
+
+        It survived review because local development stores uploads at "/uploads/name",
+        which has no colon to lose and no length to exceed. Only a deployment backed by
+        blob storage ever saw it.
+
+        Refusing beats sanitising. A mangled URL yields a face that never loads with
+        nothing anywhere to say why; a refused one is simply not written, and the family
+        falls back to the stack the theme already names.
+        """
+        v = str(value or "").strip()
+        if not v or len(v) > MAX_FONT_URL_CHARS:
+            return None
+        # Quotes and whitespace would end the url() token early; the rest are how a CSS
+        # declaration or comment is opened and closed. A URL needs none of them — the
+        # ones that may legitimately appear in a path arrive percent-encoded.
+        if any(c in _CSS_URL_FORBIDDEN or ord(c) < 0x20 for c in v):
+            return None
+        # Absolute http(s), or root-relative as the local store writes. Nothing else:
+        # "javascript:" and "data:" have no business naming a typeface, and a
+        # protocol-relative "//host" would follow the page onto plain http.
+        if v.startswith(("https://", "http://")):
+            return v
+        if v.startswith("/") and not v.startswith("//"):
+            return v
+        return None
 
     def _theme_css(theme: dict, fonts: list) -> str:
         c = (theme or {}).get("colors") or {}
