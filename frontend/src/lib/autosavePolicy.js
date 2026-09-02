@@ -109,6 +109,27 @@ export const anySaverDirty = () => [...savers].some((s) => {
   try { return s.current.isDirty(); } catch { return false; }
 });
 
+/** Every registered surface's save state, for the one indicator that speaks for all of
+ *  them. Reading it here rather than from each surface's return value is what lets a
+ *  surface with no parent watching it — the site settings, the events tabs — report a
+ *  failure at all. */
+export const saverStates = () => [...savers].map((s) => {
+  try { return s.current.getState?.() || "idle"; } catch { return "idle"; }
+});
+
+/** The first reason any surface has for its last failure, in the server's words.
+ *  One line has room for one reason, and simultaneous failures share a cause far more
+ *  often than not: one expired session, one unreachable backend. */
+export const firstSaverError = () => {
+  for (const s of savers) {
+    try {
+      const e = s.current.getError?.();
+      if (e) return e;
+    } catch { /* a surface mid-unmount has nothing to say */ }
+  }
+  return null;
+};
+
 let version = 0;
 const bumpVersion = () => { version += 1; };
 registryListeners.add(bumpVersion);

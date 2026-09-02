@@ -129,6 +129,41 @@ describe("honest state", () => {
     expect(result.current.dirty).toBe(true);
   });
 
+  test("a failure carries the server's reason, not just the fact of it", async () => {
+    // "Save failed" alone sent someone to the network tab to learn that they had simply
+    // been signed out. The reason belongs where the failure is reported.
+    const save = vi.fn().mockRejectedValue({
+      isAxiosError: true, config: { url: "/admin/cms/pages/p1" },
+      response: { status: 413, data: { detail: "This page is 300 KB; the limit is 256 KB" } },
+    });
+    let value = 1;
+    const { result } = renderHook(() =>
+      useAutosave({ getPending: () => value, save, intervalMs: 20 })
+    );
+    act(() => result.current.bump());
+    await waitFor(() => expect(result.current.state).toBe("error"));
+    expect(result.current.error).toBe("This page is 300 KB; the limit is 256 KB");
+  });
+
+  test("the reason does not outlive the failure", async () => {
+    // Rejecting persistently rather than once: a left-dirty save retries on its own
+    // every interval, so a single rejection is cleared again before it can be observed.
+    const save = vi.fn().mockRejectedValue(
+      { isAxiosError: true, config: {}, response: { status: 403, data: {} } });
+    let value = 1;
+    const { result } = renderHook(() =>
+      useAutosave({ getPending: () => value, save, intervalMs: 20 })
+    );
+    act(() => result.current.bump());
+    await waitFor(() => expect(result.current.error).toBe("You do not have permission to do that"));
+
+    save.mockResolvedValue();
+    value = 2;
+    act(() => result.current.bump());
+    await waitFor(() => expect(result.current.state).toBe("saved"));
+    expect(result.current.error).toBe(null);
+  });
+
   test("success clears the pending flag", async () => {
     const save = vi.fn().mockResolvedValue();
     let value = 1;
