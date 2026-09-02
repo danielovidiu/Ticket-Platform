@@ -262,3 +262,108 @@ def test_delete_rejects_plain_user(cleanup):
     cleanup.append(font_id)
     r = requests.delete(f"{API}/admin/cms/fonts/{font_id}", headers=_b("user"), timeout=15)
     assert r.status_code == 403, r.text
+
+
+# ---------- The URL that reaches the browser ----------
+
+class TestTheFontUrlSurvivesIntoTheStylesheet:
+    """The @font-face rules in GET /cms/theme.css, and the 404 that lived in them.
+
+    The URL was being run through the sanitiser meant for colours and lengths, whose
+    allowlist has no colon in it. So
+
+        https://blob.example.com/uploads/font_ab12.ttf
+          became  https//blob.example.com/uploads/font_ab12.ttf
+
+    — no longer absolute, so the browser resolved it against the stylesheet's own address
+    and requested /api/cms/https/blob.example.com/..., which 404'd on every single page
+    load while the site quietly rendered in a fallback face. The same sanitiser also
+    truncated at 120 characters, which a blob URL exceeds.
+
+    It survived because local development stores uploads at "/uploads/<name>": no colon
+    to lose, and short. Only a deployment backed by blob storage ever showed it, which is
+    why the fixtures here use an absolute URL specifically.
+    """
+
+    BLOB = ("https://vuqywng0h3jewybf.public.blob.vercel-storage.com"
+            "/uploads/font_29031c683b574d11a4d440a1510e2817.ttf")
+
+    @staticmethod
+    def _faces(css: str):
+        """{family: url} for every @font-face the stylesheet declares."""
+        import re
+        return {m.group(1): m.group(2) for m in re.finditer(
+            r'font-family:\s*"([^"]+)"[\s\S]*?src:\s*url\("([^"]+)"', css)}
+
+    @pytest.fixture
+    def face(self):
+        """A face written straight to the database: the subject is what the stylesheet
+        does with a stored URL, and only blob-backed deployments produce the absolute
+        form that broke."""
+        from support import db
+        made = []
+
+        def factory(url, family=None, fmt="ttf"):
+            family = family or _family()
+            doc = {"font_id": f"fnt_pytest_{uuid.uuid4().hex[:10]}", "family": family,
+                   "weight": 400, "style": "normal", "url": url, "format": fmt,
+                   "size": 1, "filename": "x", "created_at": "2026-01-01T00:00:00+00:00"}
+            db.custom_fonts.insert_one(dict(doc))
+            made.append(doc["font_id"])
+            return family
+
+        yield factory
+        for font_id in made:
+            db.custom_fonts.delete_one({"font_id": font_id})
+
+    def _css(self):
+        r = requests.get(f"{API}/cms/theme.css", timeout=15)
+        assert r.status_code == 200, r.text
+        return r.text
+
+    def test_an_absolute_url_keeps_its_scheme(self, face):
+        family = face(self.BLOB)
+        assert self._faces(self._css())[family] == self.BLOB
+
+    def test_the_browser_is_never_asked_for_a_relative_font_path(self, face):
+        # The actual symptom, stated as the assertion. "https//host/..." has no scheme,
+        # so it resolves against /api/cms/theme.css and 404s.
+        face(self.BLOB)
+        css = self._css()
+        assert "https//" not in css
+        assert "/api/cms/https" not in css
+
+    def test_a_long_url_is_not_truncated(self, face):
+        # The colour sanitiser cut everything past 120 characters. A truncated URL 404s
+        # exactly as silently as a mangled one.
+        long_url = ("https://vuqywng0h3jewybf.public.blob.vercel-storage.com/uploads/"
+                    + "a" * 90 + ".woff2")
+        assert len(long_url) > 120
+        family = face(long_url, fmt="woff2")
+        assert self._faces(self._css())[family] == long_url
+
+    def test_a_root_relative_url_still_works(self, face):
+        # What local development writes, and the reason nobody saw the bug.
+        family = face("/uploads/font_local.woff2", fmt="woff2")
+        assert self._faces(self._css())[family] == "/uploads/font_local.woff2"
+
+    @pytest.mark.parametrize("bad", [
+        "javascript:alert(1)",
+        "data:font/woff2;base64,AAAA",
+        "//evil.example.com/f.woff2",       # protocol-relative: follows the page onto http
+        'https://x/f.woff2") ; body { display:none } @font-face { src: url("x',
+        "https://x/f.woff2\nbody{display:none}",
+    ])
+    def test_a_url_that_is_not_one_is_dropped_rather_than_patched_up(self, face, bad):
+        """Refused, not sanitised. A mangled URL yields a face that never loads with
+        nothing anywhere to say why; a missing one falls back to the theme's own stack."""
+        family = face(bad)
+        css = self._css()
+        assert family not in self._faces(css)
+        # And nothing from the attempt leaked into the stylesheet either.
+        assert "display:none" not in css.replace(" ", "")
+
+    def test_a_good_face_is_unaffected_by_a_bad_one_beside_it(self, face):
+        good = face(self.BLOB)
+        face("javascript:alert(1)")
+        assert self._faces(self._css())[good] == self.BLOB
