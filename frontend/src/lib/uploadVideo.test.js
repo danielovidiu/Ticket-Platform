@@ -119,6 +119,14 @@ describe("the size ceiling", () => {
     config({ max_bytes: 25 * MB, direct_upload: false });
     await expect(uploadVideo(file(30 * MB))).rejects.toThrow(/limit is 25MB/);
   });
+
+  test("the refusal is marked as decided here, so the pipeline does not retry it", async () => {
+    // Without the marker this error has no response to read a status from, so it falls
+    // to `code === 0`: three attempts with backoff, then "Connection lost" shown to the
+    // editor. Nothing was lost and nothing would change on a fourth try.
+    config({ max_bytes: 25 * MB, direct_upload: false });
+    await expect(uploadVideo(file(30 * MB))).rejects.toMatchObject({ refusedLocally: true });
+  });
 });
 
 describe("when the server cannot answer", () => {

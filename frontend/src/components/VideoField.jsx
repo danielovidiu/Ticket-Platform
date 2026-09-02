@@ -37,7 +37,11 @@ export default function VideoField({
   // Which route the file takes is `uploadVideo`'s decision, not this component's: on
   // Vercel a video has to go straight to blob storage because the platform will not carry
   // a body that size, and everywhere else it goes through the API as it always has.
-  const send = useCallback((file) => uploadVideo(file), []);
+  //
+  // `opts` carries the progress reporter. Only the direct route calls it — the API route
+  // has no way to measure a request it hands to the browser whole — so the readout below
+  // is written to be correct when there is no number at all.
+  const send = useCallback((file, opts) => uploadVideo(file, opts), []);
 
   const onDone = useCallback(({ url, poster_url }) => {
     onPatch({ [fileKey]: url, [posterKey]: poster_url || "" });
@@ -69,6 +73,34 @@ export default function VideoField({
                data-testid={`${testId}-file`}
                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; upload.start(f); }} />
       </div>
+
+      {/* The uploading status, under the controls rather than only inside the button.
+          A video is the one upload here that can take long enough for "is this doing
+          anything?" to be a real question, and now that it goes straight to blob storage
+          there is a true byte count to answer it with.
+
+          The bar is drawn only when there is a number. On the API route there is none,
+          and a bar with nothing in it — or worse, one that animates without meaning —
+          would be a claim the code cannot support. In that case the word alone is shown. */}
+      {upload.busy && (
+        <div className="mt-2 border border-ink/10 px-3 py-2" data-testid={`${testId}-status`}>
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-3">
+              {upload.label}
+            </span>
+            {upload.progress != null && (
+              <span className="font-mono-x text-[10px] tracking-[0.2em] text-ink-3 tabular-nums"
+                    data-testid={`${testId}-percent`}>{upload.progress}%</span>
+            )}
+          </div>
+          {upload.progress != null && (
+            <div className="mt-2 h-[2px] w-full bg-ink/10" data-testid={`${testId}-bar`}>
+              <div className="h-full bg-ink transition-[width] duration-200"
+                   style={{ width: `${upload.progress}%` }} />
+            </div>
+          )}
+        </div>
+      )}
 
       {upload.error && (
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border border-brand px-3 py-2"

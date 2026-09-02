@@ -14,6 +14,10 @@ export function useSingleUpload({ send, onDone, accept }) {
   const [stage, setStage] = useState(null);
   const [attempt, setAttempt] = useState(1);
   const [error, setError] = useState(null);
+  // null means "no number to show", which is the honest state for a route that cannot
+  // report progress. It is not the same as 0, which would claim the upload has started
+  // and moved nothing.
+  const [progress, setProgress] = useState(null);
   const lastFile = useRef(null);
 
   const busy = stage != null && stage !== STAGE.DONE && stage !== STAGE.FAILED;
@@ -38,6 +42,7 @@ export function useSingleUpload({ send, onDone, accept }) {
     const result = await uploadOne(file, {
       send,
       onStage: (s, meta) => { setStage(s); setAttempt(meta?.attempt ?? 1); },
+      onProgress: setProgress,
     });
 
     if (result.ok) {
@@ -55,6 +60,7 @@ export function useSingleUpload({ send, onDone, accept }) {
   const dismiss = useCallback(() => {
     setStage(null);
     setError(null);
+    setProgress(null);
     lastFile.current = null;
   }, []);
 
@@ -65,6 +71,9 @@ export function useSingleUpload({ send, onDone, accept }) {
      * type never made it into the ref, and resending it would fail identically. */
     canRetry: !!error && !!lastFile.current,
     label: busy ? stageLabel(stage, attempt) : null,
+    /** 0..100 while a route that can measure it is uploading, null otherwise. Read it
+     *  together with `busy`: a stale number after a finished upload would be a lie. */
+    progress: busy ? progress : null,
     start,
     retry,
     dismiss,
