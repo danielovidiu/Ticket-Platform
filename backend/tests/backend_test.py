@@ -64,17 +64,11 @@ def _run_in_backend(code: str, timeout: int = 30):
 # admin_headers / door_headers / user_headers / user2_headers all live in conftest.py now.
 
 
-@pytest.fixture(scope="session")
-def obsidian_event(admin_headers):
-    """Get seeded OBSIDIAN event with 3 waves."""
-    # /api/seed is admin-gated (it always was — the old call passed no auth and silently
-    # relied on the database already being seeded).
-    requests.post(f"{API}/seed", headers=admin_headers, timeout=15)
-    r = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15)
-    assert r.status_code == 200, r.text
-    ev = r.json()
-    assert len(ev["waves"]) == 3
-    return ev
+# `obsidian_event` used to live here and fetched the seeded demo event by slug. It was
+# replaced by `sellable_event` in conftest, which creates its own: the seed writes wave
+# windows as fixed timestamps, so a month after seeding the sale window closes and every
+# test below fails with "Wave not active" — a correct refusal against expired demo data,
+# which reads exactly like a reservation bug and is not one.
 
 
 # ---------------- 0. Sanity ----------------
@@ -93,15 +87,15 @@ def test_auth_me_user(user_headers):
 
 # ---------------- 1. Wave-decrement REGRESSION ----------------
 
-def test_reservation_decrements_correct_wave(obsidian_event):
+def test_reservation_decrements_correct_wave(sellable_event):
     """Reserving on GENERAL must reduce ONLY GENERAL, not EARLY_BIRD."""
     user_headers = _fresh_user_headers()
-    ev = obsidian_event
+    ev = sellable_event
 
     # Capture 'before' state RIGHT NOW, not from the session-scoped fixture.
     # Parallel tests (via pytest-xdist) may have mutated inventory since the
     # fixture snapshot was taken.
-    r0 = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15)
+    r0 = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15)
     assert r0.status_code == 200
     ev_now = r0.json()
     waves_before = {w["tier"]: w["available"] for w in ev_now["waves"]}
@@ -119,7 +113,7 @@ def test_reservation_decrements_correct_wave(obsidian_event):
     assert res["status"] == "pending"
 
     # Re-fetch event
-    r2 = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15)
+    r2 = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15)
     assert r2.status_code == 200
     ev2 = r2.json()
     waves_after = {w["tier"]: w["available"] for w in ev2["waves"]}
@@ -137,11 +131,11 @@ def test_reservation_decrements_correct_wave(obsidian_event):
 
 # ---------------- 2. Sold-out edge ----------------
 
-def test_reserve_more_than_available_returns_400(obsidian_event):
+def test_reserve_more_than_available_returns_400(sellable_event):
     user2_headers = _fresh_user_headers()
-    ev = obsidian_event
+    ev = sellable_event
     # Refresh event
-    ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+    ev = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
     vip_wave = next(w for w in ev["waves"] if w["tier"] == "vip")
     available_before = vip_wave["available"]
 
@@ -155,16 +149,16 @@ def test_reserve_more_than_available_returns_400(obsidian_event):
     assert r.status_code == 400, r.text
 
     # Verify no decrement
-    ev2 = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+    ev2 = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
     vip_after = next(w for w in ev2["waves"] if w["tier"] == "vip")
     assert vip_after["available"] == available_before, "wave.available must not decrement on sold-out"
 
 
 # ---------------- 3. Discount code WELCOME10 ----------------
 
-def test_discount_welcome10_applied(obsidian_event):
+def test_discount_welcome10_applied(sellable_event):
     user2_headers = _fresh_user_headers()
-    ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+    ev = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
     general = next(w for w in ev["waves"] if w["tier"] == "general")
     qty = 1
     payload = {
@@ -185,8 +179,14 @@ def test_discount_welcome10_applied(obsidian_event):
 
 # ---------------- 4. Stripe checkout ----------------
 
-def _create_reservation_for(user_headers, quantity=1):
-    ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+def _create_reservation_for(user_headers, event, quantity=1):
+    """Reserve against `event`, on its GENERAL wave.
+
+    The event is passed in rather than fetched by slug. It used to name the seeded demo
+    event, whose sale window expires about a month after seeding — at which point every
+    caller here fails with "Wave not active" and looks like a reservation bug.
+    """
+    ev = requests.get(f"{API}/events/{event['slug']}", timeout=15).json()
     general = next(w for w in ev["waves"] if w["tier"] == "general")
     payload = {
         "event_id": ev["event_id"],
@@ -198,9 +198,9 @@ def _create_reservation_for(user_headers, quantity=1):
     return r.json()
 
 
-def test_checkout_returns_url_and_creates_txn():
+def test_checkout_returns_url_and_creates_txn(sellable_event):
     user_headers = _fresh_user_headers()
-    res = _create_reservation_for(user_headers, quantity=1)
+    res = _create_reservation_for(user_headers, sellable_event, quantity=1)
     # `origin_url` used to be sent here and handed to Stripe as the redirect target
     # (audit M7). The field is gone; the server derives it from PUBLIC_APP_URL.
     payload = {"reservation_id": res["reservation_id"]}
@@ -231,35 +231,77 @@ def test_checkout_returns_url_and_creates_txn():
 
 # ---------------- 5. Finalize idempotency ----------------
 
-def test_finalize_idempotency():
-    """Create pending reservation as fresh user, call _finalize_paid_reservation twice."""
-    fresh_headers = _fresh_user_headers()
-    res = _create_reservation_for(fresh_headers, quantity=2)
-    pytest.finalize_user_headers = fresh_headers
+
+def _finalize(rid):
+    """Run the finalize coroutine in its own interpreter, and so its own event loop."""
+    code = (
+        "import asyncio; "
+        "from server import _finalize_paid_reservation; "
+        f"asyncio.run(_finalize_paid_reservation('{rid}'))"
+    )
+    return _run_in_backend(code)
+
+
+@pytest.fixture(scope="module")
+def finalized_order(sellable_event):
+    """One paid order — reservation, tickets and invoice — for the tests that need one.
+
+    This was a test, not a fixture: test_finalize_idempotency ran first and hung its
+    results on the pytest MODULE as `pytest.finalize_user_headers` and friends, which the
+    two tests after it then read. Three things were wrong with that. It made the tests
+    order-dependent in a suite that runs distributed; it meant a failure in the first one
+    surfaced in the others as `AttributeError: module 'pytest' has no attribute ...`,
+    which says nothing about invoices or refunds; and it left the producer unable to fail
+    honestly, because two other tests were downstream of it.
+
+    A fixture says the dependency out loud and lets each test fail on its own subject.
+    """
+    headers = _fresh_user_headers()
+    res = _create_reservation_for(headers, sellable_event, quantity=2)
     rid = res["reservation_id"]
 
-    # Call finalize twice via subprocess (fresh event loop each call)
-    def finalize(rid):
-        code = (
-            "import asyncio; "
-            "from server import _finalize_paid_reservation; "
-            f"asyncio.run(_finalize_paid_reservation('{rid}'))"
-        )
-        return _run_in_backend(code)
+    p = _finalize(rid)
+    assert p.returncode == 0, f"finalize failed: {p.stderr}"
 
-    p1 = finalize(rid)
-    assert p1.returncode == 0, f"finalize 1 failed: {p1.stderr}"
-    p2 = finalize(rid)
-    assert p2.returncode == 0, f"finalize 2 failed: {p2.stderr}"
-
-    # Verify
     from motor.motor_asyncio import AsyncIOMotorClient
-    mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-    dbname = DB_NAME
+
+    async def read():
+        c = AsyncIOMotorClient(os.environ.get("MONGO_URL", "mongodb://localhost:27017"))
+        d = c[DB_NAME]
+        doc = await d.reservations.find_one({"reservation_id": rid}, {"_id": 0})
+        tickets = await d.tickets.find({"reservation_id": rid}, {"_id": 0}).to_list(100)
+        invoices = await d.invoices.find({"reservation_id": rid}, {"_id": 0}).to_list(100)
+        c.close()
+        return doc, tickets, invoices
+
+    doc, tickets, invoices = asyncio.run(read())
+    assert doc["status"] == "paid", doc
+    assert len(tickets) == 2, f"expected 2 tickets, got {len(tickets)}"
+    assert len(invoices) == 1, f"expected 1 invoice, got {len(invoices)}"
+    return {"headers": headers, "rid": rid, "tickets": tickets, "invoice": invoices[0]}
+
+
+def test_finalize_idempotency(finalized_order):
+    """Finalizing an already-finalized reservation must change nothing.
+
+    The fixture has already finalized it once. This calls it a second time and asserts
+    the order did not gain a duplicate ticket, a second invoice, or a new serial.
+    """
+    rid = finalized_order["rid"]
+    fresh_headers = finalized_order["headers"]
+
+    # A second and a third run, on top of the fixture's. Idempotency is not "it does not
+    # crash": it is that the order looks identical afterwards.
+    p2 = _finalize(rid)
+    assert p2.returncode == 0, f"finalize 2 failed: {p2.stderr}"
+    p3 = _finalize(rid)
+    assert p3.returncode == 0, f"finalize 3 failed: {p3.stderr}"
+
+    from motor.motor_asyncio import AsyncIOMotorClient
 
     async def check():
-        c = AsyncIOMotorClient(mongo_url)
-        d = c[dbname]
+        c = AsyncIOMotorClient(os.environ.get("MONGO_URL", "mongodb://localhost:27017"))
+        d = c[DB_NAME]
         r_doc = await d.reservations.find_one({"reservation_id": rid}, {"_id": 0})
         tickets = await d.tickets.find({"reservation_id": rid}, {"_id": 0}).to_list(100)
         invoices = await d.invoices.find({"reservation_id": rid}, {"_id": 0}).to_list(100)
@@ -268,22 +310,22 @@ def test_finalize_idempotency():
 
     r_doc, tickets, invoices = asyncio.run(check())
     assert r_doc["status"] == "paid"
+    # Still two, not six: re-finalizing must not issue another set.
     assert len(tickets) == 2, f"expected 2 tickets, got {len(tickets)}"
     qrs = {t["qr_code"] for t in tickets}
     assert len(qrs) == 2, "QR codes must be unique"
     assert len(invoices) == 1, f"expected 1 invoice, got {len(invoices)}"
     assert invoices[0]["number"] >= 1000
-
-    pytest.finalized_rid = rid
-    pytest.finalized_ticket_qr = tickets[0]["qr_code"]
-    pytest.finalized_invoice_id = invoices[0]["invoice_id"]
+    # And the serials are the ones already issued, not reallocated.
+    assert {t["serial"] for t in tickets} == {t["serial"] for t in finalized_order["tickets"]}
+    assert fresh_headers, "the fixture's buyer is who these tickets belong to"
 
 
 # ---------------- 6. /my/tickets ----------------
 
-def test_my_tickets_returns_caller_only():
+def test_my_tickets_returns_caller_only(finalized_order):
     other_headers = _fresh_user_headers()
-    fresh_headers = pytest.finalize_user_headers
+    fresh_headers = finalized_order["headers"]
     r = requests.get(f"{API}/my/tickets", headers=fresh_headers, timeout=15)
     assert r.status_code == 200
     tickets = r.json()
@@ -303,9 +345,9 @@ def test_my_tickets_returns_caller_only():
 
 # ---------------- 7. Invoice PDF ----------------
 
-def test_invoice_pdf():
-    inv_id = pytest.finalized_invoice_id
-    fresh_headers = pytest.finalize_user_headers
+def test_invoice_pdf(finalized_order):
+    inv_id = finalized_order["invoice"]["invoice_id"]
+    fresh_headers = finalized_order["headers"]
     r = requests.get(f"{API}/invoices/{inv_id}/pdf", headers=fresh_headers, timeout=15)
     assert r.status_code == 200, r.text
     assert r.headers.get("content-type", "").startswith("application/pdf")
@@ -513,10 +555,9 @@ def test_admin_event_create_patch_delete(admin_headers):
 
 # ---------------- 10. Special link flow ----------------
 
-def test_special_link_flow(admin_headers):
+def test_special_link_flow(admin_headers, sellable_event):
     user2_headers = _fresh_user_headers()
-    # Get scannable event? No, use obsidian
-    ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+    ev = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
     general = next(w for w in ev["waves"] if w["tier"] == "general")
     avail_before = general["available"]
 
@@ -548,7 +589,7 @@ def test_special_link_flow(admin_headers):
     assert res["total_ron"] == 10.0
 
     # Wave should NOT decrement
-    ev2 = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+    ev2 = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
     gen2 = next(w for w in ev2["waves"] if w["tier"] == "general")
     assert gen2["available"] == avail_before, "special link must NOT decrement wave"
 
@@ -640,10 +681,16 @@ def test_event_cancel_refunds_tickets(admin_headers):
     requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
 
 
-def test_order_refund(admin_headers):
-    """Create pending reservation, finalize, then admin refund -> reservation + tickets refunded."""
+def test_order_refund(admin_headers, sellable_event):
+    """Create pending reservation, finalize, then admin refund -> reservation + tickets refunded.
+
+    Self-contained now. It used to read `pytest.finalized_invoice_id` and
+    `pytest.finalize_user_headers` — state stashed on the pytest MODULE by
+    test_finalize_idempotency — so when that test failed this one died with an
+    AttributeError rather than on anything to do with refunds.
+    """
     user_headers = _fresh_user_headers()
-    res = _create_reservation_for(user_headers, quantity=1)
+    res = _create_reservation_for(user_headers, sellable_event, quantity=1)
     rid = res["reservation_id"]
     code = (
         "import asyncio; "

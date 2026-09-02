@@ -12,9 +12,11 @@ connection errors.
 """
 import os
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
+import requests
 
 # The backend package (server.py, mailer.py) sits one level up. This replaces the old
 # hardcoded sys.path.insert(0, "/app/backend").
@@ -183,3 +185,67 @@ def seeded(admin_headers):
     """Demo events/CMS content present. Idempotent."""
     support.ensure_seeded(admin_headers)
     return True
+
+
+@pytest.fixture(scope="session")
+def sellable_event(admin_headers):
+    """An event with three live ticket waves, created for this run.
+
+    Every reservation test used to reach for the seeded OBSIDIAN demo event. The seed
+    writes wave windows as `now + timedelta(...)` AT SEED TIME and stores the result as
+    fixed timestamps, so roughly thirty days after a database is seeded the sale window
+    closes and every one of those tests starts failing with "Wave not active" — a correct
+    refusal from the server, against demo data that has quietly expired.
+
+    That is what happened here: the windows ran 30 Jul to 29 Aug, the calendar reached
+    2 Sep, and twelve tests went red without a line of code changing. Diagnosing it cost
+    more than the fixture, because the failure looks like a reservation bug and is not.
+
+    So this owns its data. The window opens a day ago and closes in thirty, which is live
+    now and will still be live whenever this is next run.
+
+    Three waves at different prices, because the tests that use this are about telling
+    them apart: that reserving on one decrements only that one, and that a discount
+    scoped to an event applies to the wave actually chosen.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    opens = (now - timedelta(days=1)).isoformat()
+    closes = (now + timedelta(days=30)).isoformat()
+
+    def wave(name, price, capacity, tier):
+        return {"name": name, "price_ron": price, "capacity": capacity,
+                "starts_at": opens, "ends_at": closes, "tier": tier}
+
+    payload = {
+        "title": "TEST_sellable",
+        "slug": f"test-sellable-{uuid.uuid4().hex[:8]}",
+        "description": "Reservation fixture — three live waves.",
+        "venue": "Test Venue", "city": "Bucharest",
+        "starts_at": (now + timedelta(days=45)).isoformat(),
+        "ends_at": (now + timedelta(days=45, hours=6)).isoformat(),
+        "doors_open_at": (now + timedelta(days=45)).isoformat(),
+        "image_url": "", "artist_ids": [], "max_tickets_per_user": 10,
+        "is_published": True, "sold_out_message": "",
+        # Capacity is generous on purpose: this is session-scoped and shared, so every
+        # reservation across the run comes out of the same pool. Too small and the tests
+        # fail in run order rather than on their own merits — which is the other way a
+        # shared fixture goes wrong.
+        "waves": [
+            wave("EARLY BIRD", 60.0, 500, "early_bird"),
+            wave("GENERAL", 100.0, 500, "general"),
+            wave("VIP", 200.0, 500, "vip"),
+        ],
+    }
+    r = requests.post(f"{support.API}/admin/events", json=payload,
+                      headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    ev = r.json()
+    # Registered before the assertions below, so a failure further down still cleans up.
+    support.track_event(ev.get("event_id"))
+    assert len(ev["waves"]) == 3, r.text
+    for w in ev["waves"]:
+        assert w.get("wave_id"), "wave_id must be assigned"
+        assert w.get("available") == w["capacity"]
+    return ev

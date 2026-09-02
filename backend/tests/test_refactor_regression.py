@@ -19,7 +19,7 @@ from datetime import datetime, timezone, timedelta
 import pytest
 import requests
 
-from support import API, bearer as _bearer, mint_user, temp_discount, patient
+from support import API, bearer as _bearer, mint_user, temp_discount, patient, track_event
 
 # Runs on one worker, in order: the module's own xdist group. This is what
 # `--dist loadgroup` needs in order to behave like the `loadscope` it replaced —
@@ -36,21 +36,19 @@ def _mint_user(role="user"):
     return headers["Authorization"].split(" ", 1)[1]
 
 
-@pytest.fixture(scope="module")
-def obsidian(seeded):
-    # The unauthenticated POST /api/seed this used to make has always been a 401; it only
-    # appeared to work because the database was already populated. The `seeded` fixture
-    # (conftest) does it properly with admin credentials.
-    r = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15)
-    assert r.status_code == 200
-    return r.json()
+# `obsidian` used to live here and fetched the seeded demo event by slug. It has been
+# replaced by `sellable_event` in conftest, which creates its own event with live wave
+# windows: the seed writes those windows as fixed timestamps, so about a month after a
+# database is seeded the sale closes and every reservation below fails with "Wave not
+# active" — a correct refusal against expired demo data, and one that reads like a
+# reservation bug for as long as it takes to go and look at the dates.
 
 
 # ---------- Happy path: expires_at ~10 minutes ----------
 
-def test_reservation_happy_path_expires_in_10_min(obsidian):
+def test_reservation_happy_path_expires_in_10_min(sellable_event):
     user_h = _bearer(_mint_user())
-    ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+    ev = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
     gen = next(w for w in ev["waves"] if w["tier"] == "general")
     r = patient.post(f"{API}/reservations",
                       json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1},
@@ -203,9 +201,9 @@ def test_wave_not_active_after_window(admin_headers):
 
 # ---------- Discount error paths ----------
 
-def test_discount_invalid_code(obsidian):
+def test_discount_invalid_code(sellable_event):
     user_h = _bearer(_mint_user())
-    ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+    ev = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
     gen = next(w for w in ev["waves"] if w["tier"] == "general")
     r = patient.post(f"{API}/reservations",
                       json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1,
@@ -215,8 +213,8 @@ def test_discount_invalid_code(obsidian):
     assert "Invalid discount code" in r.text
 
 
-def test_discount_wrong_event_scope(admin_headers, obsidian):
-    """Create a code scoped to a DIFFERENT event, then try it on obsidian -> 400."""
+def test_discount_wrong_event_scope(admin_headers, sellable_event):
+    """Create a code scoped to a DIFFERENT event, then try it on this one -> 400."""
     now = datetime.now(timezone.utc)
     payload = {
         "title": "TEST_DISC_EV",
@@ -233,13 +231,17 @@ def test_discount_wrong_event_scope(admin_headers, obsidian):
                    "tier": "general"}],
     }
     other_ev = requests.post(f"{API}/admin/events", json=payload, headers=admin_headers, timeout=15).json()
+    # Registered here, not left to the delete at the bottom: that line only runs if every
+    # assertion between passes, so each failing run left another TEST_DISC_EV behind. Two
+    # were still in the development database from the runs that prompted this change.
+    track_event(other_ev.get("event_id"))
 
     code = f"TEST{uuid.uuid4().hex[:5].upper()}"
     body = {"code": code, "percent_off": 20, "max_uses": 10, "event_id": other_ev["event_id"]}
     d = requests.post(f"{API}/admin/discounts", json=body, headers=admin_headers, timeout=15).json()
 
     user_h = _bearer(_mint_user())
-    ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+    ev = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
     gen = next(w for w in ev["waves"] if w["tier"] == "general")
     r = patient.post(f"{API}/reservations",
                       json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1, "discount_code": code},
@@ -252,14 +254,14 @@ def test_discount_wrong_event_scope(admin_headers, obsidian):
     requests.delete(f"{API}/admin/events/{other_ev['event_id']}", headers=admin_headers, timeout=15)
 
 
-def test_discount_expired(admin_headers, obsidian):
+def test_discount_expired(admin_headers, sellable_event):
     """Insert a discount with expires_at in the past directly in Mongo -> 400."""
     code = f"TESTEXP{uuid.uuid4().hex[:4].upper()}"
     past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     with temp_discount(code=code, percent_off=15, expires_at=past,
                        created_at=datetime.now(timezone.utc).isoformat()):
         user_h = _bearer(_mint_user())
-        ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+        ev = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
         gen = next(w for w in ev["waves"] if w["tier"] == "general")
         r = patient.post(f"{API}/reservations",
                           json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1,
@@ -269,13 +271,13 @@ def test_discount_expired(admin_headers, obsidian):
         assert "expired" in r.text.lower()
 
 
-def test_discount_exhausted(admin_headers, obsidian):
+def test_discount_exhausted(admin_headers, sellable_event):
     """Discount with uses>=max_uses -> 400."""
     code = f"TESTEXH{uuid.uuid4().hex[:4].upper()}"
     with temp_discount(code=code, percent_off=15, max_uses=2, uses=2,
                        created_at=datetime.now(timezone.utc).isoformat()):
         user_h = _bearer(_mint_user())
-        ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+        ev = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
         gen = next(w for w in ev["waves"] if w["tier"] == "general")
         r = patient.post(f"{API}/reservations",
                           json={"event_id": ev["event_id"], "wave_id": gen["wave_id"], "quantity": 1,
@@ -287,8 +289,8 @@ def test_discount_exhausted(admin_headers, obsidian):
 
 # ---------- Special link over-capacity ----------
 
-def test_special_link_over_capacity(admin_headers, obsidian):
-    ev = requests.get(f"{API}/events/obsidian-chapter-i", timeout=15).json()
+def test_special_link_over_capacity(admin_headers, sellable_event):
+    ev = requests.get(f"{API}/events/{sellable_event['slug']}", timeout=15).json()
     gen = next(w for w in ev["waves"] if w["tier"] == "general")
 
     body = {"event_id": ev["event_id"], "label": "TEST_over_cap", "price_ron": 1.0, "capacity": 2}
