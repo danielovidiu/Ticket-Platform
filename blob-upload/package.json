@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Mints the client token that lets a browser upload large video straight to Vercel Blob. Its own service because it is the one piece of this backend that cannot be Python — see index.js.",
   "dependencies": {
-    "@vercel/blob": "^2.8.0"
+    "@vercel/blob": "^2.8.0",
+    "express": "^5.2.1"
   }
 }
