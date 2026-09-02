@@ -22,6 +22,21 @@ pick up an `api/` directory inside the frontend service. It did not: the deploym
 and nothing had been built as a function. Declaring it as its own service in `vercel.json`
 — `root`, `entrypoint`, `runtime` — is the shape the config actually supports.
 
+## It is a server, not a handler
+
+A Vercel **service** must call `server.listen()` while the module is loading — that call is
+how the platform finds the HTTP server. Exporting a fetch-style handler is the shape a
+serverless **function** takes, and it is not the same thing.
+
+The first version did that and failed in the least obvious way available: it built, it was
+routed to, and it never answered. A POST returned `500 FUNCTION_INVOCATION_FAILED`; a GET
+sat there until `504 FUNCTION_INVOCATION_TIMEOUT` — the platform waiting for a server that
+was never going to listen.
+
+`handleRequest` is still a plain `Request -> Response` function, with a thin `node:http`
+server around it, so the behaviour can be exercised directly and the whole thing can be
+run locally with `PORT=3999 node index.js`.
+
 ## The runtime value
 
 `node`, not `nodejs24.x`. The published `vercel.json` schema describes `runtime` as
