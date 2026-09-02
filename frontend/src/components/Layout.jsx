@@ -284,7 +284,19 @@ const Footer = ({ site }) => {
           )}
 
           {(pages.length > 0 || s.contact_email) && (
-            <nav className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-2"
+            /* `ml-auto` as well as the parent's justify-between: with the left block
+               gone — an editor can empty both fields — there is nothing to push against
+               and the links would sit at the left margin instead.
+
+               `justify-end` is what the alignment actually needed. The group was already
+               flush right as a block, but its own items packed from the LEFT, so at 375px
+               where the row wraps the second line started under the first rather than
+               ending with it. Measured before: justify-content "normal".
+
+               `text-xs`, matching the copyright below it rather than the description
+               beside it: these two lines are the footer's furniture and now read as a
+               pair. */
+            <nav className="ml-auto flex flex-wrap items-center justify-end text-right gap-x-3 gap-y-1 text-xs text-ink-2"
                  data-testid="footer-legal">
               {/* The separator TRAILS its link and is glued to it, rather than leading
                   the next one. Leading separators read fine on one line and badly on two:
@@ -315,7 +327,7 @@ const Footer = ({ site }) => {
             top of the page's last element for no reason. Every field feeding the row
             above can be emptied from the CMS now that blank means blank, so "nothing
             above it" is a state an editor can actually reach. */}
-        <div className={`${topRow ? "mt-3 pt-3 border-t border-ink/10" : ""} flex flex-wrap items-center justify-between gap-x-8 gap-y-3`}>
+        <div className={`${topRow ? "mt-2 pt-2 border-t border-ink/10" : ""} flex flex-wrap items-center justify-between gap-x-8 gap-y-3`}>
           {/* The YEAR stays computed. A hardcoded year is a bug that surfaces once, in
               January, on every page at the same time. */}
           <div className="font-mono-x text-xs text-ink-4">© {new Date().getFullYear()} {s.copyright_name || ""}</div>
