@@ -41,6 +41,10 @@ export function renderRich(md, opts = {}) {
   // the CSS default would collapse both no matter how carefully the text is preserved
   // on the way here.
   const paraClassName = opts.paraClassName || "text-ink-2 text-lg leading-relaxed max-w-2xl mt-4";
+  // Lists take the same overrides as paragraphs. They used to be hardcoded, which meant a
+  // caller that widened its paragraphs got bullets still capped at max-w-2xl — prose and
+  // list in the same block, at two different measures.
+  const listClassName = opts.listClassName || "mt-4 space-y-1 text-ink-2 text-lg leading-relaxed max-w-2xl";
   const lines = String(md).split(/\n/);
   const nodes = [];
   let paraBuf = [];
@@ -62,7 +66,7 @@ export function renderRich(md, opts = {}) {
     const Tag = listBuf.ordered ? "ol" : "ul";
     nodes.push(
       <Tag key={`l${nodes.length}`}
-           className={`${listBuf.ordered ? "list-decimal" : "list-disc"} pl-6 mt-4 space-y-1 text-ink-2 text-lg leading-relaxed max-w-2xl`}>
+           className={`${listBuf.ordered ? "list-decimal" : "list-disc"} pl-6 ${listClassName}`}>
         {listBuf.items.map((item, i) => (
           <li key={i} className="whitespace-pre-wrap">{renderInline(item)}</li>
         ))}

@@ -206,6 +206,12 @@ A box of text with its own scrollbar, for long copy that should not stretch the 
 Panel height is fixed — content longer than it scrolls inside the box. **Width** is the
 panel's own measure; **Panel position** is where that panel sits in the row.
 
+The panel draws **no border** and its text is set in exactly the same type as
+[Rich text](#rich-text) — same size, colour and line spacing. The two blocks hold the same
+kind of prose, so a reader should not be able to tell which one they are in. The only
+difference is the measure: Rich text is fixed at a comfortable reading width, while this
+block's line length is yours to set with **Width**.
+
 ---
 
 ## Rich text
