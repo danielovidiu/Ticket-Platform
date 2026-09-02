@@ -127,4 +127,12 @@ describe("when the server cannot answer", () => {
     http.get.mockRejectedValue(new Error("404"));
     expect(await uploadConfig()).toMatchObject({ direct_upload: false });
   });
+
+  test("the fallback ceiling is one a request body can actually carry", async () => {
+    // Guessing high here is the expensive direction: the editor uploads for a minute
+    // and loses the file at the end. Guessing low costs a compress step.
+    http.get.mockRejectedValue(new Error("404"));
+    const { max_bytes } = await uploadConfig();
+    expect(max_bytes).toBeLessThanOrEqual(4.5 * MB);
+  });
 });
