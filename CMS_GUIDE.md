@@ -1,67 +1,488 @@
 # CMS Guide — Supersanity
 
-## What you get
-- **/cms** — full visual editor (admin or editor role required)
-- **/:slug** — public dynamic pages rendered from CMS data, served straight off the root
-  (`/mission`, not `/p/mission`). `/p/:slug` still works: it is a permanent redirect to
-  the new address, declared in `vercel.json`.
-- **/** — renders whichever page is flagged as the homepage (the ⌂ button in Navigation),
-  not the page whose slug happens to spell "home"
-- Events, Artists, Archive, Gallery, ticketing flows are unchanged (per user choice 1a — auto-generated from the ticketing data)
+Every block, every control, and the dimensions each one actually produces.
+
+Numbers here are read from the code, not from memory. Where a value is a percentage of
+the screen it is given as `vh`/`vw` with a worked example, because the pixel answer
+depends on the visitor's window.
+
+---
+
+## Contents
+
+- [The width system](#the-width-system) — the one thing that explains most blocks
+- [Hero](#hero) · [Background (page)](#background-page) · [Image band](#image-band)
+- [Text panel](#text-panel-scrolling) · [Rich text](#rich-text) · [Image](#image) · [Split](#split-image--text)
+- [Events grid](#events-grid) · [Artists grid](#artists-grid) · [Gallery grid](#gallery-grid)
+- [Video / audio](#video--audio-embed) · [Marquee](#marquee) · [CTA banner](#cta-banner)
+- [Contact form](#contact-form) · [Newsletter](#newsletter) · [Custom HTML](#custom-html) · [Spacer](#spacer)
+- [Pages, slugs, roles](#pages-slugs-and-roles) · [Theme and fonts](#theme-and-fonts)
+
+---
+
+## The width system
+
+Almost every block shares one width model, so learning it once explains the rest.
+
+| Mode | Max width | Side gutters | Used by |
+|---|---|---|---|
+| **Framed** (default) | 1400 px, centred | 24 px under 768 px, 40 px at or above | most blocks |
+| **Narrow** | 900 px, centred | same | Rich text, Contact form, Newsletter |
+| **Full width** | none — spans the window | **none** | any block with the toggle on |
+
+The breakpoint throughout is **768 px** (`md`). Below it the layout is one column and the
+gutters are 24 px; at or above, 40 px.
+
+> **Full width removes the gutters too.** "Edge to edge" means edge to edge: a text block
+> set full width puts its prose against the side of the screen. That is why framed is the
+> default, and it is the editor's call to change it.
+
+**Two blocks bleed by default** and are capped by switching the toggle *off*: **Marquee**
+(a ticker runs off both sides by nature) and **Background (page)** (a backdrop covers the
+page). Every other block is framed until you say otherwise.
+
+**Spacer has no width control**, because it has no content to frame — it is an empty box
+with a height, so framed and full width would render identically.
+
+---
+
+## Hero
+
+The full-bleed opening block: background photo, overlay, heading, body, two buttons.
+
+### Dimensions
+
+**Height** is a *minimum*, set as a percentage of the visitor's window:
+
+| | Value |
+|---|---|
+| Control | `Height (% of screen)` — slider |
+| Range | **10 – 100 %** of window height |
+| Default | **85 %** |
+| Legacy names | `short` = 50 %, `medium` = 70 %, `tall` = 85 % |
+
+In pixels, on three common window heights:
+
+| Window height | Minimum (10 %) | Default (85 %) | Maximum (100 %) |
+|---|---|---|---|
+| 800 px | 80 px | 680 px | 800 px |
+| 900 px | 90 px | 765 px | 900 px |
+| 1080 px | 108 px | 918 px | 1080 px |
+
+It is a **min-height**, so a hero holding more text than fits will grow past it. It never
+shrinks below it.
+
+**Width** — and this is the part that surprises people:
+
+| Full frame | The block / background | The text and buttons |
+|---|---|---|
+| **On** (default) | spans the window, edge to edge | still capped at **1400 px** with gutters |
+| **Off** | capped at **1400 px**, centred, with a hairline border | same — capped at 1400 px with gutters |
+
+**Full frame moves the photograph, not the words.** The text stays inside the same
+1400 px measure either way, so a heading is never 2 000 px wide on a large monitor. If
+the words look too narrow, the control you want is the heading size, not full frame.
+
+*Measured on the live site at a 1440 × 900 window with height 91 %: block 1432 × 819 px
+(1432 not 1440 because of the scrollbar), text frame 1400 px wide with 40 px gutters.*
+
+### Controls
+
+| Control | Type | Range / options | Default |
+|---|---|---|---|
+| Eyebrow | text | — | — |
+| Heading | multi-line text | — | — |
+| Body | multi-line text | markdown-ish | — |
+| Background image | upload | — | — |
+| Full frame (edge to edge) | toggle | — | **on** |
+| Overlay | select | `gradient` · `solid` · `none` | `gradient` |
+| Overlay colour | colour | — | `#050505` |
+| Overlay opacity | slider | 0 – 100 % | 45 % |
+| Heading size — desktop | slider | **16 – 240 px** | 72 px |
+| Heading size — mobile | slider | **16 – 120 px** | 48 px |
+| Text case | select | `as-typed` · `uppercase` | `uppercase` |
+| Primary CTA label / link / style | text, text, select (`accent` · `outline`) | — | — |
+| Secondary CTA label / link | text | — | — |
+| Text align (horizontal) | select | `left` · `center` · `right` | `left` |
+| Text position — down from the top | slider | **0 – 100 %** | 100 % (bottom) |
+| Height (% of screen) | slider | 10 – 100 | 85 |
+
+**Text position** moves the whole group — eyebrow, heading, body and both buttons — as a
+proportion of the block's height. 0 % is flush with the top, 50 % centred, 100 % flush
+with the bottom. The old `top` / `middle` / `bottom` steps map to 0 / 50 / 100, so
+anything published before the slider sits exactly where it did.
+
+**Overlay** has three modes. `gradient` is the original treatment (a theme-wide image
+fade plus a bottom gradient) and is what a hero with no overlay setting uses. `solid`
+gives you the colour and opacity controls. `none` shows the photograph untouched.
+
+---
+
+## Background (page)
+
+A photograph behind **everything else on the page**. Add it once; every other block lands
+on top of it, transparently.
+
+### Dimensions
+
+- **Pinned to the window**, full height (`100vh`), and it stays put as the page scrolls.
+- Takes **no vertical space** — it does not push the blocks below it down.
+- **Full frame on** (default): spans the window. **Off**: capped at 1400 px, centred.
+- It never intercepts clicks, and screen readers skip it.
+
+### Controls
+
+| Control | Type | Range | Default |
+|---|---|---|---|
+| Photo | upload | — | — |
+| Overlay colour | colour | — | `#050505` |
+| Overlay opacity | slider | 0 – 100 % | 40 % |
+| Full frame (edge to edge) | toggle | — | **on** |
+
+The overlay is drawn even with no photo, so a flat colour is a legitimate backdrop.
+
+> **Only the first one on a page is used.** A second would stack invisibly under the first.
+>
+> **In the editor it shows as a labelled band, not as the real backdrop.** The preview
+> draws one block per row, so the true pinned layer would cover the blocks after it
+> instead of sitting under them. Use **View live** to see the composite.
+
+---
+
+## Image band
+
+A strip of photograph with text over it. Shorter than a hero, meant to sit mid-page.
+
+### Dimensions
+
+| Height | Value | At a 900 px window |
+|---|---|---|
+| `short` | 30 % of window height | 270 px |
+| `medium` (default) | 45 % | 405 px |
+| `tall` | 60 % | 540 px |
+
+Also minimums — more text makes the band taller.
+
+The **text runs the full width of the safe area** (the frame minus its gutters), rather
+than stopping partway across the photograph.
+
+**Fixed background** makes the photo drift as the page scrolls. It is a real image, not a
+CSS fixed background, so it works on phones and — importantly — it is **never scaled up**:
+it drifts only as far as its own spare height allows, and a photo with no spare height
+sits still rather than being enlarged to create some.
+
+### Controls
+
+| Control | Type | Options | Default |
+|---|---|---|---|
+| Background image | upload | — | — |
+| Fixed background | toggle | — | off |
+| Overlay colour / opacity | colour, slider 0–100 | — | `#050505`, 50 % |
+| Eyebrow · Heading · Body | text, multi-line, multi-line | — | — |
+| Button label / link / style | text, text, select (`outline` · `accent`) | — | `outline` |
+| Text case | select | `as-typed` · `uppercase` | `as-typed` |
+| Text align (horizontal) | select | `left` · `center` · `right` | `left` |
+| Text position (vertical) | select | `top` · `middle` · `bottom` | `middle` |
+| Height | select | `short` · `medium` · `tall` | `medium` |
+| Full width | toggle | — | **on** |
+
+---
+
+## Text panel (scrolling)
+
+A box of text with its own scrollbar, for long copy that should not stretch the page.
+
+| Control | Type | Range / options | Default |
+|---|---|---|---|
+| Heading | text | — | — |
+| Content | multi-line | markdown-ish | — |
+| Panel height (px) | slider | **80 – 1200 px** | **320 px** |
+| Width | select | `narrow` **640 px** · `normal` **900 px** · `wide` **1200 px** | `normal` |
+| Panel position | select | `left` · `center` · `right` | `center` |
+| Text align | select | `left` · `center` · `right` | `left` |
+| Full width | toggle | — | off |
+
+Panel height is fixed — content longer than it scrolls inside the box. **Width** is the
+panel's own measure; **Panel position** is where that panel sits in the row.
+
+---
+
+## Rich text
+
+Prose. Framed to the **narrow 900 px** measure rather than 1400 px, because a line of
+text that wide is one the eye loses its place in.
+
+| Control | Type | Default |
+|---|---|---|
+| Content (markdown-ish) | multi-line | — |
+| Full width | toggle | off |
+
+---
+
+## Image
+
+| Control | Type | Options | Default |
+|---|---|---|---|
+| Image | upload | — | — |
+| Caption | text | — | — |
+| Full width | toggle | — | off |
+| Aspect ratio | select | `natural` · `1:1` · `4:3` · `3:4` · `16:9` · `21:9` · `3:2` · `16:10` | `natural` |
+
+`natural` keeps the file's own proportions. Any other value crops to that shape.
+
+---
+
+## Split (image + text)
+
+Two columns at 768 px and above; stacked below it.
+
+| Control | Type | Options | Default |
+|---|---|---|---|
+| Direction | select | `image-left` · `image-right` | `image-left` |
+| Image | upload | — | — |
+| Image aspect | select | `1:1` · `4:3` · `3:4` · `16:9` · `16:10` · `3:2` | `1:1` |
+| Eyebrow · Heading · Body | text, text, multi-line | — | — |
+| CTA label / link | text | — | — |
+| Full width | toggle | — | off |
+
+---
+
+## Events grid
+
+Upcoming events, newest first, pulled live from ticketing.
+
+| Control | Type | Options | Default |
+|---|---|---|---|
+| Eyebrow · Heading | text | — | — |
+| Max events | number | — | 4 |
+| Layout | select | `grid-1` (one column) · `grid-2` · `grid-3` | `grid-2` |
+| Card aspect | select | `1:1` · `4:3` · `16:9` · `16:10` · `3:2` · `3:4` | see below |
+| Full width | toggle | — | off |
+
+> **Card aspect is now the event's own property.** Each event carries an *Image format*
+> chosen in the admin, and the card uses that so a photograph is not cropped one way here
+> and another on the event's own page. An event that has never been given a format falls
+> back to **16:10** on a card and **4:3** on its page — open and save the event to pick
+> one and make them agree.
+
+Always one column below 768 px, whatever the layout says.
+
+---
+
+## Artists grid
+
+| Control | Type | Options | Default |
+|---|---|---|---|
+| Eyebrow · Heading | text | — | — |
+| Max artists | number | — | 6 |
+| Layout | select | `grid-2` · `grid-3` · `grid-4` | `grid-3` |
+| Card aspect | select | `1:1` · `4:3` · `3:4` · `16:10` | `1:1` |
+| Full width | toggle | — | off |
+
+**Two columns on a phone**, not one — artist tiles are portraits and read fine at that
+size.
+
+---
+
+## Gallery grid
+
+Recent gallery media as a masonry wall: **one column below 768 px, three above**. Images
+keep their own proportions, which is what makes the wall interlock.
+
+| Control | Type | Default |
+|---|---|---|
+| Heading | text | — |
+| Max items | number | 6 |
+| Full width | toggle | off |
+
+---
+
+## Video / audio embed
+
+Two sources in one block. Paste a **URL** (YouTube, Vimeo, SoundCloud, Bandcamp) or
+**upload a file** (MP4 / WebM / MOV). When both are set, the uploaded file wins.
+
+### Dimensions
+
+**Video** uses an aspect ratio — default **16:9**.
+
+**Audio** uses a fixed height instead, because a player is a bar and not a rectangle:
+
+| Provider | Single track | Playlist |
+|---|---|---|
+| SoundCloud | 166 px | 400 px |
+| Bandcamp | 470 px | 470 px |
+
+*Player height (px)* overrides both, clamped to **80 – 1000 px**.
+
+| Control | Type | Options | Default |
+|---|---|---|---|
+| URL | text | — | — |
+| Or upload a video file | upload | — | — |
+| Autoplay | toggle | — | off |
+| Loop | toggle | — | off |
+| Start muted | toggle | — | off |
+| Show player controls | toggle | uploaded files only | on |
+| Aspect ratio | select | `16:9` · `21:9` · `4:3` · `1:1` · `3:4` · `16:10` · `3:2` | `16:9` |
+| Player height (px) | text | 80 – 1000 | per provider |
+| Caption | text | — | — |
+| Full width | toggle | — | off |
+
+**Autoplay is always muted**, on both sources — every current browser refuses to start an
+unmuted video on its own, so "Start muted" is an override that autoplay ignores. For a
+background-style video: autoplay on, loop on, controls off.
+
+Only these four providers embed, and the allow-list is enforced server-side as well as in
+the browser. A URL from anywhere else is refused rather than rendered.
+
+---
+
+## Marquee
+
+A scrolling ticker of upcoming events.
+
+| Control | Type | Default |
+|---|---|---|
+| Fallback items | list | — |
+| Full width | toggle | **on** |
+
+The list is used **only when there are no upcoming events** — it is a fallback, not the
+content. Bleeds edge to edge by default; switch full width off to cap it at 1400 px.
+
+---
+
+## CTA banner
+
+| Control | Type | Options | Default |
+|---|---|---|---|
+| Image | upload | — | — |
+| Eyebrow · Title · Description | text, multi-line, multi-line | — | — |
+| Button label / link / style | text, text, select (`outline` · `accent`) | — | `outline` |
+| Text case | select | `as-typed` · `uppercase` | `uppercase` |
+| Full width | toggle | — | off |
+
+---
+
+## Contact form
+
+Framed to the **narrow 900 px** measure. Submissions land in the admin.
+
+| Control | Type | Default |
+|---|---|---|
+| Heading | text | — |
+| Success message | multi-line | — |
+| Full width | toggle | off |
+
+---
+
+## Newsletter
+
+Framed to the **narrow 900 px** measure.
+
+| Control | Type | Default |
+|---|---|---|
+| Heading · Body | text, multi-line | — |
+| Button label | text | — |
+| Full width | toggle | off |
+
+---
+
+## Custom HTML
+
+| Control | Type | Default |
+|---|---|---|
+| HTML | multi-line | — |
+| Full width | toggle | off |
+
+Sanitised server-side before it is stored. **`<iframe>` is not allowed** — use the
+Video / audio block, which embeds through the same allow-list from a host the server
+controls.
+
+---
+
+## Spacer
+
+| Control | Type | Default |
+|---|---|---|
+| Height | text — any CSS length, e.g. `4rem`, `120px` | `4rem` |
+
+No width control: an empty box renders identically framed or full width, so a toggle
+would visibly do nothing.
+
+---
+
+## Pages, slugs and roles
+
+- **`/cms`** — the visual editor. `admin` or `editor`.
+- **`/:slug`** — public pages, served off the root (`/mission`, not `/p/mission`).
+  `/p/:slug` is a permanent redirect for old links.
+- **`/`** — whichever page carries the homepage flag (the ⌂ button in Navigation), not
+  the page whose slug happens to spell "home".
+- Events, Artists, Gallery and the ticketing flows are generated from ticketing data, not
+  authored as pages.
 
 ### Slugs that are not available
-Pages share the root with the built-in sections, so some names are taken: `events`,
-`shop`, `artists`, `archive`, `gallery`, `cart`, `checkout`, `my-tickets`, `my-orders`,
+
+`events`, `shop`, `artists`, `gallery`, `cart`, `checkout`, `my-tickets`, `my-orders`,
 `settings`, `newsletter`, `login`, `complete-profile`, `verify`, `reset-password`,
 `admin`, `cms`, `scan`, plus `api`, `p` and `static`.
 
-Creating a page on one of those is refused rather than allowed and then silently
-shadowed — React Router ranks a static route above the `:slug` catch-all, so the page
-would exist in the CMS and never open. The list lives in `RESERVED_SLUGS`
-(`backend/cms_routes.py`); a test reads `frontend/src/App.js` and fails if a route is
-ever added without being listed there.
+Creating a page on one is refused rather than allowed and then silently shadowed — a
+static route always beats the `:slug` catch-all, so the page would exist in the CMS and
+never open. The list lives in `RESERVED_SLUGS` (`backend/cms_routes.py`), and a test
+fails if a route is added without being listed there.
 
-## Roles
-- `admin` — everything, including admin ticketing dashboard + CMS
-- `editor` — CMS only (no admin dashboard, no scanner)
-- `door` — scanner only
-- `user` — default
+> `archive` used to be reserved and is not any more. The Archive page was retired — it
+> showed a projects grid and a past-events list, and past events are reachable from the
+> Events page's own tabs — so `archive` is now a name you may use.
 
-## Seed
-POST `/api/cms/seed` — idempotent. Seeds 3 pages (home, mission, contact) + default theme.
+### Roles
 
-## Blocks (14)
-hero · rich_text · image · gallery_grid · events_grid · artists_grid · marquee · cta_banner · contact_form · newsletter · video · custom_html · spacer · split
+| Role | Can do |
+|---|---|
+| `admin` | everything: ticketing dashboard, CMS, scanner |
+| `editor` | CMS only |
+| `door` | scanner only |
+| `user` | default |
 
-### The video block
-Two sources, one block. Paste a **YouTube or Vimeo URL** (`url`), or **upload a file**
-(`file_url` — MP4/WebM/MOV, through the same `/admin/uploads` endpoint as everything
-else, with a poster frame captured in the browser). When both are set the uploaded file
-wins.
+---
 
-Autoplay is always muted, on both sources, because every current browser refuses to
-start an unmuted video on its own — the "Start muted" toggle is an override that
-autoplay ignores. For a background-style video, turn on autoplay + loop and turn off
-"Show player controls"; note that controls only apply to an uploaded file, since a
-YouTube or Vimeo player draws its own.
+## Saving
 
-Only `www.youtube.com` and `player.vimeo.com` can ever be framed (`EMBED_HOSTS` in
-`frontend/src/lib/embeds.js`, matched against `frame-src` in the deployed CSP). An
-uploaded file is a media load rather than a frame, so it answers to `media-src`, which
-covers the site's own origin and the blob store and nothing else.
+Autosave is **off by default**, per person and per browser. The toggle sits in the toolbar
+beside **Save now**.
 
-## Data model
-- `cms_pages`: {page_id, slug, title, nav_label, nav_order, in_nav, draft:{blocks}, published:{blocks}, versions:[last 20]}
-- `cms_theme`: singleton doc_id="theme_current" with draft/published/versions
-- Each block: {block_id, type, enabled, props:{...}}
+- **Off** — nothing is written until you press Save now (or ⌘S). Unsaved work is flagged
+  in the toolbar, and leaving the tab warns you.
+- **On** — writes every 15 seconds while you are editing. An *interval*, not a pause
+  timer: typing steadily still gets saved, rather than pushing the deadline ahead of you.
 
-## Editor UX
-- **Left panel**: pages list (reorder + delete) · block palette (14 blocks) · structure list (drag to reorder, toggle visibility, delete)
-- **Center**: live inline preview. Click any block to select. Mobile/desktop toggle at top.
-- **Right panel** (tabs): Props (per-block form) · Theme (colors/fonts/radius/mode) · Versions (last 20 with revert)
-- **Autosave**: every ~1.2s to `draft`
-- **Publish**: snapshots current `published` into `versions[]` and moves `draft` → `published`
-- **Undo/redo**: local edit stack (up to 50 steps) within a single session
+One Save covers everything on screen — blocks, page settings, theme, site settings — so
+you never have to think about which pane you are in.
 
-## Theme
-CSS custom properties applied to `:root` at page load. Changing theme in editor triggers `applyTheme()` for live preview. Publishing theme snapshots the previous version to `cms_theme.versions[]`.
+**Save is not Publish.** Saving updates the draft; **Publish** is what visitors see.
+
+---
+
+## Theme and fonts
+
+Colours, typography and the header's menu size live under **Theme** and **Site**.
+Publishing the theme is separate from publishing a page.
+
+Uploaded fonts (WOFF2 / WOFF / TTF / OTF, 5 MB max) are served with the theme stylesheet
+so the page never flashes a fallback face. The format is read from the file's signature
+rather than trusted from its name.
+
+---
+
+## Where these numbers come from
+
+| Fact | Source |
+|---|---|
+| Widths, gutters, narrow measure | `Frame` / `Container`, `frontend/src/components/blocks/index.jsx` |
+| Hero height and heading sizes | `HERO_HEIGHT_LIMITS`, `HERO_SIZE_LIMITS`, same file |
+| Every control, its type and default | `FIELDS`, `frontend/src/pages/CMSEditor.jsx` |
+| Block list and defaults | `BLOCK_LABELS`, `BLOCK_DEFAULTS`, `frontend/src/lib/cms.js` |
+| Reserved slugs | `RESERVED_SLUGS`, `backend/cms_routes.py` |
+
+If a number here disagrees with the site, the code is right and this file is stale.
