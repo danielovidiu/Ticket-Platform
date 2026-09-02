@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 
 /* The SDK is loaded lazily, inside a try, rather than imported at the top.
  *
@@ -21,23 +20,6 @@ async function getHandleUpload() {
   return cachedHandleUpload;
 }
 
-/** Node's request object rendered as the web `Request` that `handleUpload` expects. */
-async function toWebRequest(req) {
-  const url = new URL(req.url, `https://${req.headers.host || "localhost"}`);
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (value === undefined) continue;
-    for (const v of Array.isArray(value) ? value : [value]) headers.append(key, v);
-  }
-  const hasBody = req.method !== "GET" && req.method !== "HEAD";
-  let body;
-  if (hasBody) {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    body = Buffer.concat(chunks);
-  }
-  return new Request(url, { method: req.method, headers, body });
-}
 
 /**
  * Issues the short-lived token a browser needs to upload straight to Vercel Blob.
@@ -149,37 +131,20 @@ export async function handleRequest(request) {
   }
 }
 
-/* A SERVICE, not a function, and the difference is the whole of this block.
+/* Exported as a HANDLER, not as a listening server.
  *
- * A Vercel service must call `server.listen()` while the module is loading — that call is
- * how the platform detects the HTTP server and decides where to route requests. The port
- * is only meaningful when running the file locally; it is not exposed publicly.
+ * The docs for a Vercel service say the entrypoint must call `server.listen()` during
+ * startup, and that is what the previous version did. The BUILD OUTPUT says otherwise for
+ * this project: `.vercel/output/.../index.func/.vc-config.json` reports
+ * `launcherType: "Nodejs"` and `shouldAddHelpers: false` — the function launcher, which
+ * imports the module and calls its default export with a web Request.
  *
- * The first version of this file exported a fetch-style handler and nothing else, which
- * is the shape a serverless FUNCTION takes. It deployed, it was routed to, and it never
- * answered: a POST came back 500 FUNCTION_INVOCATION_FAILED and a GET sat until
- * 504 FUNCTION_INVOCATION_TIMEOUT — the platform waiting for a server that was never
- * going to listen.
+ * A listening server handed to that launcher is not something it can call, which is why
+ * every request sat for thirty seconds and came back
+ * 500 INTERNAL_FUNCTION_INVOCATION_FAILED with `logs: []`: nothing ever ran, so nothing
+ * was ever logged.
+ *
+ * The build output is the ground truth about what will execute. When it and the prose
+ * disagree, follow the artifact.
  */
-const server = createServer(async (req, res) => {
-  try {
-    const response = await handleRequest(await toWebRequest(req));
-    const headers = {};
-    response.headers.forEach((value, key) => { headers[key] = value; });
-    res.writeHead(response.status, headers);
-    res.end(Buffer.from(await response.arrayBuffer()));
-  } catch (error) {
-    // Never leave the socket open: an unanswered request becomes a platform timeout,
-    // which says nothing about what went wrong.
-    res.writeHead(500, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: error?.message || "Upload route failed" }));
-  }
-});
-
-server.listen(Number(process.env.PORT) || 3000, () => {
-  // One line, at startup. Its absence in the log stream is itself the diagnosis: the
-  // module never got this far.
-  console.log("blob-upload listening");
-});
-
-export default server;
+export default handleRequest;

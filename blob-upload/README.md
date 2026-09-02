@@ -22,20 +22,22 @@ pick up an `api/` directory inside the frontend service. It did not: the deploym
 and nothing had been built as a function. Declaring it as its own service in `vercel.json`
 — `root`, `entrypoint`, `runtime` — is the shape the config actually supports.
 
-## It is a server, not a handler
+## It is a handler, not a server
 
-A Vercel **service** must call `server.listen()` while the module is loading — that call is
-how the platform finds the HTTP server. Exporting a fetch-style handler is the shape a
-serverless **function** takes, and it is not the same thing.
+Vercel's prose for services says the entrypoint must call `server.listen()` during
+startup. For THIS project the build output says otherwise, and the build output is what
+executes: `.vercel/output/services/blobupload/functions/index.func/.vc-config.json`
+reports `launcherType: "Nodejs"` and `shouldAddHelpers: false` — the function launcher,
+which imports the module and calls its default export with a web `Request`.
 
-The first version did that and failed in the least obvious way available: it built, it was
-routed to, and it never answered. A POST returned `500 FUNCTION_INVOCATION_FAILED`; a GET
-sat there until `504 FUNCTION_INVOCATION_TIMEOUT` — the platform waiting for a server that
-was never going to listen.
+A version that exported a listening server instead failed in the least legible way
+available: it built, it was routed to, and it never answered. Every request sat for thirty
+seconds and returned `500 INTERNAL_FUNCTION_INVOCATION_FAILED` with `"logs": []` — nothing
+ran, so nothing was logged.
 
-`handleRequest` is still a plain `Request -> Response` function, with a thin `node:http`
-server around it, so the behaviour can be exercised directly and the whole thing can be
-run locally with `PORT=3999 node index.js`.
+**When the documentation and the artifact disagree, follow the artifact.** Run
+`vercel build` and read `.vc-config.json`; it takes a minute and it is the only account of
+what will actually run.
 
 ## The runtime value
 
