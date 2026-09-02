@@ -655,12 +655,26 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
     @api.put("/admin/cms/site")
     async def admin_put_site(body: SiteSettingsIn, user=Depends(require_admin_or_editor)):
         patch = body.model_dump()
-        # Blank means "use the built-in", not "show nothing": a footer with an empty
-        # wordmark and no copyright reads as broken rather than as deliberate.
-        cleaned = {k: (v.strip() if isinstance(v, str) else v) for k, v in patch.items()}
-        cleaned = {k: v for k, v in cleaned.items() if v not in ("", None)}
-        cleaned["social"] = {k: str(v).strip() for k, v in (patch.get("social") or {}).items()
-                             if str(v or "").strip()}
+        # Only the fields the caller actually sent. Every string on this model defaults to
+        # "", so without this a request carrying one field would blank the other eight.
+        sent = body.model_fields_set
+
+        # Blank means BLANK. It used to mean "ignored": an empty field was stripped out
+        # here, so clearing the footer description or the wordmark in the CMS did nothing
+        # at all — the box showed empty, the editor said saved, and the site kept the old
+        # text. The comment that guarded it claimed blank meant "use the built-in", which
+        # is a third behaviour it also did not have.
+        #
+        # The cost is that a wordmark can now be emptied, and an empty one leaves a blank
+        # corner. That is the editor's to decide; silently refusing the edit was not.
+        cleaned = {k: (v.strip() if isinstance(v, str) else v)
+                   for k, v in patch.items() if k in sent}
+        # None still means absent — an Optional that was sent as null should not be
+        # written over the default with nothing.
+        cleaned = {k: v for k, v in cleaned.items() if v is not None}
+        if "social" in sent:
+            cleaned["social"] = {k: str(v).strip() for k, v in (patch.get("social") or {}).items()
+                                 if str(v or "").strip()}
         # Clamped here as well as in the stylesheet: a nav at 200px pushes the header off
         # the page, and the CMS that would undo it is reached through that header.
         if patch.get("nav_size") is not None:
