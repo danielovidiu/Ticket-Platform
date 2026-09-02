@@ -555,7 +555,26 @@ longer does is take the words with them.
 
 They move every piece of text on the site together — headings, body copy, form fields, the
 hero, and the site's own chrome: the header wordmark, the phone menu, the footer and the
-cookie banner all sit on the same line as the content above them. That single line is what makes the inset
+cookie banner all sit on the same line as the content above them.
+
+### The footer
+
+Two rows divided by a rule. The first carries the **Footer wordmark** and **Description**
+on the left, and on the right every page you have marked *in footer*, as one line
+separated by `·`, ending with the **Contact email**. The second carries the copyright and
+your social links.
+
+There are no column headings any more, so **Legal heading** no longer appears anywhere and
+**Contact heading** is used only as the hover text on the email.
+
+**Social links show only where you have filled them in**, and each one that is a real
+platform draws its own logo — SoundCloud, Spotify, Instagram, YouTube, TikTok, Facebook,
+and X. *Website* has no logo, because it is not a brand; it shows the word instead. Leave
+a platform blank and it does not appear; leave them all blank and the row does not either.
+
+The **Description** is the tallest thing in the footer, at roughly 40px on desktop and
+70px on a phone. Clearing it in Site settings is the quickest way to make the footer
+shorter, and takes effect immediately. That single line is what makes the inset
 read as deliberate; setting blocks to different distances is what makes a page look
 unfinished, which is why there is one control rather than one per block.
 

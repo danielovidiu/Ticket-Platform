@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth, startLogin } from "../auth";
 import { http } from "../api";
-import { SOCIAL_PLATFORMS } from "../lib/social";
+import { SOCIAL_PLATFORMS, socialIconPath } from "../lib/social";
 import { Menu, X, ShoppingBag, ChevronDown, User } from "lucide-react";
 import { useCart } from "../lib/cart";
 import { loadNav, onNavChanged, readCachedNav } from "../lib/nav";
@@ -253,74 +253,88 @@ const Footer = ({ site }) => {
     .filter(Boolean);
 
   return (
+    /* Two rows and a rule, after Resident Advisor's.
+     *
+     * It was four columns of headed lists — LEGAL over a stack of links, CONTACT over an
+     * address — which is a sitemap's shape, not a footer's. At 375px it stood 445px tall
+     * before any of this, taller than the phone screen it sat on had left.
+     *
+     * Row one carries the site: who it is, and the pages a reader is legally owed. Row
+     * two carries the year and wherever else the site lives. The rule between them is
+     * what makes it read as a footer rather than as one more block.
+     *
+     * No headings above either group. "LEGAL" over three links called Privacy, Terms and
+     * Cookies says nothing the links do not, and cost a line plus its margin in the
+     * tallest column.
+     */
     <footer className="hairline">
-      {/* As many columns as fit, never narrower than 150px, capped at four.
+      <div className="max-w-[1400px] mx-auto edge-inset py-3">
+        <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-3">
+          <div className="min-w-0">
+            {/* Smaller where the room is tight, and `break-words` as the last resort: a
+                brand name that wraps is survivable, one sliced off at the edge is not. */}
+            <div className="font-display text-xl sm:text-2xl uppercase tracking-tighter break-words">{s.wordmark || ""}</div>
+            {s.description && <p className="mt-2 text-ink-3 text-sm max-w-prose">{s.description}</p>}
+          </div>
 
-          This is about HEIGHT. Stacked in a single column the four blocks paid three 40px
-          gaps: measured at 375px, 120px of the footer's 445 was empty space, more than a
-          quarter of it. Two to a row costs one gap instead of three and takes the footer
-          to 285.
-
-          `auto-fit` applies only BELOW sm. Above it the old fixed counts are kept, and
-          that is a correction: auto-fit alone gave three columns at 768px where the rule
-          used to give two, which put the four blocks in a 3+1 arrangement and made the
-          footer 4px TALLER than before — measured at 241 against 245. The saving was only
-          ever meant to come from phones, so above sm nothing moves.
-
-          `auto-fit` with a floor rather than `grid-cols-2`, because on a phone the width
-          available is not the real constraint — the WORDMARK is. "Supersanity" measures 157px and
-          is a single word, so it cannot wrap; at 375px two columns leave it 159.5px, a
-          margin of 2.5px. This is a whitelabel product and the next customer's name is
-          not this one's, so a hard `grid-cols-2` would be a layout that happens to fit
-          one string. The floor lets the browser decide: two columns at 375, one at 320,
-          four at 1400, and never a column too narrow for its contents.
-
-          The gap is tighter on a phone for the same reason it was too big: 40px between
-          columns is proportionate at 1400px wide and is a third of the screen at 375.
-          Desktop keeps it. */}
-      <div className="max-w-[1400px] mx-auto edge-inset py-3 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] sm:grid-cols-2 lg:grid-cols-5 gap-x-6 gap-y-6 md:gap-10">
-        <div className="lg:col-span-2">
-          {/* Smaller where the columns are narrow, and `break-words` as the last resort:
-              a brand name that wraps is survivable, one sliced off at the column edge is
-              not. Neither is reached with the current wordmark — both are here because
-              the next deployment's is a different length. */}
-          <div className="font-display text-xl sm:text-2xl uppercase tracking-tighter break-words">{s.wordmark || ""}</div>
-          {s.description && <p className="mt-3 text-ink-3 text-sm max-w-prose">{s.description}</p>}
-          {socialLinks.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2" data-testid="footer-social">
-              {socialLinks.map(([key, href, label]) => (
-                <a key={key} href={href} target="_blank" rel="noreferrer"
-                   className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-3 hover:text-ink">
-                  {label}
-                </a>
+          {(pages.length > 0 || s.contact_email) && (
+            <nav className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-2"
+                 data-testid="footer-legal">
+              {/* The separator TRAILS its link and is glued to it, rather than leading
+                  the next one. Leading separators read fine on one line and badly on two:
+                  at 375px this row wraps, and every wrapped line began with a stray "·"
+                  hanging in the left margin. Trailing ones end a line instead, which is
+                  what a reader expects from a list that continues. */}
+              {pages.map((p, i) => (
+                <span key={p.slug} className="inline-flex items-center gap-x-3 whitespace-nowrap">
+                  <Link to={`/${p.slug}`} className="hover:text-ink">{p.label}</Link>
+                  {(i < pages.length - 1 || s.contact_email) && (
+                    <span aria-hidden="true" className="text-ink-5">·</span>
+                  )}
+                </span>
               ))}
+              {s.contact_email && (
+                /* The address kept its place when its heading lost one. `title` is where
+                   the CMS's Contact heading went, so that field still does something
+                   rather than becoming a control with no effect. */
+                <a href={`mailto:${s.contact_email}`} title={s.contact_heading || "Contact"}
+                   className="hover:text-ink break-words">{s.contact_email}</a>
+              )}
+            </nav>
+          )}
+        </div>
+
+        <div className="mt-3 pt-3 border-t border-ink/10 flex flex-wrap items-center justify-between gap-x-8 gap-y-3">
+          {/* The YEAR stays computed. A hardcoded year is a bug that surfaces once, in
+              January, on every page at the same time. */}
+          <div className="font-mono-x text-xs text-ink-4">© {new Date().getFullYear()} {s.copyright_name || ""}</div>
+
+          {socialLinks.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2" data-testid="footer-social">
+              {socialLinks.map(([key, href, label]) => {
+                const path = socialIconPath(key);
+                return (
+                  <a key={key} href={href} target="_blank" rel="noreferrer"
+                     aria-label={label} title={label}
+                     className="text-ink-3 hover:text-ink transition-colors"
+                     data-testid={`footer-social-${key}`}>
+                    {path ? (
+                      /* `currentColor` so the mark inherits the link's hover, and
+                         aria-hidden because the accessible name is on the anchor — a
+                         title inside the svg as well would read the platform twice. */
+                      <svg viewBox="0 0 24 24" className="w-4 h-4 block" fill="currentColor" aria-hidden="true">
+                        <path d={path} />
+                      </svg>
+                    ) : (
+                      /* `website` has no brand mark, because it is not a brand. */
+                      <span className="font-mono-x text-[10px] uppercase tracking-[0.2em]">{label}</span>
+                    )}
+                  </a>
+                );
+              })}
             </div>
           )}
         </div>
-        {pages.length > 0 && (
-          <div data-testid="footer-legal">
-            <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-2">{s.legal_heading}</div>
-            {/* A row that wraps, not a stack. Three links cost one line here and three
-                when stacked, and this column was one of the two setting the footer's
-                height. */}
-            <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-2">
-              {pages.map((p) => (
-                <li key={p.slug}><Link to={`/${p.slug}`} className="hover:text-ink">{p.label}</Link></li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {s.contact_email && (
-          <div>
-            <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-4 mb-2">{s.contact_heading}</div>
-            {/* An address has no spaces to break at, so it needs an explicit rule
-                to wrap instead of running past its column. */}
-            <p className="text-ink-2 text-sm break-words">{s.contact_email}</p>
-          </div>
-        )}
-        {/* The YEAR stays computed. A hardcoded year is a bug that surfaces once, in
-            January, on every page at the same time. */}
-        <div className="font-mono-x text-xs text-ink-4">© {new Date().getFullYear()} {s.copyright_name || ""}</div>
       </div>
     </footer>
   );
