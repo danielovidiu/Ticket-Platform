@@ -37,7 +37,7 @@ export default function CookieConsent() {
 
   if (!show) return null;
   return (
-    <div className="fixed bottom-0 inset-x-0 z-[70] bg-surface border-t border-ink/15 px-6 py-4">
+    <div className="fixed bottom-0 inset-x-0 z-[70] bg-surface border-t border-ink/15 edge-inset py-4">
       <div className="max-w-[1400px] mx-auto flex flex-col md:flex-row md:items-center gap-3 md:gap-6">
         <p className="text-xs text-ink-2 leading-relaxed flex-1">
           We use only essential cookies to keep you signed in and process ticket orders. We don't

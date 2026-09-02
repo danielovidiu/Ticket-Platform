@@ -554,7 +554,8 @@ longer does is take the words with them.
 | Desktop | **24 px** | 0 – 64 |
 
 They move every piece of text on the site together — headings, body copy, form fields, the
-hero — so everything stays on one vertical line. That single line is what makes the inset
+hero, and the site's own chrome: the header wordmark, the phone menu, the footer and the
+cookie banner all sit on the same line as the content above them. That single line is what makes the inset
 read as deliberate; setting blocks to different distances is what makes a page look
 unfinished, which is why there is one control rather than one per block.
 

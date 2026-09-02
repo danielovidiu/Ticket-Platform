@@ -172,7 +172,7 @@ const Header = ({ cmsNav, navFailed, site }) => {
           header can no longer change height or re-wrap when somebody signs in. The nav
           itself still grows with each CMS page, so it scrolls horizontally rather than
           pushing the row open. */}
-      <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+      <div className="max-w-[1400px] mx-auto edge-inset py-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <Link to="/" data-testid="logo-link" className="font-display text-xl md:text-2xl font-bold tracking-tighter uppercase shrink-0">
           {site?.header_wordmark ?? "SUPERSANITY"}
         </Link>
@@ -198,7 +198,7 @@ const Header = ({ cmsNav, navFailed, site }) => {
       </div>
       {open && (
         <div className="md:hidden hairline-b bg-page">
-          <div className="px-6 py-6 flex flex-col gap-4 font-mono-x uppercase text-[length:max(var(--nav-size,11px),0.875rem)]">
+          <div className="edge-inset py-6 flex flex-col gap-4 font-mono-x uppercase text-[length:max(var(--nav-size,11px),0.875rem)]">
             {nav.map((n) => <NavLink key={n.route} to={n.route} onClick={() => setOpen(false)} className="text-ink-2">{n.label}</NavLink>)}
             <CartLink onNavigate={() => setOpen(false)} />
             {user ? (
@@ -256,7 +256,7 @@ const Footer = ({ site }) => {
     <footer className="hairline">
       {/* Two columns before four: at md, quarter-width columns are narrower than
           the wordmark itself, which then spills into its neighbour. */}
-      <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
+      <div className="max-w-[1400px] mx-auto edge-inset py-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
         <div>
           <div className="font-display text-2xl uppercase tracking-tighter">{s.wordmark || ""}</div>
           {s.description && <p className="mt-4 text-ink-3 text-sm max-w-xs">{s.description}</p>}
