@@ -261,8 +261,14 @@ const Footer = ({ site }) => {
           quarter of it. Two to a row costs one gap instead of three and takes the footer
           to 285.
 
-          `auto-fit` with a floor rather than `grid-cols-2`, because the width available
-          is not the real constraint — the WORDMARK is. "Supersanity" measures 157px and
+          `auto-fit` applies only BELOW sm. Above it the old fixed counts are kept, and
+          that is a correction: auto-fit alone gave three columns at 768px where the rule
+          used to give two, which put the four blocks in a 3+1 arrangement and made the
+          footer 4px TALLER than before — measured at 241 against 245. The saving was only
+          ever meant to come from phones, so above sm nothing moves.
+
+          `auto-fit` with a floor rather than `grid-cols-2`, because on a phone the width
+          available is not the real constraint — the WORDMARK is. "Supersanity" measures 157px and
           is a single word, so it cannot wrap; at 375px two columns leave it 159.5px, a
           margin of 2.5px. This is a whitelabel product and the next customer's name is
           not this one's, so a hard `grid-cols-2` would be a layout that happens to fit
@@ -272,7 +278,7 @@ const Footer = ({ site }) => {
           The gap is tighter on a phone for the same reason it was too big: 40px between
           columns is proportionate at 1400px wide and is a third of the screen at 375.
           Desktop keeps it. */}
-      <div className="max-w-[1400px] mx-auto edge-inset py-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] lg:grid-cols-4 gap-x-6 gap-y-6 md:gap-10">
+      <div className="max-w-[1400px] mx-auto edge-inset py-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-6 md:gap-10">
         <div>
           {/* Smaller where the columns are narrow, and `break-words` as the last resort:
               a brand name that wraps is survivable, one sliced off at the column edge is
