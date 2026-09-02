@@ -1,5 +1,25 @@
 import { createServer } from "node:http";
-import { handleUpload } from "@vercel/blob/client";
+
+/* The SDK is loaded lazily, inside a try, rather than imported at the top.
+ *
+ * A failed top-level import kills the module before a single line runs, and a service
+ * that dies at load has nothing to say: the platform answers 500
+ * INTERNAL_FUNCTION_INVOCATION_FAILED and the log stream carries `logs: []`. That is
+ * precisely how this failed on its first two deployments, and it cost two round trips
+ * through production to learn nothing each time.
+ *
+ * Loading it here means the server always starts and always answers, and a dependency
+ * that did not survive the build comes back as its own error message instead of silence.
+ */
+let cachedHandleUpload = null;
+
+async function getHandleUpload() {
+  if (!cachedHandleUpload) {
+    const mod = await import("@vercel/blob/client");
+    cachedHandleUpload = mod.handleUpload;
+  }
+  return cachedHandleUpload;
+}
 
 /** Node's request object rendered as the web `Request` that `handleUpload` expects. */
 async function toWebRequest(req) {
@@ -76,6 +96,19 @@ async function requireEditor(request) {
  * Kept separate from the server below so it can be exercised directly, which is how the
  * auth refusals were checked without a deployment. */
 export async function handleRequest(request) {
+  /* A GET reports whether this service is up and whether its one dependency resolves.
+   * It exists because "is the route reaching the function at all" and "did the function
+   * load" were, for three deployments, indistinguishable from the outside: both looked
+   * like a 500. It says nothing a caller could not learn by sending a POST. */
+  if (request.method === "GET") {
+    let sdk = "ok";
+    try {
+      await getHandleUpload();
+    } catch (error) {
+      sdk = `unavailable: ${error.message}`;
+    }
+    return Response.json({ service: "blob-upload", listening: true, sdk }, { status: 200 });
+  }
   if (request.method !== "POST") {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
@@ -83,6 +116,7 @@ export async function handleRequest(request) {
   const body = await request.json();
 
   try {
+    const handleUpload = await getHandleUpload();
     const jsonResponse = await handleUpload({
       body,
       request,
@@ -142,6 +176,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(Number(process.env.PORT) || 3000);
+server.listen(Number(process.env.PORT) || 3000, () => {
+  // One line, at startup. Its absence in the log stream is itself the diagnosis: the
+  // module never got this far.
+  console.log("blob-upload listening");
+});
 
 export default server;
