@@ -64,7 +64,8 @@
     {
       "source": "/api/blob-upload",
       "destination": {
-        "service": "blobupload"
+        "service": "blobupload",
+        "path": "/"
       }
     },
     {
