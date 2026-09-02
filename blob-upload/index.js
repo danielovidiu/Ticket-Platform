@@ -106,6 +106,24 @@ async function requireEditor(req) {
   return me;
 }
 
+/* Every path, not just "/".
+ *
+ * The rewrite that exposes this service declares `path: "/"`, and the first deployment
+ * that actually BOOTED proved that does not rewrite what the app sees: Express answered
+ * its own "Cannot GET /api/blob-upload" 404, which is the original path arriving intact.
+ * A useful failure — a 404 from Express is proof the service is running, where the five
+ * before it were 500s that proved nothing.
+ *
+ * A regular expression rather than "*": Express 5 changed its path syntax and a bare
+ * asterisk is no longer a valid route. This form works on both 4 and 5.
+ *
+ * Matching any path is right for this service rather than merely expedient. It does one
+ * thing, it is reachable at exactly one public route, and the method already says which
+ * of its two behaviours is wanted. Pinning the path here would mean a second place that
+ * has to agree with vercel.json about a string.
+ */
+const ANY_PATH = /.*/;
+
 export const app = express();
 
 app.use(express.json({ limit: "1mb" }));
@@ -116,7 +134,7 @@ app.use(express.json({ limit: "1mb" }));
  * load" were, for four deployments, indistinguishable from the outside: both looked like
  * a 500 after thirty seconds. It says nothing a caller could not learn by sending a POST.
  */
-app.get("/", async (_req, res) => {
+app.get(ANY_PATH, async (_req, res) => {
   let sdk = "ok";
   try {
     await getHandleUpload();
@@ -126,7 +144,7 @@ app.get("/", async (_req, res) => {
   res.status(200).json({ service: "blob-upload", listening: true, sdk, runtime: "express" });
 });
 
-app.post("/", async (req, res) => {
+app.post(ANY_PATH, async (req, res) => {
   try {
     const handleUpload = await getHandleUpload();
     const jsonResponse = await handleUpload({
@@ -159,7 +177,7 @@ app.post("/", async (req, res) => {
   }
 });
 
-app.all("/", (_req, res) => res.status(405).json({ error: "Method not allowed" }));
+app.all(ANY_PATH, (_req, res) => res.status(405).json({ error: "Method not allowed" }));
 
 /* Listening is guarded, not conditional on an environment guess.
  *
