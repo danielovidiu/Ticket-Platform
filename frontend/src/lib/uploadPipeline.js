@@ -50,6 +50,11 @@ const status = (err) => err?.response?.status ?? 0;
  *              the same answer, so stop and show what it said.
  */
 export function classify(error) {
+  // A refusal decided in the browser, before anything was sent. It has no response to
+  // read a status from, so without this it fell to `code === 0` and was treated as a
+  // dropped connection: retried three times with backoff, then reported as "Connection
+  // lost". Nothing was ever lost — the file was too large and the answer will not change.
+  if (error?.refusedLocally) return "fatal";
   const code = status(error);
   if (code === 413) return "shrink";
   if (code === 0 || code === 408 || code === 429 || code >= 500) return "retry";
@@ -62,6 +67,10 @@ export function classify(error) {
  * `file` is optional and only changes the "too large" case, where the useful half of the
  * sentence is whether anything can be done about it here. */
 export function describe(error, file = null) {
+  // Ranked above the server's detail because there is no server detail in this case, and
+  // the message was written for exactly this refusal — it names the file's size and the
+  // limit it exceeded, which no generic fallback below can reconstruct.
+  if (error?.refusedLocally && error.message) return error.message;
   const detail = error?.response?.data?.detail;
   if (typeof detail === "string" && detail) return detail;
   const code = status(error);
@@ -84,7 +93,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * One file, start to finish. `send` does the actual POST and is injected so the policy
  * above can be tested without a network.
  */
-export async function uploadOne(file, { send, onStage = () => {} }) {
+export async function uploadOne(file, { send, onStage = () => {}, onProgress = () => {} }) {
   let step = 0;
   let prepared = null;
   let lastError = null;
@@ -99,9 +108,15 @@ export async function uploadOne(file, { send, onStage = () => {} }) {
         : file;
     }
 
+    // Zeroed per attempt, not once at the top: a retry that inherited the previous
+    // attempt's 90% would read as nearly finished the instant it started over.
+    onProgress(null);
     onStage(STAGE.UPLOADING, { attempt });
     try {
-      const data = await send(prepared);
+      // The second argument is optional and every existing `send` ignores it. Only the
+      // routes that can honestly report progress — the ones talking to blob storage
+      // directly — call it; the API route reports nothing rather than inventing a number.
+      const data = await send(prepared, { onProgress });
       onStage(STAGE.DONE, { attempt });
       return { ok: true, data };
     } catch (error) {

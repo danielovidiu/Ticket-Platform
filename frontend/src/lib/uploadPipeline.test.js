@@ -172,3 +172,30 @@ describe("files that cannot be made smaller", () => {
     expect(result.message).toBe("Too large to send");
   });
 });
+
+describe("a refusal decided in the browser", () => {
+  const refusal = (message) => {
+    const error = new Error(message);
+    error.refusedLocally = true;
+    return error;
+  };
+
+  test("is fatal, not a retry", () => {
+    // It has no `response`, so it used to land on `code === 0` alongside a genuinely
+    // dropped connection and be retried three times for nothing.
+    expect(classify(refusal("too big"))).toBe("fatal");
+  });
+
+  test("keeps its own message", () => {
+    // The sentence names the file's size and the limit it exceeded. "Connection lost"
+    // replaced it with something both wrong and unactionable.
+    expect(explain(refusal("That video is 120MB — the limit is 100MB.")))
+      .toBe("That video is 120MB — the limit is 100MB.");
+  });
+
+  test("an ordinary network error is still a retry", () => {
+    // The guard must not swallow the case it sits next to.
+    expect(classify(new Error("boom"))).toBe("retry");
+    expect(explain(new Error("boom"))).toBe("Connection lost");
+  });
+});

@@ -67,7 +67,12 @@ export async function uploadVideo(file, { onProgress } = {}) {
 
   if (file.size > config.max_bytes) {
     const mb = Math.round(config.max_bytes / (1024 * 1024));
-    throw new Error(`That video is ${Math.round(file.size / (1024 * 1024))}MB — the limit is ${mb}MB. Compress it and try again.`);
+    const error = new Error(`That video is ${Math.round(file.size / (1024 * 1024))}MB — the limit is ${mb}MB. Compress it and try again.`);
+    // Marks this as decided here, with nothing sent. The pipeline reads it to stop
+    // rather than retry, and to show this sentence instead of guessing from a status
+    // code it does not have.
+    error.refusedLocally = true;
+    throw error;
   }
 
   if (!config.direct_upload) {
