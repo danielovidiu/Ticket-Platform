@@ -254,11 +254,31 @@ const Footer = ({ site }) => {
 
   return (
     <footer className="hairline">
-      {/* Two columns before four: at md, quarter-width columns are narrower than
-          the wordmark itself, which then spills into its neighbour. */}
-      <div className="max-w-[1400px] mx-auto edge-inset py-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
+      {/* As many columns as fit, never narrower than 150px, capped at four.
+
+          This is about HEIGHT. Stacked in a single column the four blocks paid three 40px
+          gaps: measured at 375px, 120px of the footer's 445 was empty space, more than a
+          quarter of it. Two to a row costs one gap instead of three and takes the footer
+          to 285.
+
+          `auto-fit` with a floor rather than `grid-cols-2`, because the width available
+          is not the real constraint — the WORDMARK is. "Supersanity" measures 157px and
+          is a single word, so it cannot wrap; at 375px two columns leave it 159.5px, a
+          margin of 2.5px. This is a whitelabel product and the next customer's name is
+          not this one's, so a hard `grid-cols-2` would be a layout that happens to fit
+          one string. The floor lets the browser decide: two columns at 375, one at 320,
+          four at 1400, and never a column too narrow for its contents.
+
+          The gap is tighter on a phone for the same reason it was too big: 40px between
+          columns is proportionate at 1400px wide and is a third of the screen at 375.
+          Desktop keeps it. */}
+      <div className="max-w-[1400px] mx-auto edge-inset py-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] lg:grid-cols-4 gap-x-6 gap-y-6 md:gap-10">
         <div>
-          <div className="font-display text-2xl uppercase tracking-tighter">{s.wordmark || ""}</div>
+          {/* Smaller where the columns are narrow, and `break-words` as the last resort:
+              a brand name that wraps is survivable, one sliced off at the column edge is
+              not. Neither is reached with the current wordmark — both are here because
+              the next deployment's is a different length. */}
+          <div className="font-display text-xl sm:text-2xl uppercase tracking-tighter break-words">{s.wordmark || ""}</div>
           {s.description && <p className="mt-4 text-ink-3 text-sm max-w-xs">{s.description}</p>}
           {socialLinks.length > 0 && (
             <div className="mt-5 flex flex-wrap gap-x-4 gap-y-2" data-testid="footer-social">
