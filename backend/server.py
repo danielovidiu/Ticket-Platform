@@ -557,11 +557,16 @@ UPLOAD_CHUNK_BYTES = 64 * 1024
 # edge, so the ceiling advertised to the editor is set below it rather than at it.
 PLATFORM_BODY_LIMIT_BYTES = 4 * 1024 * 1024
 
-# The browser-straight-to-blob route is off unless a deployment says otherwise, because
-# a route that exists but hangs is worse than one that was never offered: the editor
-# picks it, waits, and gets nothing. Turn it on with DIRECT_BLOB_UPLOAD=1 once
-# /api/blob-upload answers on that deployment.
-DIRECT_BLOB_UPLOAD = os.environ.get("DIRECT_BLOB_UPLOAD", "").strip().lower() in {"1", "true", "yes", "on"}
+# The browser-straight-to-blob route was off by default while /api/blob-upload did not
+# answer: a route that exists but hangs is worse than one that was never offered, because
+# the editor picks it, waits, and gets nothing. It answers now — GET returns the service's
+# status and POST refuses an unauthenticated caller in under a quarter of a second — so
+# the default is on wherever blob storage is in use.
+#
+# DIRECT_BLOB_UPLOAD=0 turns it off again without a deploy, which is the switch to reach
+# for if the route ever regresses: the editor falls back to the API path and a smaller
+# ceiling rather than failing.
+DIRECT_BLOB_UPLOAD = os.environ.get("DIRECT_BLOB_UPLOAD", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _upload_limits(is_local: bool, direct_enabled: bool) -> tuple:
