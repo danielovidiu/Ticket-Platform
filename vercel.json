@@ -46,6 +46,11 @@
     "backend": {
       "root": "backend",
       "entrypoint": "server:app"
+    },
+    "blobupload": {
+      "root": "blob-upload",
+      "entrypoint": "index.js",
+      "runtime": "node"
     }
   },
   "redirects": [
@@ -59,7 +64,7 @@
     {
       "source": "/api/blob-upload",
       "destination": {
-        "service": "frontend"
+        "service": "blobupload"
       }
     },
     {

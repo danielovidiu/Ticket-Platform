@@ -68,15 +68,21 @@ does not help either — Blob's multipart upload wants **5 MiB parts**, which is
 a request the platform will carry.
 
 So the browser sends large video **straight to Blob**, using a short-lived token minted by
-`frontend/api/blob-upload.js`. That file is JavaScript in an otherwise Python backend for
-one reason: Vercel's Python SDK has no `handleUpload`, and the token format is not
-documented well enough to reimplement.
+`blob-upload/index.js`. That file is JavaScript in an otherwise Python backend for one
+reason: Vercel's Python SDK has no `handleUpload`, and the token format is not documented
+well enough to reimplement.
+
+It is declared as **its own service** (`root` + `entrypoint` + `runtime`) rather than
+dropped into the frontend's `api/` directory. The first attempt did the latter and the
+deployment served `index.html` for that path, answering `405` to a POST: nothing had been
+built as a function, and the SPA rewrite caught the request. A service is the unit this
+config actually supports.
 
 Three things have to line up, and all three are in the repo:
 
 | | Where |
 |---|---|
-| The function | `frontend/api/blob-upload.js` |
+| The function | `blob-upload/index.js`, declared as its own service |
 | Its route, **before** the `/api` catch-all | `vercel.json` → `rewrites[0]` |
 | The browser's permission to reach Blob | `vercel.json` → CSP `connect-src https://*.blob.vercel-storage.com` |
 
