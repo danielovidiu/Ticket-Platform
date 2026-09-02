@@ -173,3 +173,39 @@ describe("it adapts as fields are emptied", () => {
     expect(within(footer).getByTestId("footer-social-soundcloud")).toBeTruthy();
   });
 });
+
+describe("the two footer rows read as a pair", () => {
+  /* Class-level assertions, not computed styles: Tailwind's stylesheet is not loaded in
+     jsdom, so getComputedStyle would report the browser default for every one of these
+     and pass whatever the markup said. The values behind them were measured in a real
+     browser — 14px Manrope against 12px mono before, 12px against 12px after. */
+
+  const cls = (el) => el.className;
+
+  test("the links are set at the copyright's size, not the description's", async () => {
+    const footer = await draw();
+    const nav = within(footer).getByTestId("footer-legal");
+    const copy = [...footer.querySelectorAll("div")]
+      .find((d) => d.children.length === 0 && d.textContent.trim().startsWith("©"));
+    expect(cls(nav)).toMatch(/\btext-xs\b/);
+    expect(cls(copy)).toMatch(/\btext-xs\b/);
+    // text-sm is the description's size and was the links' — the mismatch being fixed.
+    expect(cls(nav)).not.toMatch(/\btext-sm\b/);
+  });
+
+  test("the links hug the right edge, including when they wrap", async () => {
+    // The group was already flush right as a block, but its items packed from the left,
+    // so at 375px the wrapped second line started under the first instead of ending
+    // with it.
+    const nav = within(await draw()).getByTestId("footer-legal");
+    expect(cls(nav)).toMatch(/\bjustify-end\b/);
+    expect(cls(nav)).toMatch(/\btext-right\b/);
+  });
+
+  test("the links stay right even with nothing to push against", async () => {
+    // justify-between needs a left sibling. Both fields feeding it can be emptied, and
+    // `ml-auto` is what keeps the group off the left margin when they are.
+    const footer = await draw({ wordmark: "", description: "" });
+    expect(cls(within(footer).getByTestId("footer-legal"))).toMatch(/\bml-auto\b/);
+  });
+});
