@@ -1,4 +1,23 @@
+import { createServer } from "node:http";
 import { handleUpload } from "@vercel/blob/client";
+
+/** Node's request object rendered as the web `Request` that `handleUpload` expects. */
+async function toWebRequest(req) {
+  const url = new URL(req.url, `https://${req.headers.host || "localhost"}`);
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (value === undefined) continue;
+    for (const v of Array.isArray(value) ? value : [value]) headers.append(key, v);
+  }
+  const hasBody = req.method !== "GET" && req.method !== "HEAD";
+  let body;
+  if (hasBody) {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    body = Buffer.concat(chunks);
+  }
+  return new Request(url, { method: req.method, headers, body });
+}
 
 /**
  * Issues the short-lived token a browser needs to upload straight to Vercel Blob.
@@ -52,7 +71,11 @@ async function requireEditor(request) {
   return me;
 }
 
-export default async function handler(request) {
+/** The route's behaviour, as a plain Request -> Response function.
+ *
+ * Kept separate from the server below so it can be exercised directly, which is how the
+ * auth refusals were checked without a deployment. */
+export async function handleRequest(request) {
   if (request.method !== "POST") {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
@@ -91,3 +114,34 @@ export default async function handler(request) {
     return Response.json({ error: error.message }, { status: 400 });
   }
 }
+
+/* A SERVICE, not a function, and the difference is the whole of this block.
+ *
+ * A Vercel service must call `server.listen()` while the module is loading — that call is
+ * how the platform detects the HTTP server and decides where to route requests. The port
+ * is only meaningful when running the file locally; it is not exposed publicly.
+ *
+ * The first version of this file exported a fetch-style handler and nothing else, which
+ * is the shape a serverless FUNCTION takes. It deployed, it was routed to, and it never
+ * answered: a POST came back 500 FUNCTION_INVOCATION_FAILED and a GET sat until
+ * 504 FUNCTION_INVOCATION_TIMEOUT — the platform waiting for a server that was never
+ * going to listen.
+ */
+const server = createServer(async (req, res) => {
+  try {
+    const response = await handleRequest(await toWebRequest(req));
+    const headers = {};
+    response.headers.forEach((value, key) => { headers[key] = value; });
+    res.writeHead(response.status, headers);
+    res.end(Buffer.from(await response.arrayBuffer()));
+  } catch (error) {
+    // Never leave the socket open: an unanswered request becomes a platform timeout,
+    // which says nothing about what went wrong.
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: error?.message || "Upload route failed" }));
+  }
+});
+
+server.listen(Number(process.env.PORT) || 3000);
+
+export default server;
