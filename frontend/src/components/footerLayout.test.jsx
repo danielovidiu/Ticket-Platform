@@ -51,8 +51,10 @@ vi.mock("./CookieConsent", () => ({ default: () => null }));
 async function draw(over = {}) {
   site.current = { ...SITE, ...over };
   const { container } = render(<MemoryRouter><Layout><div /></Layout></MemoryRouter>);
-  // The footer paints from a fetch, so wait for something it can only have after one.
-  await screen.findAllByText(/Supersanity/);
+  // The footer paints from a fetch, so wait for something it can only have afterwards.
+  // The YEAR, not the wordmark: the wordmark is one of the fields these tests empty, and
+  // waiting on it made the emptied-to-the-bone case hang until it timed out.
+  await screen.findByText(/©/);
   return container.querySelector("footer");
 }
 
@@ -131,5 +133,43 @@ describe("social links", () => {
     // Renaming the key would orphan every link already saved under `twitter`.
     const footer = await draw({ social: { twitter: "https://x.test/x" } });
     expect(within(footer).getByTestId("footer-social-twitter").querySelector("svg path")).toBeTruthy();
+  });
+});
+
+describe("it adapts as fields are emptied", () => {
+  /* Every one of these is reachable from Site settings now that blank means blank, so
+     each is a state a real footer can be in rather than a hypothetical. */
+
+  test("no wordmark or description leaves the links alone on the top row", async () => {
+    const footer = await draw({ wordmark: "", description: "" });
+    expect(within(footer).getByTestId("footer-legal")).toBeTruthy();
+    // Not an empty box holding the space where the wordmark used to be.
+    expect(footer.querySelector(".min-w-0")).toBeNull();
+    expect(footer.querySelector(".border-t"), "the rule still divides two rows").toBeTruthy();
+  });
+
+  test("with the whole top row empty, the rule is not drawn", async () => {
+    // Otherwise it is a line across the top of the page's last element, dividing the
+    // copyright from nothing.
+    const footer = await draw({ wordmark: "", description: "", contact_email: "", pages: [] });
+    expect(footer.querySelector(".border-t")).toBeNull();
+    expect(within(footer).getByText(/©/), "the year survives on its own").toBeTruthy();
+  });
+
+  test("emptied to the bone, it is still a footer and not a broken one", async () => {
+    const footer = await draw({
+      wordmark: "", description: "", contact_email: "", copyright_name: "", pages: [], social: {},
+    });
+    expect(footer).toBeTruthy();
+    expect(footer.querySelector(".border-t")).toBeNull();
+    expect(within(footer).queryByTestId("footer-social")).toBeNull();
+    // The year is computed, never authored, so it is the one thing that cannot be emptied.
+    expect(footer.textContent).toMatch(/© \d{4}/);
+  });
+
+  test("social alone still gets a rule above it when there is a top row", async () => {
+    const footer = await draw({ description: "", social: { soundcloud: "https://sc.test/x" } });
+    expect(footer.querySelector(".border-t")).toBeTruthy();
+    expect(within(footer).getByTestId("footer-social-soundcloud")).toBeTruthy();
   });
 });

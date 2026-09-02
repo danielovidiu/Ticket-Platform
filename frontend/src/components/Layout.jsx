@@ -252,6 +252,9 @@ const Footer = ({ site }) => {
     .map((p) => social.find(([k]) => k === p.key) && [p.key, s.social[p.key], p.label])
     .filter(Boolean);
 
+  // Whether there is a first row at all. Each of these is an editor's to empty.
+  const topRow = Boolean(s.wordmark || s.description || pages.length > 0 || s.contact_email);
+
   return (
     /* Two rows and a rule, after Resident Advisor's.
      *
@@ -269,13 +272,16 @@ const Footer = ({ site }) => {
      */
     <footer className="hairline">
       <div className="max-w-[1400px] mx-auto edge-inset py-3">
+        {topRow && (
         <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-3">
+          {(s.wordmark || s.description) && (
           <div className="min-w-0">
             {/* Smaller where the room is tight, and `break-words` as the last resort: a
                 brand name that wraps is survivable, one sliced off at the edge is not. */}
             <div className="font-display text-xl sm:text-2xl uppercase tracking-tighter break-words">{s.wordmark || ""}</div>
             {s.description && <p className="mt-2 text-ink-3 text-sm max-w-prose">{s.description}</p>}
           </div>
+          )}
 
           {(pages.length > 0 || s.contact_email) && (
             <nav className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-2"
@@ -303,8 +309,13 @@ const Footer = ({ site }) => {
             </nav>
           )}
         </div>
+        )}
 
-        <div className="mt-3 pt-3 border-t border-ink/10 flex flex-wrap items-center justify-between gap-x-8 gap-y-3">
+        {/* The rule divides two rows; with nothing above it, it is a line drawn across the
+            top of the page's last element for no reason. Every field feeding the row
+            above can be emptied from the CMS now that blank means blank, so "nothing
+            above it" is a state an editor can actually reach. */}
+        <div className={`${topRow ? "mt-3 pt-3 border-t border-ink/10" : ""} flex flex-wrap items-center justify-between gap-x-8 gap-y-3`}>
           {/* The YEAR stays computed. A hardcoded year is a bug that surfaces once, in
               January, on every page at the same time. */}
           <div className="font-mono-x text-xs text-ink-4">© {new Date().getFullYear()} {s.copyright_name || ""}</div>
