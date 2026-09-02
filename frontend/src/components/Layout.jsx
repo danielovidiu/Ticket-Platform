@@ -172,7 +172,7 @@ const Header = ({ cmsNav, navFailed, site }) => {
           header can no longer change height or re-wrap when somebody signs in. The nav
           itself still grows with each CMS page, so it scrolls horizontally rather than
           pushing the row open. */}
-      <div className="max-w-[1400px] mx-auto edge-inset py-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+      <div className="max-w-[1400px] mx-auto edge-inset py-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <Link to="/" data-testid="logo-link" className="font-display text-xl md:text-2xl font-bold tracking-tighter uppercase shrink-0">
           {site?.header_wordmark ?? "SUPERSANITY"}
         </Link>
@@ -278,7 +278,7 @@ const Footer = ({ site }) => {
           The gap is tighter on a phone for the same reason it was too big: 40px between
           columns is proportionate at 1400px wide and is a third of the screen at 375.
           Desktop keeps it. */}
-      <div className="max-w-[1400px] mx-auto edge-inset py-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] sm:grid-cols-2 lg:grid-cols-5 gap-x-6 gap-y-6 md:gap-10">
+      <div className="max-w-[1400px] mx-auto edge-inset py-3 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] sm:grid-cols-2 lg:grid-cols-5 gap-x-6 gap-y-6 md:gap-10">
         <div className="lg:col-span-2">
           {/* Smaller where the columns are narrow, and `break-words` as the last resort:
               a brand name that wraps is survivable, one sliced off at the column edge is

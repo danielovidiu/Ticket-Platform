@@ -111,7 +111,17 @@ describe("the join between the page and the footer", () => {
   test("its own padding matches the header's", () => {
     // Breathing room inside the bar rather than space between it and the page. It was
     // py-14, which made the footer more than twice the header's height.
-    expect(footer().querySelector(".py-5")).toBeTruthy();
+    //
+    // Compared against the header rather than against a literal. The literal was `.py-5`,
+    // and when the pair moved to py-3 together this failed for the wrong reason — the
+    // rule was still being kept, but the test could only recognise one spelling of it.
+    const pad = (root) => [...root.querySelectorAll("*")]
+      .flatMap((el) => [...el.classList])
+      .find((c) => /^py-\d/.test(c));
+
+    const headerPad = pad(header());
+    expect(headerPad, "the header sets no vertical padding").toBeTruthy();
+    expect(pad(footer()), "the footer's padding drifted from the header's").toBe(headerPad);
     expect(footer().querySelector(".py-14")).toBeNull();
   });
 

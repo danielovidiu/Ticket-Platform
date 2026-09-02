@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AUTOSAVE_INTERVAL_MS, useAutosaveEnabled, useRegisteredSaver } from "./autosavePolicy";
+import { errorText } from "../api";
 
 /**
  * The save policy the CMS uses everywhere something is edited.
@@ -24,6 +25,10 @@ import { AUTOSAVE_INTERVAL_MS, useAutosaveEnabled, useRegisteredSaver } from "./
  *                   a newer one and resurrect stale content.
  *   HONEST STATE  — "saved" means the server said so. A swallowed failure leaving the
  *                   editor claiming "Saved just now" is the worst outcome available.
+ *   SAYS WHY      — and a failure carries the server's reason. "Save failed" alone is
+ *                   true and useless: an expired session, a draft over the size limit
+ *                   and a dead backend all produced that one string, so the first
+ *                   question it raises is the one it cannot answer.
  *
  * The caller owns the value and passes `getPending`, read at write time rather than at
  * schedule time, so a save always writes the newest state rather than the snapshot that
@@ -31,6 +36,9 @@ import { AUTOSAVE_INTERVAL_MS, useAutosaveEnabled, useRegisteredSaver } from "./
  */
 export function useAutosave({ getPending, save, intervalMs = AUTOSAVE_INTERVAL_MS }) {
   const [state, setState] = useState("idle"); // idle | saving | saved | error
+  // Why the last save failed, in the server's words. Null whenever `state` is not
+  // "error", so it cannot outlive the failure it describes.
+  const [error, setError] = useState(null);
   const [savedAt, setSavedAt] = useState(null);
   const [dirty, setDirty] = useState(false);
   // Bumped when a save finishes with work still outstanding. `dirty` alone cannot
@@ -59,6 +67,7 @@ export function useAutosave({ getPending, save, intervalMs = AUTOSAVE_INTERVAL_M
       await saveRef.current(value);
       savedRef.current = value;
       setSavedAt(Date.now());
+      setError(null);
       setState("saved");
       // Only clear the flag if nothing changed while the request was in the air.
       if (getPendingRef.current() === value) {
@@ -73,6 +82,7 @@ export function useAutosave({ getPending, save, intervalMs = AUTOSAVE_INTERVAL_M
       // the request was answering 200 and the editor was reporting a failure, and with
       // the exception swallowed there was nothing to say which half was lying.
       if (import.meta.env?.DEV) console.error("[autosave] save failed", err);
+      setError(errorText(err, "Save failed"));
       setState("error");
     } finally {
       inFlightRef.current = false;
@@ -101,6 +111,7 @@ export function useAutosave({ getPending, save, intervalMs = AUTOSAVE_INTERVAL_M
     savedRef.current = value;
     dirtySinceRef.current = 0;
     setDirty(false);
+    setError(null);
     setState("idle");
   }, []);
 
@@ -127,9 +138,16 @@ export function useAutosave({ getPending, save, intervalMs = AUTOSAVE_INTERVAL_M
   // guard cover a surface without knowing it exists.
   // The signal is what tells the toolbar this surface has work outstanding — `state` as
   // well as `dirty`, so a failed save keeps "Save now" live rather than going quiet.
-  useRegisteredSaver({ flush, isDirty: () => dirty }, `${dirty}:${state}`);
+  // `getState` and `getError` are read through the register rather than returned to a
+  // parent, because two of the five surfaces have no parent watching them: the site
+  // settings and the events tabs were failing entirely silently — their `state` was
+  // never read anywhere, so a rejected write left no trace on screen at all.
+  useRegisteredSaver(
+    { flush, isDirty: () => dirty, getState: () => state, getError: () => error },
+    `${dirty}:${state}:${error || ""}`,
+  );
 
-  return { state, savedAt, dirty, bump, flush, reset };
+  return { state, error, savedAt, dirty, bump, flush, reset };
 }
 
 /**

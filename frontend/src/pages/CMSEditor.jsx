@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { http } from "../api";
+import { http, errorText, setUnsavedWorkGuard } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home, CalendarRange } from "lucide-react";
@@ -17,8 +17,8 @@ import FontManager from "../components/FontManager";
 import { navChanged } from "../lib/nav";
 import { useAutosave, useDebouncedField } from "../lib/useAutosave";
 import {
-  AUTOSAVE_INTERVAL_MS, anySaverDirty, flushAllSavers,
-  setAutosaveEnabled, useAutosaveEnabled, useSaverRegistry,
+  AUTOSAVE_INTERVAL_MS, anySaverDirty, firstSaverError, flushAllSavers,
+  saverStates, setAutosaveEnabled, useAutosaveEnabled, useSaverRegistry,
 } from "../lib/autosavePolicy";
 
 // When the draft is written is autosavePolicy.js's decision now, not this file's — the
@@ -43,6 +43,9 @@ export default function CMSEditor() {
   const [rightTab, setRightTab] = useState("props"); // props | theme | versions
   const [savedAt, setSavedAt] = useState(null);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+  // Why the last draft write failed, in the server's words. The block draft does not
+  // go through useAutosave — it predates it — so it carries its own.
+  const [saveError, setSaveError] = useState(null);
   const [dirty, setDirty] = useState(false);
   // Bumped when a write finishes with work still outstanding. `dirty` was already true
   // before the save and is still true after, so it cannot re-arm the interval on its
@@ -211,16 +214,25 @@ export default function CMSEditor() {
       await http.patch(`/admin/cms/pages/${p.page_id}`, { draft: snapshot });
       savedDraftRef.current = snapshot;
       setSavedAt(Date.now());
+      setSaveError(null);
       setSaveState("saved");
       // Only clear the flag if nothing was typed while the request was in the air.
       if (pageRef.current?.draft === snapshot) {
         setDirty(false);
         dirtySinceRef.current = 0;
       }
-    } catch {
+    } catch (err) {
       // Failures used to be swallowed, which left the editor claiming "Saved just now"
       // while the work existed only in this tab. The next edit re-arms the timer, so
       // this retries on its own; the status line says so meanwhile.
+      //
+      // A bare `catch {}` stood here even after the state was made honest, so the status
+      // line could say a save had failed and nothing — not the UI, not the console —
+      // could say why. `http` attaches the server's reason to every rejection now, and
+      // this is where it earns its keep: an expired session and a draft over the size
+      // limit are one string apart, and the difference is the whole diagnosis.
+      if (import.meta.env?.DEV) console.error("[cms] draft save failed", err);
+      setSaveError(errorText(err, "Save failed"));
       setSaveState("error");
     } finally {
       inFlightRef.current = false;
@@ -536,8 +548,11 @@ export default function CMSEditor() {
   // Re-render when a pane joins or leaves the register, so the button below is asking
   // about the surfaces that are actually on screen.
   useSaverRegistry();
-  const anythingPending = dirty || metaSave.dirty || themeSave.dirty || anySaverDirty()
-    || saveState === "error" || metaSave.state === "error" || themeSave.state === "error";
+  // Naming meta and theme individually left the other two registered surfaces out: a
+  // failed footer or events-tabs save did not keep "Save now" live. The register knows
+  // all of them, including any added later.
+  const anythingPending = dirty || anySaverDirty()
+    || saveState === "error" || saverStates().includes("error");
 
   /** Everything, in one press. The register is what makes this cover the site and events
    *  panes too — panes this component does not otherwise know exist. */
@@ -551,6 +566,11 @@ export default function CMSEditor() {
     unsavedRef.current = () =>
       (!!pageRef.current && pageRef.current.draft !== savedDraftRef.current) || anySaverDirty();
   }, [saveEverythingNow, metaSave.dirty, themeSave.dirty]);
+
+  // The same question `beforeunload` asks, asked by the 401 handler before it sends
+  // anyone to a login form. This editor is the one screen in the app whose contents
+  // exist nowhere but the tab they are typed into.
+  useEffect(() => setUnsavedWorkGuard(() => unsavedRef.current()), []);
 
   const selectedBlock = useMemo(
     () => (selectedId ? blocks.find((b) => b.block_id === selectedId) || null : null),
@@ -591,9 +611,10 @@ export default function CMSEditor() {
             three different requests, and an editor does not care which of them is in
             flight — they care whether their work is safe. Worst state wins. */}
         <SaveStatus
-          state={worstState([saveState, metaSave.state, themeSave.state])}
+          state={worstState([saveState, ...saverStates()])}
+          detail={saveError || firstSaverError()}
           savedAt={savedAt}
-          dirty={dirty || metaSave.dirty || themeSave.dirty}
+          dirty={dirty || metaSave.dirty || anySaverDirty()}
         />
         {/* Off by default, and per person: it is a working habit, not a property of the
             site. On, it writes once every AUTOSAVE_INTERVAL_MS of continuous editing —
@@ -805,7 +826,7 @@ function worstState(states) {
  * doesn't re-render the editor (and the preview) every few seconds. The label it replaced
  * was memoized on the save timestamp, so it read "Saved just now" indefinitely — including
  * while there were unsaved changes sitting in the debounce window. */
-function SaveStatus({ state, savedAt, dirty }) {
+function SaveStatus({ state, detail, savedAt, dirty }) {
   const [, tick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => tick((n) => n + 1), 5000);
@@ -816,14 +837,20 @@ function SaveStatus({ state, savedAt, dirty }) {
   let label = "No changes";
   let tone = "text-ink-4";
   if (state === "saving") { label = "Saving…"; }
-  else if (state === "error") { label = "Save failed — retrying"; tone = "text-brand"; }
+  // The reason, when the server gave one. "Save failed — retrying" is true and answers
+  // none of the questions it raises; "Save failed — your session expired" ends the
+  // investigation at the status line, which is where it should have ended all along.
+  else if (state === "error") { label = `Save failed — ${detail || "retrying"}`; tone = "text-brand"; }
   else if (dirty) { label = "Unsaved changes"; tone = "text-ink"; }
   else if (savedAt) {
     const s = Math.floor((Date.now() - savedAt) / 1000);
     label = s < 5 ? "Saved just now" : s < 60 ? `Saved ${s}s ago` : `Saved ${Math.floor(s / 60)}m ago`;
   }
   return (
-    <div data-testid="cms-save-status" className={`font-mono-x text-[10px] uppercase tracking-[0.25em] hidden md:block ${tone}`}>
+    // `title` because the reason can outrun the space: the line is one row in a toolbar
+    // and a validation message is a sentence.
+    <div data-testid="cms-save-status" title={label}
+         className={`font-mono-x text-[10px] uppercase tracking-[0.25em] hidden md:block truncate max-w-[22rem] ${tone}`}>
       {label}
     </div>
   );
