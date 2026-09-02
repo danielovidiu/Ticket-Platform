@@ -59,14 +59,24 @@ export default function DynamicPage({ slugOverride, home }) {
    * z-0, blocks at z-10 — puts both in the positioned painting step, where tree order and
    * z-index decide rather than an ancestor's fill.
    *
-   * Only the first is used. Two backdrops would stack with one invisible under the other,
-   * and silently ignoring the extra beats rendering something nobody can see. */
+   * `overflow-clip` is what keeps it off the FOOTER. The backdrop is a screenful tall and
+   * pinned, so where a page is shorter than the window it hangs past the end of its own
+   * content — over a footer that has no background of its own, which is how it came to
+   * cover it. Clipping to this box bounds it to the page's content and nothing else.
+   *
+   * `clip` and not `hidden`: `hidden` would make this a scroll container, and a sticky
+   * child pins to its nearest scrollport — so the backdrop would stop tracking the window
+   * and just sit at the top. `clip` cuts the overflow without creating one.
+   *
+   * Only the first background is used. Two would stack with one invisible under the
+   * other, and silently ignoring the extra beats rendering something nobody can see. */
   const blocks = page.blocks || [];
   const background = blocks.find((b) => b.type === "_background");
   const rest = background ? blocks.filter((b) => b !== background) : blocks;
 
   return (
-    <div data-cms-page={page.slug || slug} className={background ? "relative" : undefined}>
+    <div data-cms-page={page.slug || slug}
+         className={background ? "relative overflow-clip" : undefined}>
       {background && <BlockRenderer key={background.block_id} block={background} />}
       <div className={background ? "relative z-10" : undefined}>
         {rest.map((b) => <BlockRenderer key={b.block_id} block={b} />)}
