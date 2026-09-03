@@ -47,15 +47,22 @@ export default function Artists() {
           const tags = a.disciplines || [];
           const rest = tags.length - SHOWN;
           return (
-            // The same hover Gallery and Shop tiles use: the border goes solid and the
-            // photograph dims. It was a greyscale-to-colour reveal, which read as a
-            // different kind of card on a site where these three grids sit side by side.
+            // The same hover the Gallery tiles use: the border goes solid and the
+            // photograph comes back into colour. These two grids are the site's index of
+            // its own people and nights, and they now read as one kind of card; Shop is
+            // deliberately not in the set — a garment has to be seen in its real colour
+            // before it is clicked, so its tiles dim instead.
+            //
+            // This used to dim too, on the grounds that greyscale made the roster read as
+            // a different card from the other grids. It did, while Gallery dimmed as well
+            // — the answer was to make Gallery the one that reveals, not to keep all three
+            // on the weaker hover.
             <Link key={a.artist_id} to={`/artists/${a.slug}`} data-testid={`artist-${a.slug}`}
                   className="group block border border-ink/10 hover:border-ink transition-colors">
               {a.image_url && (
                 <div className="aspect-square overflow-hidden">
                   <img src={mediaUrl(a.image_url)} alt={a.name}
-                       className="w-full h-full object-cover group-hover:opacity-80 transition-opacity" />
+                       className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" />
                 </div>
               )}
               <div className="p-5">

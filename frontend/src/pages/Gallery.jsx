@@ -26,10 +26,10 @@ function AlbumCard({ album }) {
             <img> even though the item is a video — feeding a JPEG to <video> would just
             show an empty box. */}
         {isVideo && !hasPoster(cover) ? (
-          <video src={mediaUrl(cover.image_url)} className="w-full h-full object-cover" muted preload="metadata" />
+          <video src={mediaUrl(cover.image_url)} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" muted preload="metadata" />
         ) : (
           <img src={mediaUrl(cover.thumbnail_url || cover.image_url)} alt="" loading="lazy" decoding="async"
-               className="w-full h-full object-cover group-hover:opacity-80 transition-opacity" />
+               className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" />
         )}
         {isVideo && (
           <div className="absolute top-2 left-2 bg-scrim/70 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink">▶ Video</div>
