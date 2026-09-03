@@ -252,121 +252,88 @@ const Footer = ({ site }) => {
     .map((p) => social.find(([k]) => k === p.key) && [p.key, s.social[p.key], p.label])
     .filter(Boolean);
 
-  // Whether there is a first row at all. Each of these is an editor's to empty.
-  const topRow = Boolean(s.wordmark || s.description || pages.length > 0 || s.contact_email);
-
   return (
-    /* Two rows and a rule, after Resident Advisor's.
+    /* One line: the year on the left, the marks in the middle, the pages on the right.
      *
-     * It was four columns of headed lists — LEGAL over a stack of links, CONTACT over an
-     * address — which is a sitemap's shape, not a footer's. At 375px it stood 445px tall
-     * before any of this, taller than the phone screen it sat on had left.
+     * It was two rows and a rule, and before that four headed columns. Each rework took
+     * out what the shape did not need, and this one takes out the shape: a footer whose
+     * whole content is a copyright, some icons and three links does not need to be
+     * divided into parts.
      *
-     * Row one carries the site: who it is, and the pages a reader is legally owed. Row
-     * two carries the year and wherever else the site lives. The rule between them is
-     * what makes it read as a footer rather than as one more block.
+     * No `hairline`. The border-top that separated the footer from the page went with the
+     * rule that separated its two rows — with one line left there is nothing to divide,
+     * and the line reads as the end of the page without being told where the page ends.
      *
-     * No headings above either group. "LEGAL" over three links called Privacy, Terms and
-     * Cookies says nothing the links do not, and cost a line plus its margin in the
-     * tallest column.
+     * The wordmark, the description and the contact address are gone from here and their
+     * controls are gone from the CMS. A field an editor can change that changes nothing
+     * on the site is the same bug as a save that silently does not save.
      */
-    <footer className="hairline">
-      <div className="max-w-[1400px] mx-auto edge-inset py-3">
-        {topRow && (
-        /* `items-end`, not `items-start`. The two sides of this row are different
-           heights — a 24px wordmark, sometimes a paragraph under it, against a single
-           12px line of links — and aligning their TOPS hung the links in the air with a
-           gap beneath them, while the wordmark reached down to the rule. Aligning the
-           bottoms puts both on the rule, which is the edge a reader sees.
+    <footer>
+      {/* Explicit column placement, not auto-flow. With `sm:col-start-*` each group holds
+          its own track whether or not the others render: no social links filled, and the
+          pages still sit on the right rather than sliding into the middle. Auto-placement
+          fills tracks in source order and would do exactly that.
 
-           A plain block comment rather than a braced JSX one: this sits inside
-           `topRow && ( … )`, which is expression context, and braces there open an
-           object literal instead of a comment. */
-        <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
-          {(s.wordmark || s.description) && (
-          <div className="min-w-0">
-            {/* Smaller where the room is tight, and `break-words` as the last resort: a
-                brand name that wraps is survivable, one sliced off at the edge is not. */}
-            <div className="font-display text-xl sm:text-2xl uppercase tracking-tighter break-words">{s.wordmark || ""}</div>
-            {s.description && <p className="mt-2 text-ink-3 text-sm max-w-prose">{s.description}</p>}
-          </div>
-          )}
+          Below sm the tracks collapse and the three groups wrap in a centred stack, which
+          is the only thing that fits 375px. */}
+      <div className="max-w-[1400px] mx-auto edge-inset py-3
+                      flex flex-wrap items-center justify-center gap-x-8 gap-y-2
+                      sm:grid sm:grid-cols-[1fr_auto_1fr]">
 
-          {(pages.length > 0 || s.contact_email) && (
-            /* `ml-auto` as well as the parent's justify-between: with the left block
-               gone — an editor can empty both fields — there is nothing to push against
-               and the links would sit at the left margin instead.
-
-               `justify-end` is what the alignment actually needed. The group was already
-               flush right as a block, but its own items packed from the LEFT, so at 375px
-               where the row wraps the second line started under the first rather than
-               ending with it. Measured before: justify-content "normal".
-
-               `text-xs`, matching the copyright below it rather than the description
-               beside it: these two lines are the footer's furniture and now read as a
-               pair. */
-            <nav className="ml-auto flex flex-wrap items-center justify-end text-right gap-x-3 gap-y-1 text-xs text-ink-2"
-                 data-testid="footer-legal">
-              {/* The separator TRAILS its link and is glued to it, rather than leading
-                  the next one. Leading separators read fine on one line and badly on two:
-                  at 375px this row wraps, and every wrapped line began with a stray "·"
-                  hanging in the left margin. Trailing ones end a line instead, which is
-                  what a reader expects from a list that continues. */}
-              {pages.map((p, i) => (
-                <span key={p.slug} className="inline-flex items-center gap-x-3 whitespace-nowrap">
-                  <Link to={`/${p.slug}`} className="hover:text-ink">{p.label}</Link>
-                  {(i < pages.length - 1 || s.contact_email) && (
-                    <span aria-hidden="true" className="text-ink-5">·</span>
-                  )}
-                </span>
-              ))}
-              {s.contact_email && (
-                /* The address kept its place when its heading lost one. `title` is where
-                   the CMS's Contact heading went, so that field still does something
-                   rather than becoming a control with no effect. */
-                <a href={`mailto:${s.contact_email}`} title={s.contact_heading || "Contact"}
-                   className="hover:text-ink break-words">{s.contact_email}</a>
-              )}
-            </nav>
-          )}
-        </div>
-        )}
-
-        {/* The rule divides two rows; with nothing above it, it is a line drawn across the
-            top of the page's last element for no reason. Every field feeding the row
-            above can be emptied from the CMS now that blank means blank, so "nothing
-            above it" is a state an editor can actually reach. */}
-        <div className={`${topRow ? "mt-2 pt-2 border-t border-ink/10" : ""} flex flex-wrap items-center justify-between gap-x-8 gap-y-3`}>
+        <div className="font-mono-x text-xs text-ink-4 sm:col-start-1 sm:justify-self-start">
           {/* The YEAR stays computed. A hardcoded year is a bug that surfaces once, in
               January, on every page at the same time. */}
-          <div className="font-mono-x text-xs text-ink-4">© {new Date().getFullYear()} {s.copyright_name || ""}</div>
-
-          {socialLinks.length > 0 && (
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2" data-testid="footer-social">
-              {socialLinks.map(([key, href, label]) => {
-                const path = socialIconPath(key);
-                return (
-                  <a key={key} href={href} target="_blank" rel="noreferrer"
-                     aria-label={label} title={label}
-                     className="text-ink-3 hover:text-ink transition-colors"
-                     data-testid={`footer-social-${key}`}>
-                    {path ? (
-                      /* `currentColor` so the mark inherits the link's hover, and
-                         aria-hidden because the accessible name is on the anchor — a
-                         title inside the svg as well would read the platform twice. */
-                      <svg viewBox="0 0 24 24" className="w-4 h-4 block" fill="currentColor" aria-hidden="true">
-                        <path d={path} />
-                      </svg>
-                    ) : (
-                      /* `website` has no brand mark, because it is not a brand. */
-                      <span className="font-mono-x text-[10px] uppercase tracking-[0.2em]">{label}</span>
-                    )}
-                  </a>
-                );
-              })}
-            </div>
-          )}
+          © {new Date().getFullYear()} {s.copyright_name || ""}
         </div>
+
+        {socialLinks.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 sm:col-start-2 sm:justify-self-center"
+               data-testid="footer-social">
+            {socialLinks.map(([key, href, label]) => {
+              const path = socialIconPath(key);
+              return (
+                <a key={key} href={href} target="_blank" rel="noreferrer"
+                   aria-label={label} title={label}
+                   className="text-ink-3 hover:text-ink transition-colors"
+                   data-testid={`footer-social-${key}`}>
+                  {path ? (
+                    /* `currentColor` so the mark inherits the link's hover, and
+                       aria-hidden because the accessible name is on the anchor — a title
+                       inside the svg as well would read the platform twice. */
+                    <svg viewBox="0 0 24 24" className="w-4 h-4 block" fill="currentColor" aria-hidden="true">
+                      <path d={path} />
+                    </svg>
+                  ) : (
+                    /* `website` has no brand mark, because it is not a brand. */
+                    <span className="font-mono-x text-[10px] uppercase tracking-[0.2em]">{label}</span>
+                  )}
+                </a>
+              );
+            })}
+          </div>
+        )}
+
+        {pages.length > 0 && (
+          <nav className="flex flex-wrap items-center justify-center sm:justify-end text-center sm:text-right gap-x-3 gap-y-1 text-xs text-ink-2 sm:col-start-3 sm:justify-self-end"
+               data-testid="footer-legal">
+            {/* The separator TRAILS its link and is glued to it, rather than leading the
+                next one. Leading separators read fine on one line and badly on two: at
+                375px this row wraps, and every wrapped line began with a stray "·"
+                hanging in the margin. Trailing ones end a line instead, which is what a
+                reader expects from a list that continues.
+
+                Every entry here is a CMS page marked "footer only" — including the
+                consumer-protection links a jurisdiction requires. Nothing about ANPC or
+                SAL is written into this file, which is what lets a deployment somewhere
+                else carry its own. */}
+            {pages.map((p, i) => (
+              <span key={p.slug} className="inline-flex items-center gap-x-3 whitespace-nowrap">
+                <Link to={`/${p.slug}`} className="hover:text-ink">{p.label}</Link>
+                {i < pages.length - 1 && <span aria-hidden="true" className="text-ink-5">·</span>}
+              </span>
+            ))}
+          </nav>
+        )}
       </div>
     </footer>
   );

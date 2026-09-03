@@ -1,19 +1,18 @@
 /**
- * The footer's shape, after the rework.
+ * The footer, third shape.
  *
  * It was four headed columns — LEGAL over a stack of links, CONTACT over an address —
- * which is a sitemap's shape, not a footer's, and stood 445px tall at 375px. It is now
- * two rows and a rule: who the site is and the pages a reader is owed, then the year and
- * wherever else the site lives.
+ * standing 445px tall at 375px. Then two rows and a rule. It is one line now: the year on
+ * the left, the brand marks in the middle, the pages on the right.
  *
- * These replace a set that asserted a CSS grid with an auto-fit floor. That floor existed
- * because a column could end up narrower than the unbreakable wordmark; there are no
- * columns now, so the rule it protected went with them. Rewritten rather than deleted
- * because the behaviour underneath — social links only when filled, official marks, no
- * headings — is what actually needs holding.
+ * Each rework took out what the shape did not need; this one took out the shape. A footer
+ * whose whole content is a copyright, some icons and three links does not need dividing
+ * into parts, and does not need a border to announce that the page has ended.
  *
- * Rendered rather than grepped. The previous file read Layout.jsx as text because jsdom
- * cannot measure a wordmark; what is asserted here is structure, which it can.
+ * The wordmark, description, contact address and both column headings went with it, in the
+ * CMS as well as here. Their values are still STORED — nothing was deleted — which is why
+ * one test below feeds them in and asserts they do not appear. An editable field with no
+ * effect anywhere is the same bug as a save that silently does not save.
  */
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -21,17 +20,12 @@ import { vi, describe, test, expect, beforeEach } from "vitest";
 import Layout from "./Layout";
 
 const SITE = {
-  wordmark: "Supersanity",
-  description: "Interdisciplinary platform.",
-  contact_heading: "Contact",
-  contact_email: "hello@supersanity.live",
   copyright_name: "Supersanity",
-  legal_heading: "Legal",
   social: {},
   pages: [
     { slug: "privacy", label: "Privacy" },
-    { slug: "terms", label: "Terms" },
-    { slug: "cookie-policy", label: "Cookies" },
+    { slug: "cookie-policy", label: "Cookie Policy" },
+    { slug: "terms", label: "Terms & Conditions" },
   ],
 };
 
@@ -51,49 +45,81 @@ vi.mock("./CookieConsent", () => ({ default: () => null }));
 async function draw(over = {}) {
   site.current = { ...SITE, ...over };
   const { container } = render(<MemoryRouter><Layout><div /></Layout></MemoryRouter>);
-  // The footer paints from a fetch, so wait for something it can only have afterwards.
-  // The YEAR, not the wordmark: the wordmark is one of the fields these tests empty, and
-  // waiting on it made the emptied-to-the-bone case hang until it timed out.
+  // The YEAR, not any authored field: every other thing in this footer can be emptied,
+  // and waiting on one of those hangs the tests that empty it.
   await screen.findByText(/©/);
   return container.querySelector("footer");
 }
 
+const line = (footer) => footer.firstElementChild;
+const copyright = (footer) =>
+  [...footer.querySelectorAll("div")].find((d) => d.children.length === 0 && d.textContent.trim().startsWith("©"));
+
 beforeEach(() => { site.current = null; });
 
-describe("footer shape", () => {
-  test("it is two rows divided by a rule", async () => {
+describe("one line, three groups", () => {
+  test("there is no rule anywhere in it", async () => {
+    // Neither the border between the page and the footer, nor the one that divided the
+    // footer's own two rows. There is one row now, so there is nothing to divide.
     const footer = await draw();
-    const rule = footer.querySelector(".border-t");
-    expect(rule, "no divider between the two rows").toBeTruthy();
-    expect(within(rule).getByText(/©/), "the year belongs under the rule").toBeTruthy();
+    expect([...footer.classList]).not.toContain("hairline");
+    expect(footer.querySelector(".border-t")).toBeNull();
   });
 
-  test("the legal links are one row, not a headed column", async () => {
-    const footer = await draw();
-    const nav = within(footer).getByTestId("footer-legal");
-    for (const label of ["Privacy", "Terms", "Cookies"]) {
-      expect(within(nav).getByText(label)).toBeTruthy();
-    }
-    // The heading is what the rework removed: "LEGAL" over links called Privacy, Terms
-    // and Cookies says nothing the links do not, and cost a line plus its margin.
-    expect(within(nav).queryByText(/^legal$/i)).toBeNull();
+  test("the year is left, the marks are centre, the pages are right", async () => {
+    const footer = await draw({ social: { soundcloud: "https://sc.test/x" } });
+    expect(copyright(footer).className).toMatch(/sm:col-start-1/);
+    expect(within(footer).getByTestId("footer-social").className).toMatch(/sm:col-start-2/);
+    expect(within(footer).getByTestId("footer-legal").className).toMatch(/sm:col-start-3/);
   });
 
-  test("the contact address survives its heading", async () => {
-    // Its column heading is gone, so the field that fed it would have become a control
-    // with no effect — the exact bug the site settings fix was about. It is the link's
-    // title now.
+  test("an absent group does not move the others along", async () => {
+    /* The reason the columns are placed explicitly rather than left to auto-flow. With
+       no social links filled, auto-placement would put the pages in the middle track and
+       leave the right of the line empty. */
+    const footer = await draw({ social: {} });
+    expect(within(footer).queryByTestId("footer-social")).toBeNull();
+    expect(within(footer).getByTestId("footer-legal").className).toMatch(/sm:col-start-3/);
+  });
+
+  test("the links are set at the copyright's size", async () => {
+    // The two are the whole footer now; they had better look like one line rather than
+    // two things that happen to share it.
     const footer = await draw();
-    const link = within(footer).getByText("hello@supersanity.live");
-    expect(link.getAttribute("href")).toBe("mailto:hello@supersanity.live");
-    expect(link.getAttribute("title")).toBe("Contact");
+    expect(within(footer).getByTestId("footer-legal").className).toMatch(/\btext-xs\b/);
+    expect(copyright(footer).className).toMatch(/\btext-xs\b/);
+  });
+
+  test("the groups are vertically centred on each other", async () => {
+    // Three groups of different heights — 12px text, 16px icons, wrapping links — on one
+    // line. Anything but centre puts one of them visibly off the others' baseline.
+    expect(line(await draw()).className).toMatch(/\bitems-center\b/);
+  });
+});
+
+describe("what the rework removed", () => {
+  test("the wordmark, description and address are stored but never shown", async () => {
+    /* They are still returned by the API and still in the database — the fields were not
+       deleted, only their controls and their rendering. This asserts the footer ignores
+       them, so a value left over from before the rework cannot reappear. */
+    const footer = await draw({
+      wordmark: "SUPERSANITY",
+      description: "Interdisciplinary platform producing events.",
+      contact_email: "hello@supersanity.live",
+      legal_heading: "Legal",
+      contact_heading: "Contact",
+    });
+    expect(footer.textContent).not.toMatch(/SUPERSANITY/);
+    expect(footer.textContent).not.toMatch(/Interdisciplinary/);
+    expect(footer.textContent).not.toMatch(/hello@supersanity\.live/);
+    expect(footer.textContent).not.toMatch(/Legal/);
+    expect(footer.textContent).not.toMatch(/Contact/);
   });
 });
 
 describe("social links", () => {
   test("nothing renders when none are filled", async () => {
-    const footer = await draw({ social: {} });
-    expect(within(footer).queryByTestId("footer-social")).toBeNull();
+    expect(within(await draw({ social: {} })).queryByTestId("footer-social")).toBeNull();
   });
 
   test("only the ones filled in the CMS render", async () => {
@@ -106,8 +132,8 @@ describe("social links", () => {
     const footer = await draw({ social: { soundcloud: "https://sc.test/x" } });
     const path = within(footer).getByTestId("footer-social-soundcloud").querySelector("svg path");
     expect(path, "SoundCloud rendered without an icon").toBeTruthy();
-    // Guards against an empty or truncated `d`, which draws nothing and reads as a
-    // missing icon rather than a broken one.
+    // Guards an empty or truncated `d`, which draws nothing and reads as a missing icon
+    // rather than a broken one.
     expect(path.getAttribute("d").length).toBeGreaterThan(50);
   });
 
@@ -121,8 +147,6 @@ describe("social links", () => {
   });
 
   test("a website link falls back to its label, having no brand", async () => {
-    // `website` is not a brand — it is whatever domain the site happens to own — so it
-    // is the one entry with no mark, on purpose.
     const footer = await draw({ social: { website: "https://example.test" } });
     const link = within(footer).getByTestId("footer-social-website");
     expect(link.querySelector("svg")).toBeNull();
@@ -136,86 +160,45 @@ describe("social links", () => {
   });
 });
 
-describe("it adapts as fields are emptied", () => {
-  /* Every one of these is reachable from Site settings now that blank means blank, so
-     each is a state a real footer can be in rather than a hypothetical. */
-
-  test("no wordmark or description leaves the links alone on the top row", async () => {
-    const footer = await draw({ wordmark: "", description: "" });
-    expect(within(footer).getByTestId("footer-legal")).toBeTruthy();
-    // Not an empty box holding the space where the wordmark used to be.
-    expect(footer.querySelector(".min-w-0")).toBeNull();
-    expect(footer.querySelector(".border-t"), "the rule still divides two rows").toBeTruthy();
-  });
-
-  test("with the whole top row empty, the rule is not drawn", async () => {
-    // Otherwise it is a line across the top of the page's last element, dividing the
-    // copyright from nothing.
-    const footer = await draw({ wordmark: "", description: "", contact_email: "", pages: [] });
-    expect(footer.querySelector(".border-t")).toBeNull();
-    expect(within(footer).getByText(/©/), "the year survives on its own").toBeTruthy();
-  });
-
-  test("emptied to the bone, it is still a footer and not a broken one", async () => {
+describe("the pages row", () => {
+  test("every footer page is a link, whatever it is for", async () => {
+    /* Including the consumer-protection notices a jurisdiction requires. Nothing about
+       ANPC or SAL is written into the component — they are CMS pages marked "footer
+       only", which is what lets a deployment elsewhere carry its own instead. */
     const footer = await draw({
-      wordmark: "", description: "", contact_email: "", copyright_name: "", pages: [], social: {},
+      pages: [
+        { slug: "privacy", label: "Privacy" },
+        { slug: "anpc", label: "ANPC" },
+        { slug: "sal", label: "SAL" },
+      ],
     });
-    expect(footer).toBeTruthy();
-    expect(footer.querySelector(".border-t")).toBeNull();
-    expect(within(footer).queryByTestId("footer-social")).toBeNull();
-    // The year is computed, never authored, so it is the one thing that cannot be emptied.
-    expect(footer.textContent).toMatch(/© \d{4}/);
+    const nav = within(footer).getByTestId("footer-legal");
+    expect(within(nav).getByText("ANPC").getAttribute("href")).toBe("/anpc");
+    expect(within(nav).getByText("SAL").getAttribute("href")).toBe("/sal");
   });
 
-  test("social alone still gets a rule above it when there is a top row", async () => {
-    const footer = await draw({ description: "", social: { soundcloud: "https://sc.test/x" } });
-    expect(footer.querySelector(".border-t")).toBeTruthy();
-    expect(within(footer).getByTestId("footer-social-soundcloud")).toBeTruthy();
+  test("the separator trails its link rather than leading the next", async () => {
+    // Leading separators read fine on one line and badly on two: where the row wraps,
+    // every wrapped line began with a stray "·" hanging in the margin.
+    const nav = within(await draw()).getByTestId("footer-legal");
+    const groups = [...nav.children];
+    expect(groups.at(-1).textContent).not.toMatch(/·/);
+    expect(groups[0].textContent).toMatch(/·$/);
+  });
+
+  test("no links, no row", async () => {
+    const footer = await draw({ pages: [] });
+    expect(within(footer).queryByTestId("footer-legal")).toBeNull();
   });
 });
 
-describe("the two footer rows read as a pair", () => {
-  /* Class-level assertions, not computed styles: Tailwind's stylesheet is not loaded in
-     jsdom, so getComputedStyle would report the browser default for every one of these
-     and pass whatever the markup said. The values behind them were measured in a real
-     browser — 14px Manrope against 12px mono before, 12px against 12px after. */
-
-  const cls = (el) => el.className;
-
-  test("the links are set at the copyright's size, not the description's", async () => {
-    const footer = await draw();
-    const nav = within(footer).getByTestId("footer-legal");
-    const copy = [...footer.querySelectorAll("div")]
-      .find((d) => d.children.length === 0 && d.textContent.trim().startsWith("©"));
-    expect(cls(nav)).toMatch(/\btext-xs\b/);
-    expect(cls(copy)).toMatch(/\btext-xs\b/);
-    // text-sm is the description's size and was the links' — the mismatch being fixed.
-    expect(cls(nav)).not.toMatch(/\btext-sm\b/);
-  });
-
-  test("the links hug the right edge, including when they wrap", async () => {
-    // The group was already flush right as a block, but its items packed from the left,
-    // so at 375px the wrapped second line started under the first instead of ending
-    // with it.
-    const nav = within(await draw()).getByTestId("footer-legal");
-    expect(cls(nav)).toMatch(/\bjustify-end\b/);
-    expect(cls(nav)).toMatch(/\btext-right\b/);
-  });
-
-  test("the links sit on the rule, not at the top of the row", async () => {
-    // The two sides are different heights: a 24px wordmark, sometimes a paragraph under
-    // it, against one 12px line of links. Aligning tops left the links floating with a
-    // gap beneath them while the wordmark reached down to the rule.
-    const footer = await draw();
-    const row = within(footer).getByTestId("footer-legal").parentElement;
-    expect(row.className).toMatch(/\bitems-end\b/);
-    expect(row.className).not.toMatch(/\bitems-start\b/);
-  });
-
-  test("the links stay right even with nothing to push against", async () => {
-    // justify-between needs a left sibling. Both fields feeding it can be emptied, and
-    // `ml-auto` is what keeps the group off the left margin when they are.
-    const footer = await draw({ wordmark: "", description: "" });
-    expect(cls(within(footer).getByTestId("footer-legal"))).toMatch(/\bml-auto\b/);
+describe("emptied to the bone", () => {
+  test("the year is the last thing standing", async () => {
+    // Everything else here is an editor's to clear, now that blank means blank.
+    const footer = await draw({ copyright_name: "", pages: [], social: {} });
+    expect(footer).toBeTruthy();
+    expect(within(footer).queryByTestId("footer-legal")).toBeNull();
+    expect(within(footer).queryByTestId("footer-social")).toBeNull();
+    expect(footer.textContent).toMatch(/© \d{4}/);
   });
 });

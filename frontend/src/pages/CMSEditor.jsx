@@ -977,12 +977,12 @@ function SiteContentEditor() {
 
   return (
     <div className="space-y-4" data-testid="site-content">
-      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Wordmarks</div>
+      {/* One wordmark now, not two. The footer's was removed with the footer's first
+          row; a second field for a place that no longer shows one is a control whose
+          only effect is to look like it has one. */}
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">Wordmark</div>
       <SiteField label="Header" value={state.header_wordmark} testId="site-header_wordmark"
                  onCommit={(v) => save({ header_wordmark: v })} />
-      <SiteField label="Footer" value={state.wordmark} testId="site-wordmark"
-                 hint="Separate on purpose — one need not follow the other"
-                 onCommit={(v) => save({ wordmark: v })} />
       <label className="block">
         <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">
           Menu text size: {state.nav_size ?? 11}px
@@ -1029,16 +1029,11 @@ function SiteContentEditor() {
       ))}
 
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Footer</div>
-      <label className="block">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-ink-3 font-mono-x mb-1">Description</div>
-        <TextareaField value={state.description || ""} rows={3} testId="site-description" onCommit={(v) => save({ description: v })} />
-      </label>
-      <SiteField label="Legal column heading" value={state.legal_heading} testId="site-legal_heading"
-                 onCommit={(v) => save({ legal_heading: v })} />
-      <SiteField label="Contact column heading" value={state.contact_heading} testId="site-contact_heading"
-                 onCommit={(v) => save({ contact_heading: v })} />
-      <SiteField label="Contact email" value={state.contact_email} testId="site-contact_email"
-                 onCommit={(v) => save({ contact_email: v })} />
+      {/* Description, the two column headings and the contact address were all removed
+          with the rows and columns that carried them. Their values are still stored and
+          still returned by the API — nothing was deleted — but nothing renders them, and
+          an editable field with no effect anywhere is the same bug as a save that
+          silently does not save. */}
       <SiteField label="Copyright name" value={state.copyright_name} testId="site-copyright_name"
                  hint="The year is always the current one"
                  onCommit={(v) => save({ copyright_name: v })} />
@@ -1047,6 +1042,9 @@ function SiteContentEditor() {
         Footer links: {(state.pages || []).map((p) => p.label).join(" · ") || "none yet"}.
         <br />Chosen per page with “Show in footer”. A page in the footer is kept out of
         the main navigation.
+        <br />Anything the footer should link to is a page here — including the notices a
+        jurisdiction requires, such as ANPC and SAL. Make the page, tick “Show in footer”,
+        and it joins the row.
       </div>
 
       <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4 pt-4">Social</div>
