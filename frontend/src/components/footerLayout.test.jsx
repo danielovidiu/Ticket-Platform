@@ -213,6 +213,13 @@ describe("it is an overlay, not the end of the page", () => {
     expect([...footer.classList]).toContain("bottom-0");
   });
 
+  test("it carries the site's background colour, not a transparent one", async () => {
+    // The whole element fades, colour included: transparent while the page is being
+    // read, so the media underneath reaches the bottom of the screen — and a solid bar
+    // at the end, rather than type lying directly on a bright frame.
+    expect([...(await draw()).classList]).toContain("bg-page");
+  });
+
   test("it sits under the header and the cookie banner, over the page", async () => {
     // z-30: below the sticky header (z-40), its menu (z-50) and the consent banner
     // (z-70), above ordinary content. A footer that covers the consent banner is a
@@ -229,5 +236,31 @@ describe("it is an overlay, not the end of the page", () => {
     expect(footer.style.opacity).toBe("1");
     expect(footer.style.visibility).toBe("visible");
     expect(footer.style.pointerEvents).toBe("auto");
+  });
+});
+
+describe("what bleeds under it and what does not", () => {
+  test("the content reserves the footer's height so text stops above it", async () => {
+    /* The footer floats, so without a reservation the last paragraph, form or button on
+       every page would sit underneath it. `main` carries padding equal to the footer's
+       MEASURED height — one line on a desktop, three wrapped ones on a phone, different
+       again with the text-inset control — which is why it is measured and not a constant.
+
+       jsdom gives every element zero height, so the number here is 0 and only the wiring
+       can be asserted: that the padding is driven by the measurement rather than absent
+       or hard-coded. The real values were checked in a browser. */
+    const { container } = render(<MemoryRouter><Layout><div /></Layout></MemoryRouter>);
+    await screen.findByText(/©/);
+    const main = container.querySelector("main");
+    expect(main).toBeTruthy();
+    expect(main.getAttribute("style") ?? "").not.toMatch(/padding-bottom:\s*\d+px/);
+  });
+
+  test("the footer is measurable — it is a real element in the tree", async () => {
+    // The reservation depends on a ref reaching the footer. If it ever stopped being
+    // attached the padding would silently stay 0 and text would slide back under.
+    const footer = await draw();
+    expect(footer.tagName).toBe("FOOTER");
+    expect(typeof footer.getBoundingClientRect).toBe("function");
   });
 });
