@@ -372,3 +372,20 @@ body {
 @media (min-width: 768px) {
   .hero-heading { font-size: var(--hero-heading-desktop, 72px); }
 }
+
+/* Two columns whose share of the width is set per block, for the same reason and by the
+ * same means as the heading above: the value belongs to one block so it cannot be a
+ * utility class, and the breakpoint cannot be written inline.
+ *
+ * Inline `grid-template-columns` would be the obvious way and is wrong here — an inline
+ * style beats a `md:` class, so a phone would get two thin columns instead of a stack.
+ *
+ * Fractions, not percentages: two percentages adding to 100 leave nothing for the gap and
+ * the row overflows by exactly the gap's width. `minmax(0, …)` is what stops a wide
+ * photograph from forcing its track past the share it was given. */
+.column-ratio { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 768px) {
+  .column-ratio {
+    grid-template-columns: minmax(0, var(--column-ratio-a, 1fr)) minmax(0, var(--column-ratio-b, 1fr));
+  }
+}

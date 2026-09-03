@@ -1305,7 +1305,6 @@ def _seed_home_blocks():
         _bk("marquee", items=["OBSIDIAN · CHAPTER I", "CORPUS · LIVE", "BOX OFFICE OPEN", "VOID ORCHESTRA", "NOKTURN", "LUMEN / CORPS"]),
         _bk("events_grid", heading="Upcoming", eyebrow="01 — Programme", limit=4, layout="grid-2"),
         _bk("artists_grid", heading="Artists", eyebrow="02 — Roster", limit=6, layout="grid-3"),
-        _bk("cta_banner", heading="We build the room, the sound, and the door.", body="We keep the money out of promoters' pockets and inside the work.", cta_label="Read more", cta_href="/mission"),
     ]
 
 

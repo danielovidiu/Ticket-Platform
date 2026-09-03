@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { renderRich } from "../../lib/richText";
 import { mediaUrl } from "../../lib/media";
 import { Lightbox } from "../ui/lightbox";
-import { Camera } from "lucide-react";
+import { Camera, Pause, Play } from "lucide-react";
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 
@@ -231,6 +231,24 @@ function VerticalPlacement({ offset, children, testId }) {
 const overlayMode = (props) => (props.overlay === undefined ? "gradient" : props.overlay === true ? "solid" : props.overlay || "none");
 
 /**
+ * Which part of a photograph survives the crop on a phone.
+ *
+ * A background image is `object-cover`: it fills the block and the overflow is thrown
+ * away. On a wide screen that costs the top and bottom of the picture, which is usually
+ * nothing. On a 375px-wide screen it costs most of the WIDTH — a 3:2 photograph in a
+ * portrait block loses about two thirds of itself — and `object-position` decides which
+ * third is kept. Centred by default, so a subject standing at the edge of the frame is
+ * cropped out of the phone view entirely with no way to say otherwise.
+ *
+ * Deliberately mobile-only. On desktop this returns `undefined`, which writes no inline
+ * style at all and leaves every block already published rendering exactly as it does
+ * now — the control answers a question that only a narrow screen asks.
+ */
+const MOBILE_FOCUS = { left: "0% 50%", center: "50% 50%", right: "100% 50%" };
+const mobileFocus = (props, isMobile) =>
+  (isMobile ? MOBILE_FOCUS[props.mobile_focus] || MOBILE_FOCUS.center : undefined);
+
+/**
  * Hero height, as a percentage of the viewport.
  *
  * vh rather than the px the heading sizes use, and for the opposite reason. A heading
@@ -262,10 +280,12 @@ function Hero({ props }) {
   const upper = casing(props);
   // Absent means legacy, where the hero was always edge to edge.
   const fullFrame = props.full_frame !== false;
+  const objectPosition = mobileFocus(props, useIsMobileViewport());
 
   const media = props.image_url && (
     <div className="absolute inset-0">
-      <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" />
+      <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover"
+           style={{ objectPosition }} data-testid="hero-image" />
       {overlayMode(props) === "gradient" ? (
         // The original treatment: a theme-wide image opacity plus a bottom gradient,
         // neither of which an editor could see or change. It stays as a NAMED option
@@ -503,46 +523,6 @@ function Marquee({ props }) {
         </div>
       </div>
     </section>
-  );
-}
-
-/** Every part of this is authored now. The left column used to be the literal string
- * "CTA" in the markup, and there was no image at all — so the one block whose whole job
- * is to convert was the least configurable one in the CMS. */
-function CTABanner({ props }) {
-  const upper = casing(props);
-  return (
-    <section><Frame full={props.full_width}>
-      {/* The whole element, photograph included — the one block where that was asked for.
-          On a phone the two columns collapse into one, so the text lands under the image
-          and starts at the edge; insetting only the text would leave the image hanging
-          past it and make the wrap look like a mistake rather than a stack. */}
-      <EdgeInset full={props.full_width}>
-      <div className="grid md:grid-cols-2 gap-10 items-start">
-        {props.image_url ? (
-          <img src={mediaUrl(props.image_url)} alt={props.heading || ""}
-               className="w-full object-cover border border-ink/10" data-testid="cta-image" />
-        ) : (
-          <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4`}>{props.eyebrow ?? "CTA"}</div>
-        )}
-        <div>
-          {props.image_url && props.eyebrow && (
-            <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4 mb-4`}>{props.eyebrow}</div>
-          )}
-          {props.heading && (
-            <p className={`font-display text-3xl md:text-5xl ${upper} tracking-tighter leading-tight whitespace-pre-wrap`}
-               data-testid="cta-heading">{props.heading}</p>
-          )}
-          {props.body && <div className="mt-4 max-w-lg">{renderRich(props.body, { paraClassName: "text-ink-3" })}</div>}
-          {props.cta_label && (
-            <Link to={props.cta_href || "#"}
-                  className={`mt-8 inline-block ${props.cta_style === "accent" ? "btn-accent" : "btn-primary"}`}
-                  data-testid="cta-button">{props.cta_label}</Link>
-          )}
-        </div>
-      </div>
-      </EdgeInset>
-    </Frame></section>
   );
 }
 
@@ -845,20 +825,319 @@ function TextPanel({ props }) {
 
 function Spacer({ props }) { return <div style={{ height: props.height || "4rem" }} />; }
 
+/**
+ * Where a column of text sits horizontally, and how its lines are set.
+ *
+ * One map rather than the ternary chain each block used to carry its own copy of. The
+ * items-* half matters as much as the text-* half: inside a flex column the children are
+ * stretched by default, so a button in a centred column would still sit hard left.
+ */
+const TEXT_ALIGN = {
+  left: "text-left items-start",
+  center: "text-center items-center",
+  right: "text-right items-end",
+};
+const textAlign = (props, fallback = "left") => TEXT_ALIGN[props.align] || TEXT_ALIGN[fallback];
+
+/**
+ * The size a Split-family heading renders at, in plain pixels per breakpoint.
+ *
+ * The same shape as `heroHeadingSize` and deliberately NOT the same function. Hero's
+ * fallback is its old `l` step — 48/72px — and borrowing it here would resize every split
+ * already published, because these headings have never had a size field at all: they were
+ * `text-3xl md:text-5xl`, which is 30px and 48px. Those two numbers are the fallback, so
+ * a block that has never been touched renders at exactly the size it always has.
+ *
+ * The LIMITS are shared with the hero on purpose. They are a sane range for a display
+ * heading in pixels, and there is no reason for two blocks to disagree about it.
+ */
+const SPLIT_HEADING_FALLBACK = { mobile: 30, desktop: 48 };
+
+export function splitHeadingSize(props) {
+  const pick = (key) => {
+    const raw = props[`heading_size_${key}`];
+    if (raw === undefined || raw === null || raw === "" || Number.isNaN(Number(raw))) {
+      return SPLIT_HEADING_FALLBACK[key];
+    }
+    return clampPx(raw, HERO_SIZE_LIMITS[key]);
+  };
+  return { mobile: pick("mobile"), desktop: pick("desktop") };
+}
+
 function Split({ props }) {
   const reverse = props.direction === "image-right";
+  const size = splitHeadingSize(props);
+  // Absent means the uppercase these headings have always been set in, the same bargain
+  // `casing` makes everywhere else: an explicit value is a decision, absence is history.
+  const upper = casing(props);
+  /* "natural" is the new default and the reason the row is `items-stretch` below: the
+     element takes the height of the photograph rather than cropping every photograph to
+     one shape. A block published before this carries an explicit aspect and keeps it,
+     and `aspectClass`'s own fallback is still the square those blocks were drawn at. */
+  const natural = props.aspect === "natural";
+  const aspect = natural ? "" : aspectClass(props.aspect, "aspect-square");
+
   return (
     <section><Frame full={props.full_width}>
-      <div className={`grid md:grid-cols-2 gap-10 items-center ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}>
+      <div className={`grid md:grid-cols-2 gap-10 items-stretch ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}>
         {/* The image is NOT inset: asked for explicitly, and it keeps the column edge. */}
-        <div className={`${aspectClass(props.aspect, "aspect-square")} overflow-hidden border border-ink/10`}>
-          {props.image_url ? <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-ink-5 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>}
+        <div className={`${aspect} overflow-hidden border border-ink/10`} data-testid="split-media">
+          {props.image_url ? (
+            <img src={mediaUrl(props.image_url)} alt=""
+                 className={natural ? "w-full h-auto block" : "w-full h-full object-cover"} />
+          ) : (
+            <div className="w-full h-full min-h-[12rem] flex items-center justify-center text-ink-5 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>
+          )}
         </div>
         <EdgeInset full={props.full_width}>
-          {props.eyebrow && <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{props.eyebrow}</div>}
-          {props.heading && <h2 className="font-display text-3xl md:text-5xl uppercase font-bold tracking-tighter mt-2">{props.heading}</h2>}
-          {props.body && <div className="mt-4">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed" })}</div>}
-          {props.cta_label && <Link to={props.cta_href || "#"} className="mt-6 inline-block btn-primary">{props.cta_label}</Link>}
+          {/* The text's own box, full height so it has something to be aligned within.
+              Without this the column had exactly the height of its words and top,
+              middle and bottom all meant the same thing. */}
+          <div className={`h-full flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)}`}
+               data-testid="split-text">
+            {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4`}>{props.eyebrow}</div>}
+            {props.heading && (
+              <h2 className={`font-display hero-heading ${upper} font-bold tracking-tighter mt-2 whitespace-pre-wrap`}
+                  style={{ "--hero-heading-mobile": `${size.mobile}px`, "--hero-heading-desktop": `${size.desktop}px` }}
+                  data-testid="split-heading">
+                {props.heading}
+              </h2>
+            )}
+            {props.body && <div className="mt-4">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed" })}</div>}
+            {props.cta_label && <Link to={props.cta_href || "#"} className="mt-6 inline-block btn-primary">{props.cta_label}</Link>}
+          </div>
+        </EdgeInset>
+      </div>
+    </Frame></section>
+  );
+}
+
+/**
+ * The longest a snippet plays before the player moves on, in seconds.
+ *
+ * A rule the PLAYER holds, not the upload. Trimming audio on the server would mean
+ * ffmpeg, which is deliberately not a dependency anywhere in this app — the video block
+ * captures its poster frame in the browser for the same reason. So a two-minute file can
+ * be uploaded and the block will still play ninety seconds of it and move on, which is
+ * the behaviour that was actually asked for: these are teasers, not tracks.
+ */
+export const AUDIO_TRACK_MAX_SECONDS = 90;
+
+/** The `setPlaying` of whichever playlist on the page is sounding, so a second one can
+ *  silence it before it starts. Reset by whoever takes over; see `stopOthers`. */
+let nowPlaying = null;
+
+const fmtClock = (seconds) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return "--:--";
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+};
+
+/**
+ * A list of short clips, one playing at a time.
+ *
+ * ONE `<audio>` element for the whole list, not one per row. Two elements can play at
+ * once, and a playlist whose second track starts over the top of the first is the bug
+ * this shape makes impossible: switching tracks is switching the source of the single
+ * player, so the previous one stops by construction.
+ *
+ * The three behaviours asked for map onto three handlers. Pressing a row toggles it —
+ * the same row pauses, a different row switches. `onEnded` steps to the next row and
+ * stops at the end of the list rather than looping, which is what "until the end" means.
+ * `onTimeUpdate` enforces the ninety-second cap by taking the same step early.
+ */
+export function AudioPlaylist({ tracks }) {
+  const list = (Array.isArray(tracks) ? tracks : []).filter((t) => t && t.url);
+  const [playing, setPlaying] = useState(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [duration, setDuration] = useState(null);
+  const audioRef = useRef(null);
+
+  // The source is derived rather than kept in state, so the effect below has a dependency
+  // that is stable across re-renders — `list` is rebuilt on every one of them.
+  const currentUrl = playing === null ? null : list[playing]?.url || null;
+
+  const advance = useCallback(() => {
+    setPlaying((at) => (at !== null && at + 1 < list.length ? at + 1 : null));
+  }, [list.length]);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    setElapsed(0);
+    setDuration(null);
+    if (!currentUrl) { el.pause(); return; }
+    /* One player at a time on the whole PAGE, not merely within one block. A page can
+       carry two of these, and starting the second while the first was running left both
+       sounding at once — the same fault the single shared <audio> rules out inside a
+       block, one level up. Module scope, because two sibling blocks share no state and
+       there is only ever one pair of ears. */
+    if (nowPlaying && nowPlaying !== setPlaying) nowPlaying(null);
+    nowPlaying = setPlaying;
+    el.src = mediaUrl(currentUrl);
+    // A browser can refuse to start — an autoplay policy, a file it cannot decode — and
+    // jsdom has no media stack at all. Neither is worth throwing a render away for: the
+    // row simply stays un-played.
+    try { el.play()?.catch(() => {}); } catch { /* no media support here */ }
+  }, [currentUrl]);
+
+  const onTimeUpdate = (e) => {
+    const at = e.currentTarget.currentTime;
+    if (at >= AUDIO_TRACK_MAX_SECONDS) { advance(); return; }
+    setElapsed(at);
+  };
+
+  if (!list.length) return null;
+
+  // What the bar fills against: the clip's own length, or the cap when the clip is longer
+  // than the cap — because the cap is where it will actually stop.
+  const span = Math.min(duration || AUDIO_TRACK_MAX_SECONDS, AUDIO_TRACK_MAX_SECONDS);
+
+  return (
+    <div className="mt-8 border-t border-ink/10" data-testid="audio-playlist">
+      <audio ref={audioRef} preload="none" onEnded={advance} onTimeUpdate={onTimeUpdate}
+             onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+             data-testid="audio-element" />
+      <ul>
+        {list.map((track, i) => {
+          const active = playing === i;
+          return (
+            <li key={`${track.url}-${i}`} className="border-b border-ink/10 last:border-b-0">
+              <button type="button" onClick={() => setPlaying(active ? null : i)}
+                      aria-pressed={active} data-testid={`audio-track-${i}`}
+                      className="group w-full flex items-center gap-3 py-3 text-left">
+                <span className="shrink-0 w-8 h-8 border border-ink/20 group-hover:border-ink transition-colors flex items-center justify-center">
+                  {active ? <Pause size={12} /> : <Play size={12} />}
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block font-mono-x text-[11px] uppercase tracking-[0.2em] truncate">
+                    {track.title || `Track ${i + 1}`}
+                  </span>
+                  {active && (
+                    <span className="mt-1.5 block h-[2px] w-full bg-ink/10" data-testid="audio-progress">
+                      <span className="block h-full bg-ink"
+                            style={{ width: `${Math.min(100, (elapsed / span) * 100)}%` }} />
+                    </span>
+                  )}
+                </span>
+                {/* Only the row that is playing carries a clock. A row that is not has
+                    no honest number to show — `preload="none"` means its length has not
+                    been fetched — and printing "--:--" against every idle track reads as
+                    a broken readout rather than as a resting one. */}
+                {active && (
+                  <span className="shrink-0 font-mono-x text-[10px] tracking-[0.2em] text-ink-4 tabular-nums"
+                        data-testid="audio-elapsed">
+                    {fmtClock(elapsed)}
+                  </span>
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/** The ratio slider's bounds. Not 0-100: a column at 5% is not a layout choice, it is a
+ *  sliver with a cropped photograph in it, and the block below has no use for either end. */
+export const SPLIT_RATIO_LIMITS = { min: 20, max: 80, fallback: 50 };
+export const SPLIT_MAX_HEIGHT_LIMITS = { min: 200, max: 1400, fallback: 640 };
+
+/** A number within its limits, or the default when there isn't one.
+ *
+ * The emptiness check is separate from `Number.isFinite` and has to be: `Number("")` is
+ * 0, which is perfectly finite, so a cleared field would clamp to the FLOOR — a 200px
+ * cap on a photograph nobody asked to shrink — rather than falling back to the default.
+ * `heroHeight` guards the same way for the same reason. */
+const bounded = (value, limits) => {
+  if (value === undefined || value === null || value === "") return limits.fallback;
+  const raw = Number(value);
+  return Number.isFinite(raw) ? clampPx(raw, limits) : limits.fallback;
+};
+
+/**
+ * Split's layout with the far column cut in two: words above, short clips below.
+ *
+ * Three things separate it from Split, and all three were asked for by name.
+ *
+ *   THE RATIO IS A SLIDER. Split is two equal columns forever. Here the photograph can
+ *   take a third of the width or two thirds of it. At 50 the two halves meet exactly at
+ *   the middle of the block, which is the "image central" case — it needs no special
+ *   handling because an even grid already does it.
+ *
+ *   THE PHOTOGRAPH HAS NO HAIRLINE. Split draws a border around its image column; this
+ *   one does not, so the picture sits on the page rather than in a box.
+ *
+ *   IT TAKES THE PHOTOGRAPH'S HEIGHT, up to a cap. `h-auto` lets the image keep its own
+ *   proportions and the grid row grows to fit it; `max-height` stops a very tall portrait
+ *   from running the block off the screen. Once the cap bites, both dimensions of the
+ *   image box are definite, which is exactly when `object-fit: cover` starts applying —
+ *   so past the cap the photograph is cropped rather than squashed.
+ */
+function SplitAudio({ props }) {
+  const reverse = props.direction === "image-right";
+  const size = splitHeadingSize(props);
+  const upper = casing(props);
+  const maxHeight = bounded(props.max_height, SPLIT_MAX_HEIGHT_LIMITS);
+  const ratio = bounded(props.ratio, SPLIT_RATIO_LIMITS);
+
+  /* Fractions rather than percentages, and set as CSS variables rather than inline
+     `grid-template-columns`. Percentages would not leave room for the gap; an inline
+     value would beat the `md:` breakpoint and split a phone screen into two thin columns.
+     See `.column-ratio` in index.css — the same trick `.hero-heading` uses, for the same
+     reason: a media query cannot be written inline. Reversing swaps the tracks as well as
+     the order, or the photograph would move into the column sized for the text. */
+  const columns = reverse ? [100 - ratio, ratio] : [ratio, 100 - ratio];
+
+  return (
+    <section><Frame full={props.full_width}>
+      <div className={`grid gap-10 items-stretch column-ratio ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}
+           style={{ "--column-ratio-a": `${columns[0]}fr`, "--column-ratio-b": `${columns[1]}fr` }}
+           data-testid="split-audio" data-ratio={ratio}>
+        {/* No border and not inset: the photograph reaches the edge of its column, and of
+            the screen when the block is full width. */}
+        <div className="overflow-hidden" data-testid="split-audio-media">
+          {props.image_url ? (
+            <img src={mediaUrl(props.image_url)} alt=""
+                 className="w-full h-auto object-cover block"
+                 style={{ maxHeight: `${maxHeight}px` }}
+                 data-testid="split-audio-image" />
+          ) : (
+            <div className="w-full h-full min-h-[12rem] flex items-center justify-center text-ink-5 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>
+          )}
+        </div>
+        <EdgeInset full={props.full_width}>
+          {/* The column is as tall as the photograph beside it. The words take whatever is
+              left above the player and are placed within it — which is what top, middle
+              and bottom mean here — and the player sits at the bottom of the column. */}
+          <div className="h-full flex flex-col">
+            <div className={`flex-1 flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)}`}
+                 data-testid="split-audio-text">
+              {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4`}>{props.eyebrow}</div>}
+              {props.heading && (
+                <h2 className={`font-display hero-heading ${upper} font-bold tracking-tighter mt-2 whitespace-pre-wrap`}
+                    style={{ "--hero-heading-mobile": `${size.mobile}px`, "--hero-heading-desktop": `${size.desktop}px` }}
+                    data-testid="split-audio-heading">
+                  {props.heading}
+                </h2>
+              )}
+              {props.body && <div className="mt-4">{renderRich(props.body, { paraClassName: "text-ink-2 leading-relaxed" })}</div>}
+              {(props.cta_label || props.second_cta_label) && (
+                <div className="mt-6 flex flex-wrap gap-3">
+                  {props.cta_label && (
+                    <Link to={props.cta_href || "#"} data-testid="split-audio-cta"
+                          className={props.cta_style === "accent" ? "btn-accent" : "btn-primary"}>{props.cta_label}</Link>
+                  )}
+                  {props.second_cta_label && (
+                    <Link to={props.second_cta_href || "#"} data-testid="split-audio-cta-2"
+                          className="btn-primary">{props.second_cta_label}</Link>
+                  )}
+                </div>
+              )}
+            </div>
+            <AudioPlaylist tracks={props.tracks} />
+          </div>
         </EdgeInset>
       </div>
     </Frame></section>
@@ -1059,6 +1338,10 @@ function ImageBand({ props }) {
     : "text-left items-start";
   const upper = casing(props);
   const opacity = Math.min(100, Math.max(0, Number(props.overlay_opacity ?? 50))) / 100;
+  /* Only the still photograph takes a focal point. The parallax one is drawn at the
+     band's full width with its own height left free — there is no horizontal overflow
+     for `object-position` to choose from, so the control would be a dead one there. */
+  const objectPosition = mobileFocus(props, useIsMobileViewport());
 
   const inner = (
     <div className={`relative overflow-hidden ${h} flex flex-col ${contentY(props, "justify-center")}`} data-testid="image-band">
@@ -1074,7 +1357,8 @@ function ImageBand({ props }) {
           </>
         ) : (
           <div className="absolute inset-0">
-            <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover" />
+            <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover"
+                 style={{ objectPosition }} data-testid="image-band-image" />
             <div className="absolute inset-0"
                  style={{ backgroundColor: props.overlay_color || "#050505", opacity }}
                  data-testid="image-band-overlay" />
@@ -1120,7 +1404,6 @@ export const BLOCK_RENDERERS = {
   events_grid: EventsGrid,
   artists_grid: ArtistsGrid,
   marquee: Marquee,
-  cta_banner: CTABanner,
   contact_form: ContactFormBlock,
   newsletter: Newsletter,
   video: VideoEmbed,
@@ -1130,6 +1413,7 @@ export const BLOCK_RENDERERS = {
   custom_html: CustomHTML,
   spacer: Spacer,
   split: Split,
+  split_audio: SplitAudio,
 };
 
 /** `preview` marks the CMS editor's live preview, where an authoring mistake should be
@@ -1137,7 +1421,20 @@ export const BLOCK_RENDERERS = {
 export function BlockRenderer({ block, preview = false }) {
   if (!block || block.enabled === false) return null;
   const R = BLOCK_RENDERERS[block.type];
-  if (!R) return <div className="p-6 border border-dashed border-ink/10 text-ink-4 font-mono-x text-xs uppercase">Unknown block: {block.type}</div>;
+  if (!R) {
+    /* The same bargain the unsupported-embed notice makes, and it started mattering the
+       day a block type was RETIRED: every page still holding a `cta_banner` printed
+       "Unknown block: cta_banner" at its visitors, who can neither read that as English
+       nor do anything about it. Silent on the public site, loud in the editor's preview —
+       the one place the person who can delete the block is looking. */
+    if (!preview) return null;
+    return (
+      <div className="p-6 border border-dashed border-ink/10 text-ink-4 font-mono-x text-xs uppercase"
+           data-testid="unknown-block">
+        Unknown block: {block.type} — retired. Delete it; visitors see nothing here.
+      </div>
+    );
+  }
   return <R props={block.props || {}} preview={preview} />;
 }
 

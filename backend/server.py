@@ -544,6 +544,11 @@ if storage.is_local():
 
 IMAGE_CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
 VIDEO_CONTENT_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov"}
+# Sound, for the CMS's audio blocks. Kept apart from video rather than folded into it:
+# the two are stored the same way but they are not the same thing to the editor, and the
+# response says which one arrived so a field that asked for a clip cannot be handed a film.
+AUDIO_CONTENT_TYPES = {"audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav",
+                       "audio/ogg": ".ogg", "audio/mp4": ".m4a", "audio/aac": ".m4a"}
 # 100 MB, which is what a short video actually weighs. Reachable on a VPS, where nginx
 # is the only thing in front; NOT reachable on Vercel, whose platform refuses any request
 # body over about 4.5 MB before this process is reached at all — measured, not assumed:
@@ -594,6 +599,13 @@ IMAGE_SNIFF_FORMATS = {"image/jpeg": {"JPEG", "MPO"}, "image/png": {"PNG"},
 #   MP4/MOV: an ISO-BMFF `ftyp` box at offset 4.   WebM: the EBML magic.
 VIDEO_SNIFF = {"video/mp4": [(4, b"ftyp")], "video/quicktime": [(4, b"ftyp")],
                "video/webm": [(0, b"\x1a\x45\xdf\xa3")]}
+
+# The same idea for sound, and for the same reason: no transcoder here either, so the
+# container header is the check that is available.
+#   WAV: a RIFF chunk whose form type is WAVE.   OGG: the page magic.   M4A: ISO-BMFF.
+# MP3 is deliberately absent — it has no single signature (see _sniff_audio).
+AUDIO_SNIFF = {"audio/wav": [(0, b"RIFF"), (8, b"WAVE")], "audio/x-wav": [(0, b"RIFF"), (8, b"WAVE")],
+               "audio/ogg": [(0, b"OggS")], "audio/mp4": [(4, b"ftyp")], "audio/aac": [(4, b"ftyp")]}
 
 
 async def _read_capped(upload: UploadFile, limit: int = MAX_UPLOAD_BYTES) -> bytes:
@@ -666,6 +678,31 @@ def _sniff_video(data: bytes, declared: str) -> None:
     for offset, magic in VIDEO_SNIFF.get(declared, []):
         if data[offset:offset + len(magic)] == magic:
             return
+    raise HTTPException(400, f"File content does not look like {declared}")
+
+
+def _sniff_audio(data: bytes, declared: str) -> None:
+    """The audio counterpart, with two differences from `_sniff_video` worth naming.
+
+    The signature list is ALL of them, not any of them. WAV is a RIFF container and so is
+    AVI; only the form type at offset 8 tells them apart, so a rule that passed on the
+    first match would accept a video file announced as a wav.
+
+    MP3 has no single signature at all. A file with ID3 metadata starts with the tag; one
+    without starts at an audio frame, whose only fixed part is eleven set sync bits. Both
+    are checked, because either is a real MP3 and refusing the second would refuse the
+    output of half the encoders in use.
+    """
+    if declared == "audio/mpeg":
+        if data[:3] == b"ID3":
+            return
+        if len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0:
+            return
+        raise HTTPException(400, "File content does not look like an MP3")
+
+    signatures = AUDIO_SNIFF.get(declared, [])
+    if signatures and all(data[at:at + len(magic)] == magic for at, magic in signatures):
+        return
     raise HTTPException(400, f"File content does not look like {declared}")
 
 # ---------- Utility ----------
@@ -5096,8 +5133,11 @@ async def admin_upload_media(
         media_type = "image"
     elif declared in VIDEO_CONTENT_TYPES:
         media_type = "video"
+    elif declared in AUDIO_CONTENT_TYPES:
+        media_type = "audio"
     else:
-        raise HTTPException(400, "Unsupported file type — images (JPEG/PNG/WebP/GIF) or video (MP4/WebM/MOV) only")
+        raise HTTPException(400, "Unsupported file type — images (JPEG/PNG/WebP/GIF), video "
+                                 "(MP4/WebM/MOV) or audio (MP3/WAV/OGG/M4A) only")
 
     data = await _read_capped(file)
 
@@ -5105,6 +5145,9 @@ async def admin_upload_media(
         # Reassigns all three: re-encoding can legitimately change the format, and the
         # stored extension and Content-Type have to follow the bytes rather than the claim.
         data, content_type, ext = _reencode_image(data, declared)
+    elif media_type == "audio":
+        _sniff_audio(data, declared)
+        content_type, ext = declared, AUDIO_CONTENT_TYPES[declared]
     else:
         _sniff_video(data, declared)
         content_type, ext = declared, VIDEO_CONTENT_TYPES[declared]
@@ -5123,10 +5166,13 @@ async def admin_upload_media(
             thumbnail_url = await storage.save(f"{file_id}_thumb.jpg", buf.getvalue(), "image/jpeg")
         except Exception:
             logger.exception("Thumbnail generation failed for upload %s", file_id)
-    elif poster is not None:
+    elif media_type == "video" and poster is not None:
         # ffmpeg isn't a dependency here, so video posters are captured in the
         # browser at upload time and sent alongside. Treated as untrusted image
         # bytes: re-encoded through Pillow rather than written through as-is.
+        #
+        # Named to video rather than left as "anything that arrived with a poster":
+        # audio comes through here now too, and a sound file has no frame to capture.
         try:
             pdata = await _read_capped(poster)
             _reencode_image(pdata, poster.content_type or "image/jpeg")  # verify, then thumbnail
@@ -5142,7 +5188,10 @@ async def admin_upload_media(
         "url": url,
         "thumbnail_url": thumbnail_url or url,
         "media_type": media_type,
-        "has_poster": bool(thumbnail_url) if media_type == "video" else True,
+        # An image is its own poster and a video may have had one captured for it. Audio
+        # has no picture at all, and saying otherwise would hand a caller the sound file
+        # as an image URL.
+        "has_poster": bool(thumbnail_url) if media_type in ("video", "audio") else True,
     }
 
 

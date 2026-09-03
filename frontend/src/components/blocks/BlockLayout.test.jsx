@@ -633,11 +633,11 @@ describe("text is held off the screen edge", () => {
     ["text_panel", "p", { content: "Body." }],
     ["contact_form", "form", {}],
     ["newsletter", "form", {}],
-    ["cta_banner", '[data-testid="cta-heading"]', { heading: "Come" }],
     ["artists_grid", "h2", { heading: "Artists" }],
     ["events_grid", "h2", { heading: "Events" }],
     ["gallery_grid", "h2", { heading: "Gallery" }],
     ["split", "h2", { heading: "Split" }],
+    ["split_audio", "h2", { heading: "Split" }],
     ["video", '[data-testid="video-caption"]', { caption: "A caption", file_url: "/v.mp4" }],
   ])("%s keeps its text inset at full width", (type, sel, over) => {
     const c = full(type, over);
@@ -661,11 +661,13 @@ describe("text is held off the screen edge", () => {
     expect(inset(c.querySelector("h2"))).toBe(true);
   });
 
-  test("the CTA banner moves its photograph in with its text", () => {
-    // The exception, and also asked for: on a phone the columns stack, so the text lands
-    // under the image. Insetting only the text would leave the image hanging past it.
-    const c = full("cta_banner", { heading: "Come", image_url: "/i.jpg" });
-    expect(inset(c.querySelector('[data-testid="cta-image"]'))).toBe(true);
+  test("a split + audio block keeps its photograph at the edge too", () => {
+    // Same bargain as Split, which it is built from: the words move in, the picture does
+    // not — and here the picture carries no hairline either, so anything holding it off
+    // the edge would show as a gap rather than as a frame.
+    const c = full("split_audio", { heading: "Split", image_url: "/i.jpg" });
+    expect(inset(c.querySelector('[data-testid="split-audio-image"]'))).toBe(false);
+    expect(inset(c.querySelector("h2"))).toBe(true);
   });
 
   test("nothing is inset twice when the block is not full width", () => {
