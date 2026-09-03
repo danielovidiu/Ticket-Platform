@@ -93,3 +93,14 @@ describe("the window", () => {
     expect(at(1200 - FADE_DISTANCE)).toBeCloseTo(0, 5);
   });
 });
+
+describe("a hidden document", () => {
+  test("the reveal is still arithmetic, not a frame", () => {
+    /* requestAnimationFrame does not fire while a document is hidden, so the hook does
+       the work synchronously there instead of rate-limiting to a frame that never comes.
+       The sum itself has no opinion about visibility — this asserts the property the
+       hook depends on: given the numbers, the answer does not need a paint. */
+    expect(revealOpacity({ scrollY: 1200, innerHeight: 800, scrollHeight: 2000 })).toBe(1);
+    expect(revealOpacity({ scrollY: 0, innerHeight: 800, scrollHeight: 2000 })).toBe(0);
+  });
+});

@@ -361,11 +361,13 @@ export function TierSales({ waves }) {
       {tiers.map((w) => {
         const capacity = w.capacity ?? 0;
         const left = Math.max(0, w.available ?? capacity);
-        /* Tickets actually issued when the server has counted them, capacity-minus-left
-           otherwise. The two differ by whatever is held in a live checkout, and this row
-           is a glance at how a show is selling — where "held" reads as sold, because in
-           ten minutes it usually is. The editor's delete gate uses `sold` alone. */
-        const sold = Math.max(0, capacity - left);
+        /* Tickets actually issued, when the server has counted them — which on this
+           screen it always has. Capacity-minus-available is the fallback for any caller
+           without that count, and it is a DIFFERENT number: it also carries live
+           checkout holds and any capacity edit made since the sales. Preferring the real
+           count is what keeps this row agreeing with the sold count in the editor, where
+           the same number decides whether a tier may be deleted. */
+        const sold = w.sold ?? Math.max(0, capacity - left);
         const pct = capacity ? Math.round((sold / capacity) * 100) : 0;
         const state = w.status || "active";
         const pack = Math.max(1, Number(w.pack_size) || 1);

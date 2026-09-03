@@ -65,6 +65,13 @@ export function useFooterReveal() {
       setOpacity(revealOpacity(measure()));
     };
     const schedule = () => {
+      // requestAnimationFrame does not fire while the document is hidden — a background
+      // tab, or a window the compositor has stopped drawing. Rate-limiting to a frame
+      // that never comes means the value freezes at whatever it was when the page was
+      // last drawn, so returning to a tab whose content grew meanwhile finds a footer
+      // that disagrees with the page. There is no frame to spare there either, so the
+      // work is done straight away instead.
+      if (document.hidden) { update(); return; }
       if (frame) return;
       frame = requestAnimationFrame(update);
     };
@@ -72,6 +79,9 @@ export function useFooterReveal() {
     schedule();
     window.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("resize", schedule);
+    // Coming back to the tab: resync before the first paint the viewer will see, rather
+    // than waiting for them to scroll.
+    document.addEventListener("visibilitychange", schedule);
 
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
     observer?.observe(document.documentElement);
@@ -80,6 +90,7 @@ export function useFooterReveal() {
       if (frame) cancelAnimationFrame(frame);
       window.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
+      document.removeEventListener("visibilitychange", schedule);
       observer?.disconnect();
     };
   }, []);
