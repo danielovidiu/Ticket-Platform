@@ -785,6 +785,8 @@ export default function CMSEditor() {
               <div className="space-y-6">
                 <SiteContentEditor />
                 <div className="pt-2 border-t border-ink/10" />
+                <CorePagesEditor />
+                <div className="pt-2 border-t border-ink/10" />
                 <EventsSettingsEditor />
               </div>
             )}
@@ -1149,6 +1151,87 @@ function EventsSettingsEditor() {
         One tab on its own hides the bar and applies that filter silently — there is
         nothing to choose between.
       </div>
+    </div>
+  );
+}
+
+/**
+ * The eyebrow and name at the top of the four built-in section pages.
+ *
+ * These pages are React routes with no blocks, so the left rail cannot open them and
+ * there is nowhere else their two lines of type could be authored. Same reasoning, and
+ * the same immediate save, as the Events tab panel above it — two short strings per page
+ * do not need a draft to review.
+ *
+ * Clearing a box is a real edit, not a reset: the line disappears from the page and what
+ * was under it moves up. The built-in wording is one button away for anyone who wants it
+ * back, which is what makes emptying safe to offer.
+ */
+function CorePagesEditor() {
+  const [pages, setPages] = useState(null);
+  const [defaults, setDefaults] = useState({});
+  const pendingRef = useRef(null);
+
+  const pushToServer = useCallback(async (serialized) => {
+    await http.put("/admin/cms/core-pages", { pages: JSON.parse(serialized) });
+  }, []);
+
+  const headersSave = useAutosave({
+    getPending: () => (pendingRef.current ? JSON.stringify(pendingRef.current) : undefined),
+    save: pushToServer,
+  });
+
+  useEffect(() => {
+    http.get("/admin/cms/core-pages").then((r) => {
+      setPages(r.data.pages);
+      setDefaults(r.data.defaults || {});
+      pendingRef.current = r.data.pages;
+      headersSave.reset(JSON.stringify(r.data.pages));
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!pages) return <div className="text-[11px] text-ink-4 font-mono-x uppercase tracking-[0.2em]">Loading…</div>;
+
+  const edit = (slug, patch) => {
+    const next = { ...pages, [slug]: { ...pages[slug], ...patch } };
+    pendingRef.current = next;
+    setPages(next);
+    headersSave.bump();
+  };
+
+  return (
+    <div data-testid="core-pages-settings">
+      <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">Built-in page headings</div>
+      <div className="mt-1 text-[10px] text-ink-4 leading-relaxed">
+        Empty a box and that line goes; the rest of the page moves up.
+      </div>
+
+      {Object.keys(pages).map((slug) => {
+        const value = pages[slug];
+        const fallback = defaults[slug] || {};
+        const isDefault = value.eyebrow === (fallback.eyebrow || "") && value.heading === (fallback.heading || "");
+        return (
+          <div key={slug} className="mt-5">
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-3">/{slug}</div>
+              {!isDefault && (
+                <button onClick={() => edit(slug, { eyebrow: fallback.eyebrow || "", heading: fallback.heading || "" })}
+                        data-testid={`core-page-reset-${slug}`}
+                        className="font-mono-x text-[9px] uppercase tracking-[0.2em] text-ink-5 hover:text-ink">Reset</button>
+              )}
+            </div>
+            <input value={value.eyebrow} onChange={(e) => edit(slug, { eyebrow: e.target.value })}
+                   placeholder="Eyebrow" aria-label={`${slug} eyebrow`}
+                   data-testid={`core-page-eyebrow-${slug}`}
+                   className="input-x w-full mt-2 !py-2 !text-sm" />
+            <input value={value.heading} onChange={(e) => edit(slug, { heading: e.target.value })}
+                   placeholder="Name" aria-label={`${slug} name`}
+                   data-testid={`core-page-heading-${slug}`}
+                   className="input-x w-full mt-2 !py-2 !text-sm" />
+          </div>
+        );
+      })}
     </div>
   );
 }

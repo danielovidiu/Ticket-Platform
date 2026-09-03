@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { http } from "../api";
 import { useAuth, startLogin } from "../auth";
 import { mediaUrl } from "../lib/media";
+import BackLink from "../components/BackLink";
 import { useCart, ron } from "../lib/cart";
 
 export default function ProductDetail() {
@@ -61,66 +62,73 @@ export default function ProductDetail() {
   };
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10">
-      <div className="md:col-span-7">
-        <div className="aspect-square overflow-hidden border border-ink/10 bg-surface">
-          {images[imgIdx] ? (
-            <img src={mediaUrl(images[imgIdx])} alt={p.name} className="w-full h-full object-cover" data-testid="product-image" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center font-mono-x text-xs uppercase tracking-[0.3em] text-ink-5">No image</div>
-          )}
-        </div>
-        {images.length > 1 && (
-          <div className="mt-2 flex gap-2">
-            {images.map((src, i) => (
-              <button key={src + i} onClick={() => setImgIdx(i)}
-                      className={`w-20 h-20 overflow-hidden border ${i === imgIdx ? "border-ink" : "border-ink/10"}`}>
-                <img src={mediaUrl(src)} alt="" className="w-full h-full object-cover" />
-              </button>
-            ))}
+    /* The grid is wrapped rather than given a thirteenth child: a full-width row inside
+       it would inherit the 40px column gap under the link, and the sticky card in the
+       right column needs the grid itself as its containing block. */
+    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-12">
+      <BackLink to="/shop" testId="product-back">All products</BackLink>
+
+      <div className="grid md:grid-cols-12 gap-10 mt-6">
+        <div className="md:col-span-7">
+          <div className="aspect-square overflow-hidden border border-ink/10 bg-surface">
+            {images[imgIdx] ? (
+              <img src={mediaUrl(images[imgIdx])} alt={p.name} className="w-full h-full object-cover" data-testid="product-image" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-mono-x text-xs uppercase tracking-[0.3em] text-ink-5">No image</div>
+            )}
           </div>
-        )}
-      </div>
-
-      <div className="md:col-span-5">
-        <div className="border border-ink/10 bg-surface p-6 md:p-8 sticky top-24">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">
-            {[p.category, p.gender].filter(Boolean).join(" · ")}
-          </div>
-          <h1 data-testid="product-title" className="font-display text-4xl uppercase font-black tracking-tighter mt-2 leading-none">{p.name}</h1>
-          <div className="font-mono-x text-xl mt-4">{ron(p.price_ron)}</div>
-          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">VAT included</div>
-
-          {p.description && <p className="mt-6 text-ink-2 text-sm leading-relaxed">{p.description}</p>}
-
-          <div className="mt-8">
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Size</div>
-            <div className="flex flex-wrap gap-2" data-testid="size-picker">
-              {p.variants.map((v) => (
-                <button
-                  key={v.variant_id}
-                  onClick={() => v.in_stock && setVariantId(v.variant_id)}
-                  disabled={!v.in_stock}
-                  title={v.in_stock ? v.size : `${v.size} — sold out`}
-                  data-testid={`size-${v.size}`}
-                  className={`px-4 py-2 border font-mono-x text-xs uppercase tracking-[0.15em] transition-colors ${
-                    v.variant_id === variantId ? "bg-ink text-page border-ink"
-                      : v.in_stock ? "border-ink/25 text-ink-2 hover:border-ink"
-                      : "border-ink/10 text-ink-5 line-through cursor-not-allowed"}`}>
-                  {v.size || "One size"}
+          {images.length > 1 && (
+            <div className="mt-2 flex gap-2">
+              {images.map((src, i) => (
+                <button key={src + i} onClick={() => setImgIdx(i)}
+                        className={`w-20 h-20 overflow-hidden border ${i === imgIdx ? "border-ink" : "border-ink/10"}`}>
+                  <img src={mediaUrl(src)} alt="" className="w-full h-full object-cover" />
                 </button>
               ))}
             </div>
-            {variant && <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-5 mt-2">SKU {variant.sku}</div>}
-          </div>
+          )}
+        </div>
 
-          <button onClick={addToCart} disabled={busy || !p.in_stock || !variant?.in_stock}
-                  data-testid="add-to-cart" className="btn-accent w-full mt-8 disabled:opacity-40">
-            {!p.in_stock ? "SOLD OUT" : busy ? "…" : user ? "ADD TO CART" : "SIGN IN TO BUY"}
-          </button>
+        <div className="md:col-span-5">
+          <div className="border border-ink/10 bg-surface p-6 md:p-8 sticky top-24">
+            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">
+              {[p.category, p.gender].filter(Boolean).join(" · ")}
+            </div>
+            <h1 data-testid="product-title" className="font-display text-4xl uppercase font-black tracking-tighter mt-2 leading-none">{p.name}</h1>
+            <div className="font-mono-x text-xl mt-4">{ron(p.price_ron)}</div>
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">VAT included</div>
 
-          <div className="mt-4 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 leading-relaxed">
-            Ships from Bucharest · Romania &amp; EU · 14-day returns
+            {p.description && <p className="mt-6 text-ink-2 text-sm leading-relaxed">{p.description}</p>}
+
+            <div className="mt-8">
+              <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Size</div>
+              <div className="flex flex-wrap gap-2" data-testid="size-picker">
+                {p.variants.map((v) => (
+                  <button
+                    key={v.variant_id}
+                    onClick={() => v.in_stock && setVariantId(v.variant_id)}
+                    disabled={!v.in_stock}
+                    title={v.in_stock ? v.size : `${v.size} — sold out`}
+                    data-testid={`size-${v.size}`}
+                    className={`px-4 py-2 border font-mono-x text-xs uppercase tracking-[0.15em] transition-colors ${
+                      v.variant_id === variantId ? "bg-ink text-page border-ink"
+                        : v.in_stock ? "border-ink/25 text-ink-2 hover:border-ink"
+                        : "border-ink/10 text-ink-5 line-through cursor-not-allowed"}`}>
+                    {v.size || "One size"}
+                  </button>
+                ))}
+              </div>
+              {variant && <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-5 mt-2">SKU {variant.sku}</div>}
+            </div>
+
+            <button onClick={addToCart} disabled={busy || !p.in_stock || !variant?.in_stock}
+                    data-testid="add-to-cart" className="btn-accent w-full mt-8 disabled:opacity-40">
+              {!p.in_stock ? "SOLD OUT" : busy ? "…" : user ? "ADD TO CART" : "SIGN IN TO BUY"}
+            </button>
+
+            <div className="mt-4 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 leading-relaxed">
+              Ships from Bucharest · Romania &amp; EU · 14-day returns
+            </div>
           </div>
         </div>
       </div>

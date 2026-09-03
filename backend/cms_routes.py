@@ -5,7 +5,7 @@ Keeps content and theme as structured JSON in Mongo — the frontend
 renders everything dynamically from that data.
 """
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 import json
 import re
 import uuid
@@ -227,6 +227,41 @@ async def ensure_core_nav_items(db):
         if result.upserted_id is not None:
             created += 1
     return created
+
+
+# The heading and eyebrow at the top of each built-in section page.
+#
+# These four pages are React routes with no blocks, so their two lines of type were
+# literals in the JSX — a white-label customer who runs a bookshop got "Programme" over
+# their events and could do nothing about it. They are content, and content belongs in
+# the CMS, so they live here for the same reason the Events tab set does.
+#
+# The values below are what the pages used to hardcode, which is what makes this change
+# invisible to a site that never opens the panel.
+CORE_PAGE_HEADERS = {
+    "events": {"eyebrow": "Programme", "heading": "Events"},
+    "artists": {"eyebrow": "Roster", "heading": "Artists"},
+    "gallery": {"eyebrow": "Documentation", "heading": "Gallery"},
+    "shop": {"eyebrow": "Merchandise", "heading": "Shop"},
+}
+
+
+class CorePageHeaderIn(ApiModel):
+    """One built-in page's two lines. Blank means blank — see CorePageHeadersIn."""
+    eyebrow: str = ""
+    heading: str = ""
+
+
+class CorePageHeadersIn(ApiModel):
+    """The headings for the built-in section pages, keyed by the slugs above.
+
+    A page may be sent on its own; the ones left out keep whatever they had. Within a
+    page that IS sent, both fields are written verbatim, so an emptied box empties the
+    line on the site rather than falling back to the built-in wording. That is the same
+    "blank means BLANK" rule the site settings follow, and for the same reason: an editor
+    who clears a field and is told it saved should not find the old text still there.
+    """
+    pages: Dict[str, CorePageHeaderIn] = Field(default_factory=dict, max_length=8)
 
 
 class EventsSettingsIn(ApiModel):
@@ -742,6 +777,53 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
             upsert=True,
         )
         return await _events_settings()
+
+    # ---------- Built-in page headings ----------
+    #
+    # One document for all four pages, and one request for the page that needs it. They
+    # were four sets of literals in four JSX files; a per-page endpoint would have been
+    # four round trips to say something this small.
+
+    async def _core_page_headers() -> dict:
+        doc = await db.site_settings.find_one({"_id": "core_pages"}, {"_id": 0}) or {}
+        out = {}
+        for slug, default in CORE_PAGE_HEADERS.items():
+            stored = doc.get(slug)
+            # A page that has never been edited has no key here and keeps the built-in
+            # wording. Once it HAS been edited the stored pair is the whole answer,
+            # including its empty halves — which is what lets a line be deleted rather
+            # than only rewritten.
+            if isinstance(stored, dict):
+                out[slug] = {"eyebrow": str(stored.get("eyebrow", "")),
+                             "heading": str(stored.get("heading", ""))}
+            else:
+                out[slug] = dict(default)
+        return out
+
+    @api.get("/cms/core-pages")
+    async def get_core_page_headers():
+        """Public: what Events, Artists, Gallery and Shop print at the top."""
+        return await _core_page_headers()
+
+    @api.get("/admin/cms/core-pages")
+    async def admin_get_core_page_headers(user=Depends(require_admin_or_editor)):
+        # `defaults` so the editor can offer a "back to the built-in wording" affordance
+        # without hardcoding the same four pairs a second time in the frontend.
+        return {"pages": await _core_page_headers(), "defaults": CORE_PAGE_HEADERS}
+
+    @api.put("/admin/cms/core-pages")
+    async def admin_put_core_page_headers(body: CorePageHeadersIn,
+                                          user=Depends(require_admin_or_editor)):
+        unknown = [s for s in body.pages if s not in CORE_PAGE_HEADERS]
+        if unknown:
+            raise HTTPException(400, f"No such built-in page: {', '.join(sorted(unknown))}")
+        # Whitespace is not content. Trimmed on the way in so that a box holding one
+        # space reads as deleted on the site, which is what it looks like in the editor.
+        patch = {slug: {"eyebrow": value.eyebrow.strip(), "heading": value.heading.strip()}
+                 for slug, value in body.pages.items()}
+        if patch:
+            await db.site_settings.update_one({"_id": "core_pages"}, {"$set": patch}, upsert=True)
+        return await _core_page_headers()
 
     @api.get("/cms/nav")
     async def get_public_nav(request: Request):

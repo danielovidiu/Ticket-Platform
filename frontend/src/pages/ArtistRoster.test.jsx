@@ -86,19 +86,23 @@ describe("the filter", () => {
 });
 
 describe("the tile's hover", () => {
-  test("matches Gallery and Shop: border goes solid, photo dims", async () => {
+  test("matches Gallery: border goes solid, photo comes back into colour", async () => {
     mount();
     const tile = await screen.findByTestId("artist-ana");
     expect(tile.className).toMatch(/hover:border-ink/);
     expect(tile.className).toMatch(/transition-colors/);
 
     const img = within(tile).getByRole("img");
-    expect(img.className).toMatch(/group-hover:opacity-80/);
+    expect(img.className).toMatch(/\bgrayscale\b/);
+    expect(img.className).toMatch(/group-hover:grayscale-0/);
   });
 
-  test("no greyscale left, which was the thing that made it a different card", async () => {
+  test("the dim it used to do is gone, so the two grids do not hover two ways", async () => {
+    // This assertion used to run the other way round — greyscale was removed from the
+    // roster precisely so it would match the other grids, back when Gallery dimmed too.
+    // Gallery reveals now, and the roster follows it rather than being left behind.
     mount();
     const img = within(await screen.findByTestId("artist-ana")).getByRole("img");
-    expect(img.className).not.toMatch(/grayscale/);
+    expect(img.className).not.toMatch(/group-hover:opacity-80/);
   });
 });
