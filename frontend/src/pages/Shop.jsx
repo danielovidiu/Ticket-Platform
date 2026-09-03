@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { http } from "../api";
+import { useCorePageHeader } from "../lib/corePageHeader";
+import PageHeader from "../components/PageHeader";
 import { mediaUrl } from "../lib/media";
 import { ron } from "../lib/cart";
 
@@ -46,6 +48,7 @@ export default function Shop() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
+  const header = useCorePageHeader("shop");
 
   // Filters live in the URL so a filtered view can be linked and survives a reload.
   const category = params.get("category") || "";
@@ -84,11 +87,15 @@ export default function Shop() {
   );
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Merchandise</div>
-      <h1 className="font-display text-4xl sm:text-5xl md:text-7xl uppercase font-black tracking-tighter mt-2">Shop</h1>
+    /* space-y rather than margins on the sections: the header is CMS content and can be
+       emptied, and a gap that belongs to the thing above it disappears with it. */
+    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16 space-y-10">
+      {/* A smaller top step than the other three sections carry: this heading has to
+          survive a narrow phone next to a filter row, so it starts at text-4xl. */}
+      <PageHeader header={header} eyebrowTestId="shop-eyebrow" headingTestId="shop-heading"
+                  headingClass="font-display text-4xl sm:text-5xl md:text-7xl uppercase font-black tracking-tighter" />
 
-      <div className="mt-10 flex flex-wrap gap-2 items-center" data-testid="shop-filters">
+      <div className="flex flex-wrap gap-2 items-center" data-testid="shop-filters">
         <Chip active={!category} onClick={() => setFilter("category", "")} testId="filter-all">All</Chip>
         {categories.map((c) => (
           <Chip key={c} active={category === c} onClick={() => setFilter("category", c)} testId={`filter-cat-${c}`}>{c}</Chip>
@@ -108,7 +115,7 @@ export default function Shop() {
         </span>
       </div>
 
-      <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6 items-stretch" data-testid="shop-grid">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6 items-stretch" data-testid="shop-grid">
         {filtered.map((p) => <ProductCard key={p.product_id} p={p} />)}
         {!loading && filtered.length === 0 && (
           <div className="col-span-full border border-dashed border-ink/10 p-10 text-center text-ink-4 font-mono-x text-xs uppercase tracking-[0.3em]">

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
+import { useCorePageHeader } from "../lib/corePageHeader";
+import PageHeader from "../components/PageHeader";
 
 // How many discipline tags a tile shows before it stops listing them. Three fits the
 // column at every breakpoint without wrapping to a third line; the rest are counted.
@@ -19,6 +21,7 @@ const TABS = [
 export default function Artists() {
   const [artists, setArtists] = useState([]);
   const [tab, setTab] = useState("all");
+  const header = useCorePageHeader("artists");
   // Already A-Z from the server, which folds case — see list_artists. Sorting again here
   // would only be a second opinion that could disagree.
   useEffect(() => { http.get("/artists").then((r) => setArtists(r.data)).catch(() => {}); }, []);
@@ -28,21 +31,26 @@ export default function Artists() {
   const shown = tab === "all" ? artists : artists.filter((a) => (a.collab || "resident") === tab);
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Roster</div>
-      <div className="flex flex-wrap items-end justify-between gap-6 mt-2">
-        <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter">Artists</h1>
-        <div className="flex gap-2" data-testid="artist-tabs">
-          {TABS.map(([value, label]) => (
-            <button key={value} onClick={() => setTab(value)} data-testid={`artist-tab-${value}`}
-                    aria-pressed={tab === value}
-                    className={`px-4 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${tab === value ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-4">
+    /* space-y rather than a margin on the grid: the header is CMS content and can be
+       emptied, and a gap that belongs to the thing above it disappears with it. */
+    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16 space-y-12">
+      <PageHeader
+        header={header}
+        eyebrowTestId="artists-eyebrow"
+        headingTestId="artists-heading"
+        aside={(
+          <div className="flex gap-2" data-testid="artist-tabs">
+            {TABS.map(([value, label]) => (
+              <button key={value} onClick={() => setTab(value)} data-testid={`artist-tab-${value}`}
+                      aria-pressed={tab === value}
+                      className={`px-4 py-2 border font-mono-x text-xs uppercase tracking-[0.2em] ${tab === value ? "bg-ink text-page border-ink" : "border-ink/20 text-ink-2"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {shown.map((a) => {
           const tags = a.disciplines || [];
           const rest = tags.length - SHOWN;

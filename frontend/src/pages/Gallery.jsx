@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
 import { monthYear } from "../lib/dates";
+import { useCorePageHeader } from "../lib/corePageHeader";
+import PageHeader from "../components/PageHeader";
 
 /** A video row carries a real poster only when its thumbnail differs from the
  * video URL — the upload endpoint reuses the video URL when no frame could be
@@ -66,6 +68,7 @@ function AlbumCard({ album }) {
 export default function Gallery() {
   const [albums, setAlbums] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const header = useCorePageHeader("gallery");
 
   useEffect(() => {
     http.get("/gallery/clusters")
@@ -75,13 +78,12 @@ export default function Gallery() {
   }, []);
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Documentation</div>
-      <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-2" data-testid="gallery-heading">
-        Gallery
-      </h1>
+    /* space-y rather than a margin on the grid: the header is CMS content and can be
+       emptied, and a gap that belongs to the thing above it disappears with it. */
+    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16 space-y-12">
+      <PageHeader header={header} headingTestId="gallery-heading" eyebrowTestId="gallery-eyebrow" />
 
-      <div className="mt-12 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6 items-stretch">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6 items-stretch">
         {albums.map((a) => <AlbumCard key={a.album_id} album={a} />)}
         {loaded && albums.length === 0 && (
           <div className="col-span-full border border-dashed border-ink/10 p-10 text-center text-ink-4 font-mono-x text-xs uppercase tracking-[0.3em]">Nothing here yet</div>

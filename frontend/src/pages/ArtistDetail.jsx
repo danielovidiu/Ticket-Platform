@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
+import BackLink from "../components/BackLink";
 import { renderRich, excerpt } from "../lib/richText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 
@@ -83,7 +84,8 @@ export default function ArtistDetail() {
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
-      <div className="grid md:grid-cols-12 gap-10">
+      <BackLink to="/artists" testId="artist-back">All artists</BackLink>
+      <div className="grid md:grid-cols-12 gap-10 mt-6">
         {a.image_url && (
           <div className="md:col-span-5">
             <div className="aspect-square overflow-hidden border border-ink/10"><img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover" /></div>
@@ -127,8 +129,6 @@ export default function ArtistDetail() {
               </div>
             </div>
           )}
-
-          <Link to="/artists" className="mt-10 inline-block font-mono-x text-xs uppercase tracking-[0.3em] text-ink-3 hover:text-ink">← All artists</Link>
         </div>
       </div>
 

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { http } from "../api";
+import { useCorePageHeader } from "../lib/corePageHeader";
+import PageHeader from "../components/PageHeader";
 
 const fmtDate = (iso) => {
   if (!iso) return "";
@@ -31,6 +33,7 @@ export default function Events() {
   // and then swap it under the visitor a moment later.
   const [settings, setSettings] = useState(null);
   const [tab, setTab] = useState(null);
+  const header = useCorePageHeader("events");
 
   useEffect(() => {
     http.get("/cms/events-settings")
@@ -46,14 +49,17 @@ export default function Events() {
   const tabs = settings?.tabs || [];
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
-      <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Programme</div>
-      <div className="flex flex-wrap items-end justify-between gap-6 mt-3">
-        <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter">Events</h1>
-        {/* One tab is not a choice, so the bar only appears when there is something to
-            choose between. An editor who leaves a single tab enabled gets that filter
-            applied silently rather than a control that cannot be changed. */}
-        {tabs.length > 1 && (
+    /* space-y rather than margins on the sections: the header is CMS content and can be
+       emptied, and a gap that belongs to the thing above it disappears with it. */
+    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16 space-y-12">
+      <PageHeader
+        header={header}
+        eyebrowTestId="events-eyebrow"
+        headingTestId="events-heading"
+        /* One tab is not a choice, so the bar only appears when there is something to
+           choose between. An editor who leaves a single tab enabled gets that filter
+           applied silently rather than a control that cannot be changed. */
+        aside={tabs.length > 1 ? (
           <div className="flex gap-2" data-testid="event-tabs">
             {tabs.map((t) => (
               <button key={t} onClick={() => setTab(t)} data-testid={`tab-${t}`}
@@ -63,10 +69,10 @@ export default function Events() {
               </button>
             ))}
           </div>
-        )}
-      </div>
+        ) : null}
+      />
 
-      <div className="mt-12 divide-y divide-ink/10 border-y border-ink/10">
+      <div className="divide-y divide-ink/10 border-y border-ink/10">
         {events.map((e) => (
           <Link key={e.event_id} to={`/events/${e.slug}`} data-testid={`event-row-${e.slug}`}
                 className="grid grid-cols-12 gap-4 py-8 group hover:bg-ink/[0.02] transition-colors">

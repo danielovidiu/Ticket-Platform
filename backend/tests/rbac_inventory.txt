@@ -25,6 +25,8 @@ admin  PUT    /api/admin/artists/disciplines
 admin  DELETE /api/admin/artists/{artist_id}
 admin  PATCH  /api/admin/artists/{artist_id}
 admin  GET    /api/admin/audit
+editor GET    /api/admin/cms/core-pages
+editor PUT    /api/admin/cms/core-pages
 editor GET    /api/admin/cms/events-settings
 editor PUT    /api/admin/cms/events-settings
 editor GET    /api/admin/cms/fonts

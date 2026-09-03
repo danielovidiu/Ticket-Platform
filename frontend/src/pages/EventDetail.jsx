@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Play } from "lucide-react";
 import { renderRich } from "../lib/richText";
 import { mediaUrl } from "../lib/media";
+import BackLink from "../components/BackLink";
 import { ASPECTS } from "../components/blocks";
 import { Lightbox } from "../components/ui/lightbox";
 import { getConsent } from "../components/CookieConsent";
@@ -213,216 +214,223 @@ export default function EventDetail() {
   if (!event) return <div className="p-16 text-center text-ink-4 font-mono-x uppercase text-xs tracking-[0.3em]">Loading…</div>;
 
   return (
-    /* Three grid blocks rather than two columns, so the DOM order IS the mobile order:
-       photo and title, then the box office, then the description, then the album. The
-       box office used to be the second of two columns, which put the buy button below
-       the entire description and gallery on a phone — the one thing a visitor came for,
-       past everything they had to scroll through first.
+    /* The grid is wrapped rather than given a full-width first row: a row of its own
+       would inherit the 40px column gap under the back link, and the bottom clearance
+       the mobile buy bar needs belongs to the page, not to the columns. */
+    <div className={`max-w-[1400px] mx-auto px-6 md:px-10 py-12 ${soldOut ? "" : "pb-32 md:pb-12"}`}>
+      <BackLink to="/events" testId="event-back">All events</BackLink>
 
-       On md the box office spans both rows of the left stack, which is what gives the
-       sticky card a tall enough containing block to travel in, exactly as the two-column
-       version did. */
-    <div className={`max-w-[1400px] mx-auto px-6 md:px-10 py-12 grid md:grid-cols-12 gap-10 items-start ${soldOut ? "" : "pb-32 md:pb-12"}`}>
-      <div className="md:col-span-7">
-        {/* The shape the event itself carries. Hardcoded 4:3 until the format became an
-            event's own property; absent still means 4:3, so nothing published moves. */}
-        <div className={`${ASPECTS[event.image_aspect] || "aspect-[4/3]"} overflow-hidden border border-ink/10`}>
-          <img src={mediaUrl(event.image_url)} alt={event.title} className="w-full h-full object-cover" />
+      {/* Three grid blocks rather than two columns, so the DOM order IS the mobile order:
+          photo and title, then the box office, then the description, then the album. The
+          box office used to be the second of two columns, which put the buy button below
+          the entire description and gallery on a phone — the one thing a visitor came for,
+          past everything they had to scroll through first.
+
+          On md the box office spans both rows of the left stack, which is what gives the
+          sticky card a tall enough containing block to travel in, exactly as the two-column
+          version did. */}
+      <div className="mt-6 grid md:grid-cols-12 gap-10 items-start">
+        <div className="md:col-span-7">
+          {/* The shape the event itself carries. Hardcoded 4:3 until the format became an
+              event's own property; absent still means 4:3, so nothing published moves. */}
+          <div className={`${ASPECTS[event.image_aspect] || "aspect-[4/3]"} overflow-hidden border border-ink/10`}>
+            <img src={mediaUrl(event.image_url)} alt={event.title} className="w-full h-full object-cover" />
+          </div>
+          <div className="mt-8 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-3">
+            {fmtDate(event.starts_at)} · Doors {fmtTime(event.doors_open_at || event.starts_at)} · {[event.venue, event.city].filter(Boolean).join(", ")}
+          </div>
+          <h1 data-testid="event-title" className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-4 leading-none">
+            {event.title}
+          </h1>
         </div>
-        <div className="mt-8 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-3">
-          {fmtDate(event.starts_at)} · Doors {fmtTime(event.doors_open_at || event.starts_at)} · {[event.venue, event.city].filter(Boolean).join(", ")}
-        </div>
-        <h1 data-testid="event-title" className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-4 leading-none">
-          {event.title}
-        </h1>
-      </div>
 
-      <div className="md:col-span-5 md:row-span-2">
-        <div className="border border-ink/10 bg-surface p-6 md:p-8 sticky top-24">
-          <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Box Office</div>
-          <div className="font-display text-2xl uppercase font-bold mt-2">Buy Tickets</div>
+        <div className="md:col-span-5 md:row-span-2">
+          <div className="border border-ink/10 bg-surface p-6 md:p-8 sticky top-24">
+            <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">Box Office</div>
+            <div className="font-display text-2xl uppercase font-bold mt-2">Buy Tickets</div>
 
-          {special && (
-            <div className="mt-4 border border-brand p-3 font-mono-x text-xs uppercase tracking-[0.2em] text-brand">
-              INVITE · {special.label} · {ron(special.price_ron)}
-            </div>
-          )}
-
-          {soldOut || paused ? (
-            <div data-testid={paused ? "paused-message" : "sold-out-message"}
-                 className="mt-6 border border-ink/15 bg-ink/5 p-6 text-center">
-              <div className="font-display text-2xl uppercase font-bold tracking-tight">
-                {/* Two different pieces of news. A sell-out is final and the promoter gets
-                    to word it; a pause is temporary and the tickets still exist, so
-                    borrowing the sold-out message for it would be untrue. */}
-                {paused ? "Not On Sale" : (event.sold_out_message || "Sold Out")}
+            {special && (
+              <div className="mt-4 border border-brand p-3 font-mono-x text-xs uppercase tracking-[0.2em] text-brand">
+                INVITE · {special.label} · {ron(special.price_ron)}
               </div>
-              {paused && (
-                <div className="mt-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
-                  Sales are paused — check back
+            )}
+
+            {soldOut || paused ? (
+              <div data-testid={paused ? "paused-message" : "sold-out-message"}
+                   className="mt-6 border border-ink/15 bg-ink/5 p-6 text-center">
+                <div className="font-display text-2xl uppercase font-bold tracking-tight">
+                  {/* Two different pieces of news. A sell-out is final and the promoter gets
+                      to word it; a pause is temporary and the tickets still exist, so
+                      borrowing the sold-out message for it would be untrue. */}
+                  {paused ? "Not On Sale" : (event.sold_out_message || "Sold Out")}
                 </div>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="mt-6 space-y-3">
-                {!special && event.waves.map((w) => {
-                  const pack = Math.max(1, Number(w.pack_size) || 1);
-                  const off = !w.is_active || w.available <= 0;
-                  return (
-                  <button key={w.wave_id} onClick={() => setWaveId(w.wave_id)} data-testid={`wave-${w.wave_id}`}
-                          disabled={off}
-                          className={`w-full text-left border p-4 transition-colors ${waveId===w.wave_id ? "border-ink bg-ink/5" : "border-ink/15"} ${off ? "opacity-40 cursor-not-allowed" : "hover:border-ink"}`}>
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="font-display uppercase font-bold">{w.name}</div>
-                        {/* The exact remaining count is not the buyer's business — it
-                            tells competitors and scalpers how a release is going, and a
-                            large number reads as "no hurry" while a small one reads as
-                            pressure. Only the two facts that change a decision are shown:
-                            it is gone, or it is nearly gone.
-
-                            A paused tier says so instead of any of that. It is listed
-                            precisely so a buyer knows it exists, and "sold out" would be
-                            a lie about a tier that still has stock behind it. */}
-                        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
-                          {w.status === "paused"
-                            ? <span data-testid={`wave-paused-${w.wave_id}`}>Not on sale</span>
-                            : w.available <= 0
-                              ? "SOLD OUT"
-                              : w.available < LOW_STOCK_AT
-                                ? <span className="text-brand" data-testid={`wave-low-stock-${w.wave_id}`}>Only a few left</span>
-                                : "Available"}
-                        </div>
-                      </div>
-                      {/* The pack price is what is charged, so it is the number in the
-                          large type; the per-ticket rate sits under it because "300 for
-                          four" and "75 each" are the two halves of the same offer and a
-                          buyer compares tiers on the second one. */}
-                      <div className="font-mono-x text-right shrink-0">
-                        <div>{ron(w.price_ron)}</div>
-                        {pack > 1 && (
-                          <div className="text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1"
-                               data-testid={`wave-pack-${w.wave_id}`}>
-                            {pack} tickets · {ron(w.price_ron / pack)} each
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-6 grid grid-cols-2 gap-3">
-                <label className="col-span-1">
-                  <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">
-                    {packSize > 1 ? `Packs of ${packSize}` : "Quantity"}
+                {paused && (
+                  <div className="mt-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
+                    Sales are paused — check back
                   </div>
-                  <select value={qty} onChange={(e) => setQty(Number(e.target.value))} data-testid="qty-select" className="input-x">
-                    {/* On a pack tier the option is the pack and the ticket count follows
-                        it, so nobody buys "2" believing they are getting two tickets. */}
-                    {qtyOptions.map(n => <option key={n} value={n}>{packSize > 1 ? `${n} (${n * packSize} tickets)` : n}</option>)}
-                  </select>
-                </label>
-                {!special && (
-                  <label className="col-span-1">
-                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Discount code</div>
-                    <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="CODE" data-testid="discount-input" className="input-x uppercase" />
-                  </label>
                 )}
               </div>
+            ) : (
+              <>
+                <div className="mt-6 space-y-3">
+                  {!special && event.waves.map((w) => {
+                    const pack = Math.max(1, Number(w.pack_size) || 1);
+                    const off = !w.is_active || w.available <= 0;
+                    return (
+                    <button key={w.wave_id} onClick={() => setWaveId(w.wave_id)} data-testid={`wave-${w.wave_id}`}
+                            disabled={off}
+                            className={`w-full text-left border p-4 transition-colors ${waveId===w.wave_id ? "border-ink bg-ink/5" : "border-ink/15"} ${off ? "opacity-40 cursor-not-allowed" : "hover:border-ink"}`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-display uppercase font-bold">{w.name}</div>
+                          {/* The exact remaining count is not the buyer's business — it
+                              tells competitors and scalpers how a release is going, and a
+                              large number reads as "no hurry" while a small one reads as
+                              pressure. Only the two facts that change a decision are shown:
+                              it is gone, or it is nearly gone.
 
-              <div className="mt-6 hairline pt-6">
-                <div className="flex justify-between font-mono-x text-sm">
-                  <span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Subtotal</span>
-                  <span>{ron(total)}</span>
-                </div>
-                <div className="flex justify-between mt-3 items-center">
-                  <span className="font-mono-x uppercase text-xs tracking-[0.2em] text-ink-3">Total</span>
-                  <span className="font-display text-3xl font-bold">{ron(total)}</span>
-                </div>
-              </div>
-
-              <button onClick={reserve} disabled={busy} data-testid="reserve-btn" className="btn-accent w-full mt-6">
-                {busy ? "HOLDING…" : "HOLD & CHECKOUT · 10 MIN"}
-              </button>
-              <p className="mt-4 text-xs text-ink-4 leading-relaxed">
-                Tickets are held for 10 minutes while you pay via Stripe. All sales final unless the event is cancelled.
-                Max {event.max_tickets_per_user} tickets per person.
-              </p>
-            </>
-          )}
-        </div>
-      </div>
-
-      <div className="md:col-span-7 md:col-start-1">
-        <Collapsible lines={10} testId="event-description">
-          {renderRich(event.description, { paraClassName: "text-ink-2 text-lg leading-relaxed max-w-2xl mt-4 first:mt-0" })}
-        </Collapsible>
-
-        {(event.albums || []).filter((a) => a.count > 0).map((album, ai) => (
-          <div className="mt-12" key={album.album_id} data-testid={`event-album-${ai}`}>
-            <div className="flex items-baseline justify-between gap-3 mb-4">
-              <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{album.title} · {album.count}</div>
-              {/* Each album has a page of its own; the event shows it inline and links there. */}
-              <Link to={`/gallery/${album.slug}`} className="font-mono-x text-[10px] uppercase tracking-[0.25em] text-ink-4 hover:text-ink shrink-0"
-                    data-testid={`event-album-link-${ai}`}>
-                Open ↗
-              </Link>
-            </div>
-            <div className="columns-2 sm:columns-3 gap-2">
-              {album.items.map((g, i) => (
-                <button
-                  key={g.gallery_id}
-                  onClick={() => setLb({ album, index: i })}
-                  data-testid={`album-thumb-${ai}-${i}`}
-                  className="mb-2 block w-full break-inside-avoid relative group"
-                >
-                  {g.media_type === "video" ? (
-                    <>
-                      {/* Prefer the poster captured at upload: it renders at the same
-                          size as a photo and costs one image request instead of a
-                          video decode per tile. Items without a poster fall back. */}
-                      {g.thumbnail_url && g.thumbnail_url !== g.image_url ? (
-                        <img src={mediaUrl(g.thumbnail_url)} alt={g.caption || ""} loading="lazy" className="w-full object-cover" />
-                      ) : (
-                        <video src={mediaUrl(g.image_url)} className="w-full object-cover" muted preload="metadata" />
-                      )}
-                      <div className="absolute inset-0 flex items-center justify-center bg-scrim/20 group-hover:bg-scrim/10 transition-colors">
-                        <Play size={28} className="text-ink" fill="white" />
+                              A paused tier says so instead of any of that. It is listed
+                              precisely so a buyer knows it exists, and "sold out" would be
+                              a lie about a tier that still has stock behind it. */}
+                          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
+                            {w.status === "paused"
+                              ? <span data-testid={`wave-paused-${w.wave_id}`}>Not on sale</span>
+                              : w.available <= 0
+                                ? "SOLD OUT"
+                                : w.available < LOW_STOCK_AT
+                                  ? <span className="text-brand" data-testid={`wave-low-stock-${w.wave_id}`}>Only a few left</span>
+                                  : "Available"}
+                          </div>
+                        </div>
+                        {/* The pack price is what is charged, so it is the number in the
+                            large type; the per-ticket rate sits under it because "300 for
+                            four" and "75 each" are the two halves of the same offer and a
+                            buyer compares tiers on the second one. */}
+                        <div className="font-mono-x text-right shrink-0">
+                          <div>{ron(w.price_ron)}</div>
+                          {pack > 1 && (
+                            <div className="text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1"
+                                 data-testid={`wave-pack-${w.wave_id}`}>
+                              {pack} tickets · {ron(w.price_ron / pack)} each
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </>
-                  ) : (
-                    <img
-                      src={mediaUrl(g.thumbnail_url || g.image_url)}
-                      alt={g.caption || ""}
-                      loading="lazy"
-                      className="w-full object-cover group-hover:opacity-80 transition-opacity"
-                    />
+                    </button>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-6 grid grid-cols-2 gap-3">
+                  <label className="col-span-1">
+                    <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">
+                      {packSize > 1 ? `Packs of ${packSize}` : "Quantity"}
+                    </div>
+                    <select value={qty} onChange={(e) => setQty(Number(e.target.value))} data-testid="qty-select" className="input-x">
+                      {/* On a pack tier the option is the pack and the ticket count follows
+                          it, so nobody buys "2" believing they are getting two tickets. */}
+                      {qtyOptions.map(n => <option key={n} value={n}>{packSize > 1 ? `${n} (${n * packSize} tickets)` : n}</option>)}
+                    </select>
+                  </label>
+                  {!special && (
+                    <label className="col-span-1">
+                      <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Discount code</div>
+                      <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="CODE" data-testid="discount-input" className="input-x uppercase" />
+                    </label>
                   )}
+                </div>
+
+                <div className="mt-6 hairline pt-6">
+                  <div className="flex justify-between font-mono-x text-sm">
+                    <span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Subtotal</span>
+                    <span>{ron(total)}</span>
+                  </div>
+                  <div className="flex justify-between mt-3 items-center">
+                    <span className="font-mono-x uppercase text-xs tracking-[0.2em] text-ink-3">Total</span>
+                    <span className="font-display text-3xl font-bold">{ron(total)}</span>
+                  </div>
+                </div>
+
+                <button onClick={reserve} disabled={busy} data-testid="reserve-btn" className="btn-accent w-full mt-6">
+                  {busy ? "HOLDING…" : "HOLD & CHECKOUT · 10 MIN"}
                 </button>
-              ))}
-            </div>
+                <p className="mt-4 text-xs text-ink-4 leading-relaxed">
+                  Tickets are held for 10 minutes while you pay via Stripe. All sales final unless the event is cancelled.
+                  Max {event.max_tickets_per_user} tickets per person.
+                </p>
+              </>
+            )}
           </div>
-        ))}
+        </div>
+
+        <div className="md:col-span-7 md:col-start-1">
+          <Collapsible lines={10} testId="event-description">
+            {renderRich(event.description, { paraClassName: "text-ink-2 text-lg leading-relaxed max-w-2xl mt-4 first:mt-0" })}
+          </Collapsible>
+
+          {(event.albums || []).filter((a) => a.count > 0).map((album, ai) => (
+            <div className="mt-12" key={album.album_id} data-testid={`event-album-${ai}`}>
+              <div className="flex items-baseline justify-between gap-3 mb-4">
+                <div className="font-mono-x text-xs uppercase tracking-[0.3em] text-ink-4">{album.title} · {album.count}</div>
+                {/* Each album has a page of its own; the event shows it inline and links there. */}
+                <Link to={`/gallery/${album.slug}`} className="font-mono-x text-[10px] uppercase tracking-[0.25em] text-ink-4 hover:text-ink shrink-0"
+                      data-testid={`event-album-link-${ai}`}>
+                  Open ↗
+                </Link>
+              </div>
+              <div className="columns-2 sm:columns-3 gap-2">
+                {album.items.map((g, i) => (
+                  <button
+                    key={g.gallery_id}
+                    onClick={() => setLb({ album, index: i })}
+                    data-testid={`album-thumb-${ai}-${i}`}
+                    className="mb-2 block w-full break-inside-avoid relative group"
+                  >
+                    {g.media_type === "video" ? (
+                      <>
+                        {/* Prefer the poster captured at upload: it renders at the same
+                            size as a photo and costs one image request instead of a
+                            video decode per tile. Items without a poster fall back. */}
+                        {g.thumbnail_url && g.thumbnail_url !== g.image_url ? (
+                          <img src={mediaUrl(g.thumbnail_url)} alt={g.caption || ""} loading="lazy" className="w-full object-cover" />
+                        ) : (
+                          <video src={mediaUrl(g.image_url)} className="w-full object-cover" muted preload="metadata" />
+                        )}
+                        <div className="absolute inset-0 flex items-center justify-center bg-scrim/20 group-hover:bg-scrim/10 transition-colors">
+                          <Play size={28} className="text-ink" fill="white" />
+                        </div>
+                      </>
+                    ) : (
+                      <img
+                        src={mediaUrl(g.thumbnail_url || g.image_url)}
+                        alt={g.caption || ""}
+                        loading="lazy"
+                        className="w-full object-cover group-hover:opacity-80 transition-opacity"
+                      />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {!soldOut && (
+          <MobileBuyBar waveName={special ? special.label
+                          : [selectedWave?.name, packSize > 1 ? `· ${qty * packSize} tickets` : null]
+                              .filter(Boolean).join(" ")}
+                        total={total} busy={busy} onBuy={reserve} />
+        )}
+
+        {lb && (
+          <Lightbox
+            items={lb.album.items.map((g) => ({ url: g.image_url, thumbnail_url: g.thumbnail_url, media_type: g.media_type, caption: g.caption }))}
+            index={lb.index}
+            onClose={() => setLb(null)}
+            onIndexChange={(i) => setLb({ ...lb, index: i })}
+          />
+        )}
       </div>
-
-      {!soldOut && (
-        <MobileBuyBar waveName={special ? special.label
-                        : [selectedWave?.name, packSize > 1 ? `· ${qty * packSize} tickets` : null]
-                            .filter(Boolean).join(" ")}
-                      total={total} busy={busy} onBuy={reserve} />
-      )}
-
-      {lb && (
-        <Lightbox
-          items={lb.album.items.map((g) => ({ url: g.image_url, thumbnail_url: g.thumbnail_url, media_type: g.media_type, caption: g.caption }))}
-          index={lb.index}
-          onClose={() => setLb(null)}
-          onIndexChange={(i) => setLb({ ...lb, index: i })}
-        />
-      )}
     </div>
   );
 }

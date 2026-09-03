@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Play } from "lucide-react";
 import { http } from "../api";
+import BackLink from "../components/BackLink";
 import { mediaUrl } from "../lib/media";
 import { Lightbox } from "../components/ui/lightbox";
 
@@ -43,9 +44,7 @@ export default function AlbumPage() {
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-16">
-      <Link to="/gallery" className="font-mono-x text-[10px] uppercase tracking-[0.25em] text-ink-4 hover:text-ink" data-testid="album-back">
-        ← All albums
-      </Link>
+      <BackLink to="/gallery" testId="album-back">All albums</BackLink>
       <h1 className="font-display text-5xl md:text-7xl uppercase font-black tracking-tighter mt-3" data-testid="album-heading">
         {album.title}
       </h1>
