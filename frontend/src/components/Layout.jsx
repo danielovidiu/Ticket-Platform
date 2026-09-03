@@ -243,7 +243,7 @@ const Header = ({ cmsNav, navFailed, site }) => {
 // Its own padding is `py-5` — the header's value, so the two bars sit at the same
 // weight. It was py-14, which made the footer more than twice the header's height for
 // the same reason nothing else on the page had a say in its own spacing.
-const Footer = ({ site }) => {
+const Footer = ({ site, elementRef }) => {
   const s = site || {};
   const reveal = useFooterReveal();
   const pages = s.pages || [];
@@ -271,6 +271,7 @@ const Footer = ({ site }) => {
      * on the site is the same bug as a save that silently does not save.
      */
     <footer
+      ref={elementRef}
       /* Out of the document's flow, so the page runs to the bottom of the window and a
          background photo or a video reaches the edge of the screen instead of stopping
          above a bar. Nothing below it is reserved: the content bleeds under, which is the
@@ -292,7 +293,12 @@ const Footer = ({ site }) => {
         visibility: reveal === 0 ? "hidden" : "visible",
         pointerEvents: reveal === 0 ? "none" : "auto",
       }}
-      className="fixed bottom-0 inset-x-0 z-30"
+      /* `bg-page`, the site's own background colour, the same one the header carries.
+         The element fades as a whole — colour and contents together — so while it is
+         transparent the photograph or video underneath runs to the bottom of the screen
+         untouched, and at the end of the page it resolves into a solid bar rather than
+         type lying directly on a bright frame. */
+      className="fixed bottom-0 inset-x-0 z-30 bg-page"
       data-testid="site-footer">
       {/* Explicit column placement, not auto-flow. With `sm:col-start-*` each group holds
           its own track whether or not the others render: no social links filled, and the
@@ -394,12 +400,36 @@ export default function Layout({ children }) {
   }, [refreshNav]);
   // The header and footer are common to every page — including full-screen tools
   // like Scan and the CMS editor.
+  /* What the footer covers, reserved at the end of the content so that TEXT stops above
+     it and only the graphics carry on underneath.
+     
+     Measured rather than guessed: the footer is one line on a desktop and three wrapped
+     ones on a phone, and it changes again with the text-inset control and the number of
+     footer pages. A constant here would be right at one width and wrong at the others.
+     
+     The reservation is padding on `main`, which is in the flow — so a paragraph, a form
+     or a button ends above the footer. The page background block is NOT in the flow: it
+     is a viewport-height backdrop, so it keeps running to the bottom of the screen and
+     shows through while the footer is transparent. That is the whole distinction being
+     drawn: prose stops, pictures do not. */
+  const footerRef = useRef(null);
+  const [footerHeight, setFooterHeight] = useState(0);
+  useEffect(() => {
+    const el = footerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const measure = () => setFooterHeight(el.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className="min-h-screen flex flex-col">
       <div className="grain-overlay" />
       <Header cmsNav={cmsNav} navFailed={navFailed} site={site} />
-      <main className="flex-1 min-h-0">{children}</main>
-      <Footer site={site} />
+      <main className="flex-1 min-h-0" style={{ paddingBottom: footerHeight || undefined }}>{children}</main>
+      <Footer site={site} elementRef={footerRef} />
     </div>
   );
 }

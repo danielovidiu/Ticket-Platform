@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
 import { ron } from "../lib/money";
+import { packSizeOf, packOptions, saleState } from "../lib/ticketTiers";
 import { useAuth, startLogin } from "../auth";
 import { toast } from "sonner";
 import { Play } from "lucide-react";
@@ -150,35 +151,23 @@ export default function EventDetail() {
   );
   /* How many tickets one purchase of the selected tier issues. A group tier — four for
      the price of three — is bought as one thing and issued as four, so from here on the
-     quantity control counts PACKS and everything that talks about people multiplies by
-     this. A special link always sells singles. */
+     quantity control counts PACKS. A special link always sells singles. */
   const packSize = useMemo(
-    () => (special ? 1 : Math.max(1, Number(selectedWave?.pack_size) || 1)),
+    () => (special ? 1 : packSizeOf(selectedWave)),
     [special, selectedWave]
   );
-  /* Sold out is stock, not scheduling. A tier the promoter has paused still has tickets
-     behind it, so an event whose only tier is paused says "not on sale" rather than
-     claiming a sell-out that has not happened. */
-  const buyable = event?.waves?.filter((w) => w.status !== "paused") || [];
-  const soldOut = !special && !!event && buyable.length > 0
-    && buyable.every((w) => !w.is_active || w.available <= 0);
-  const paused = !special && !!event && !soldOut && event.waves.length > 0
-    && event.waves.every((w) => w.status === "paused");
+  const state = useMemo(() => saleState(event?.waves), [event]);
+  const soldOut = !special && state === "sold_out";
+  const paused = !special && state === "paused";
   const unitPrice = special ? special.price_ron : (selectedWave?.price_ron || 0);
   const total = useMemo(() => unitPrice * qty, [unitPrice, qty]);
-  const qtyOptions = useMemo(() => {
-    const cap = event?.max_tickets_per_user || 4;
-    /* The cap is a headcount, so a pack counts for everyone in it: a four-pack against a
-       cap of four is one pack, and offering a second would only be refused at checkout.
-       Packs are also capped at four options for the same reason singles are — this is a
-       select, not a stock ledger. */
-    const most = Math.max(1, Math.floor(cap / packSize));
-    return [1, 2, 3, 4].filter((n) => n <= most);
-  }, [event, packSize]);
+  const qtyOptions = useMemo(
+    () => packOptions(event?.max_tickets_per_user, packSize),
+    [event, packSize]
+  );
 
-  /* A tier the buyer can no longer be on. Selecting a paused tier is possible — it is
-     listed — but the quantity it was chosen with may not fit a different pack size, so
-     the count resets whenever the pack size under it changes. */
+  /* The count resets whenever the pack size under it changes: three of one tier is not
+     three of the next when the next issues four tickets a go. */
   useEffect(() => { setQty(1); }, [packSize]);
 
   const reserve = async () => {
@@ -259,11 +248,20 @@ export default function EventDetail() {
             </div>
           )}
 
-          {soldOut ? (
-            <div data-testid="sold-out-message" className="mt-6 border border-ink/15 bg-ink/5 p-6 text-center">
+          {soldOut || paused ? (
+            <div data-testid={paused ? "paused-message" : "sold-out-message"}
+                 className="mt-6 border border-ink/15 bg-ink/5 p-6 text-center">
               <div className="font-display text-2xl uppercase font-bold tracking-tight">
-                {event.sold_out_message || "Sold Out"}
+                {/* Two different pieces of news. A sell-out is final and the promoter gets
+                    to word it; a pause is temporary and the tickets still exist, so
+                    borrowing the sold-out message for it would be untrue. */}
+                {paused ? "Not On Sale" : (event.sold_out_message || "Sold Out")}
               </div>
+              {paused && (
+                <div className="mt-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
+                  Sales are paused — check back
+                </div>
+              )}
             </div>
           ) : (
             <>
@@ -411,7 +409,9 @@ export default function EventDetail() {
       </div>
 
       {!soldOut && (
-        <MobileBuyBar waveName={special ? special.label : selectedWave?.name}
+        <MobileBuyBar waveName={special ? special.label
+                        : [selectedWave?.name, packSize > 1 ? `· ${qty * packSize} tickets` : null]
+                            .filter(Boolean).join(" ")}
                       total={total} busy={busy} onBuy={reserve} />
       )}
 

@@ -565,12 +565,16 @@ every page you have marked **Show in footer**.
 There is no rule above it and no wordmark in it. Both were removed: with a single line of
 small type, a border only announced something the eye already knew.
 
-**It is not part of the page.** The footer floats over the bottom of the window and is
-completely invisible while you read, fading in only across the last 150 pixels of the
-scroll and reaching full strength exactly at the end. Nothing is reserved for it, so a
-background photo or a video runs to the very bottom of the screen instead of stopping
-above a bar — and on a page too short to scroll it is simply there, because you are
-already at the end.
+**It floats over the page.** The footer is completely invisible while you read, fading in
+across the last 150 pixels of the scroll and reaching full strength exactly at the end,
+where it settles into the site's own background colour. On a page too short to scroll it
+is simply there, because you are already at the end.
+
+**Words stop above it; pictures carry on underneath.** Every page reserves exactly the
+footer's height at the end of its content, so a paragraph, a form or a button always ends
+above it. A page background photo or video is not part of that flow — it fills the window
+and runs to the very bottom of the screen, showing through for the whole time the footer
+is transparent.
 
 While it is invisible it cannot be clicked or tabbed to, which is deliberate: an unseen
 link is not a link. Scroll to the bottom of any page and it is there.
