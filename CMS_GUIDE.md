@@ -559,22 +559,27 @@ cookie banner all sit on the same line as the content above them.
 
 ### The footer
 
-Two rows divided by a rule. The first carries the **Footer wordmark** and **Description**
-on the left, and on the right every page you have marked *in footer*, as one line
-separated by `·`, ending with the **Contact email**. The second carries the copyright and
-your social links.
+One line. The copyright on the left, your social marks in the middle, and on the right
+every page you have marked **Show in footer**.
 
-There are no column headings any more, so **Legal heading** no longer appears anywhere and
-**Contact heading** is used only as the hover text on the email.
+There is no rule above it and no wordmark in it. Both were removed: with a single line of
+small type, a border only announced something the eye already knew.
 
-**Social links show only where you have filled them in**, and each one that is a real
-platform draws its own logo — SoundCloud, Spotify, Instagram, YouTube, TikTok, Facebook,
-and X. *Website* has no logo, because it is not a brand; it shows the word instead. Leave
-a platform blank and it does not appear; leave them all blank and the row does not either.
+**Anything the footer should link to is a page.** Make it in the CMS, tick *Show in
+footer*, and it joins the row — that includes the consumer-protection notices a
+jurisdiction requires, such as ANPC and SAL in Romania. None of those are built into the
+code, which is what lets a site elsewhere carry whichever its own law asks for. A page in
+the footer is kept out of the main navigation.
 
-The **Description** is the tallest thing in the footer, at roughly 40px on desktop and
-70px on a phone. Clearing it in Site settings is the quickest way to make the footer
-shorter, and takes effect immediately. That single line is what makes the inset
+**Social marks show only where you have filled them in**, and each real platform draws its
+own logo — SoundCloud, Spotify, Instagram, YouTube, TikTok, Facebook, and X. *Website* has
+no logo, because it is not a brand; it shows the word instead. Leave them all blank and
+the middle of the line is simply empty.
+
+Only two fields feed this now: **Copyright name** and **Social links**. The footer
+wordmark, description, contact email and the two column headings were removed from Site
+settings when the rows that carried them went — an editable field that changes nothing on
+the site is worse than no field at all.
 read as deliberate; setting blocks to different distances is what makes a page look
 unfinished, which is why there is one control rather than one per block.
 

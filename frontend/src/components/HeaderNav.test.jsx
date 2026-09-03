@@ -125,7 +125,13 @@ describe("the join between the page and the footer", () => {
     expect(footer().querySelector(".py-14")).toBeNull();
   });
 
-  test("the hairline is still the join", () => {
-    expect([...footer().classList]).toContain("hairline");
+  test("there is no rule between the page and the footer", () => {
+    // This asserted the opposite, deliberately: the hairline WAS the join, and it was
+    // what stopped the footer reading as one more block after the last one.
+    //
+    // It was removed on purpose along with the rule that divided the footer's own two
+    // rows. What is left is a single line of small type — a year, some marks, three
+    // links — and a line that quiet does not need a border to say the page has ended.
+    expect([...footer().classList]).not.toContain("hairline");
   });
 });
