@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth, startLogin } from "../auth";
 import { http } from "../api";
 import { SOCIAL_PLATFORMS, socialIconPath } from "../lib/social";
+import { useFooterReveal } from "../lib/footerReveal";
 import { Menu, X, ShoppingBag, ChevronDown, User } from "lucide-react";
 import { useCart } from "../lib/cart";
 import { loadNav, onNavChanged, readCachedNav } from "../lib/nav";
@@ -244,6 +245,7 @@ const Header = ({ cmsNav, navFailed, site }) => {
 // the same reason nothing else on the page had a say in its own spacing.
 const Footer = ({ site }) => {
   const s = site || {};
+  const reveal = useFooterReveal();
   const pages = s.pages || [];
   const social = Object.entries(s.social || {}).filter(([, v]) => v);
   // Ordered by the shared vocabulary, not by the key order of the stored object — the
@@ -268,7 +270,30 @@ const Footer = ({ site }) => {
      * controls are gone from the CMS. A field an editor can change that changes nothing
      * on the site is the same bug as a save that silently does not save.
      */
-    <footer>
+    <footer
+      /* Out of the document's flow, so the page runs to the bottom of the window and a
+         background photo or a video reaches the edge of the screen instead of stopping
+         above a bar. Nothing below it is reserved: the content bleeds under, which is the
+         point.
+
+         `opacity` is the whole effect and it is inline because it is a number per frame,
+         not a class. Two things ride along with it:
+
+         `visibility` — at zero the footer is not merely invisible, it is out of the tab
+         order and out of the accessibility tree. Otherwise the first Tab on any page
+         lands on a link nobody can see. The links stay reachable the only way a footer
+         ever is: by going to the bottom of the page.
+
+         `pointerEvents` — an invisible element that still swallows clicks would take
+         them from whatever is drawn underneath it, across the full width of the window,
+         on every page. */
+      style={{
+        opacity: reveal,
+        visibility: reveal === 0 ? "hidden" : "visible",
+        pointerEvents: reveal === 0 ? "none" : "auto",
+      }}
+      className="fixed bottom-0 inset-x-0 z-30"
+      data-testid="site-footer">
       {/* Explicit column placement, not auto-flow. With `sm:col-start-*` each group holds
           its own track whether or not the others render: no social links filled, and the
           pages still sit on the right rather than sliding into the middle. Auto-placement
