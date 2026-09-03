@@ -711,6 +711,94 @@ def event_code_for(title: str) -> str:
     return _code_from_words(title, 4) or "EVT"
 
 
+# Where a tier stands, and what each state does to it:
+#
+#   active   — offered, buyable. The default, and what every tier predating this was.
+#   paused   — still listed on the event page, refused at checkout. Sales stopped without
+#              the tier disappearing, which is what an editor wants while they rewrite a
+#              price or wait on a decision.
+#   archived — gone from the event page entirely, refused at checkout, kept in the admin
+#              with its sold count and still resolved by the door and the exports.
+#
+# Archiving is the answer to "delete a tier that has sold", and it is REVERSIBLE: an
+# archived tier goes back to active or paused from the same control, with its stock and
+# its sold tickets exactly where they were. That reversibility is the whole reason a sold
+# tier is archived rather than deleted — an archive undone costs nothing, and a delete
+# undone is not a thing that exists.
+WAVE_STATUSES = ("active", "paused", "archived")
+
+# Tickets issued per unit bought. The ceiling is a sanity bound, not a business rule: a
+# pack is a handful of friends, and a four-figure pack_size is a typo that would issue
+# four thousand QR codes and email them all at once.
+MAX_PACK_SIZE = 20
+
+
+def wave_status(wave: dict) -> str:
+    """A tier's state, defaulting for every tier written before states existed."""
+    st = (wave or {}).get("status")
+    return st if st in WAVE_STATUSES else "active"
+
+
+def wave_pack_size(wave: dict) -> int:
+    """How many tickets one purchase of this tier issues.
+
+    1 for an ordinary tier, and for anything written before packs existed. `price_ron` is
+    the price of the whole pack, not of one ticket in it — see _pack_ticket_prices.
+    """
+    try:
+        n = int((wave or {}).get("pack_size") or 1)
+    except (TypeError, ValueError):
+        return 1
+    return min(max(n, 1), MAX_PACK_SIZE)
+
+
+def _pack_ticket_prices(pack_price: float, pack_size: int) -> List[float]:
+    """What each ticket in one pack is individually worth.
+
+    A four-for-the-price-of-three pack sold at 300 issues four tickets worth 75, not three
+    worth 100 and one worth nothing. The distinction is not cosmetic: refunds are settled
+    per ticket, so a guest turned away at the door is owed 75 — their actual share of what
+    was paid — and a ticket carrying 100 would refund money the buyer never handed over,
+    while a ticket carrying 0 would refund them nothing for a seat they bought.
+
+    Split in whole cents, remainder onto the earliest tickets, so the prices add back up
+    to the pack price EXACTLY. 100 across 3 is 33.34 + 33.33 + 33.33; three tickets at a
+    naively rounded 33.33 lose a cent that no fiscal summary can then reconcile.
+    """
+    size = min(max(int(pack_size or 1), 1), MAX_PACK_SIZE)
+    cents = int(round(float(pack_price or 0) * 100))
+    base, rem = divmod(cents, size)
+    return [round((base + (1 if i < rem else 0)) / 100, 2) for i in range(size)]
+
+
+def _check_wave_states(waves: List[dict]) -> None:
+    """Refuse a tier whose state or pack size is not one we can sell.
+
+    Both are checked here rather than by a Pydantic validator so the message can name the
+    tier — an editor with six tiers open needs to know which one.
+    """
+    for w in waves:
+        name = w.get("name") or "A tier"
+        if w.get("status") is not None and w.get("status") not in WAVE_STATUSES:
+            raise HTTPException(
+                400, f"\"{name}\" has an unknown state. "
+                     f"Choose one of: {', '.join(WAVE_STATUSES)}.")
+        size = w.get("pack_size", 1)
+        if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= MAX_PACK_SIZE:
+            raise HTTPException(
+                400, f"\"{name}\" has a pack size of {size!r}. "
+                     f"It must be a whole number from 1 to {MAX_PACK_SIZE}.")
+        # Capacity counts individual tickets, not packs, so the venue total stays a count
+        # of people whatever mix of tiers it is made of. A capacity that is not a whole
+        # number of packs simply strands the remainder — 200 seats sold in threes leaves
+        # two nobody can buy — so it is refused at the point where it can still be fixed.
+        cap = w.get("capacity")
+        if size > 1 and isinstance(cap, int) and cap % size:
+            raise HTTPException(
+                400, f"\"{name}\" sells in packs of {size}, so its ticket count must "
+                     f"divide by {size}. {cap} leaves {cap % size} that nobody can buy.")
+
+
 def _check_access_window(waves: List[dict]) -> None:
     """A tier may carry one end of an admission window, never both.
 
@@ -1383,6 +1471,13 @@ class WaveIn(ApiModel):
     # enforced at the door now, exactly as `access_until` is.
     access_until: Optional[str] = None
     access_from: Optional[str] = None
+    # Offered, listed-but-closed, or hidden. See WAVE_STATUSES for what each one does and
+    # why archiving is the answer to deleting a tier that has already sold.
+    status: str = "active"
+    # Tickets issued per purchase. 1 is an ordinary tier; anything above it is a group
+    # ticket, where `price_ron` is the price of the WHOLE pack and `capacity` still counts
+    # individual tickets — so a 200-ticket tier selling in fours has fifty packs in it.
+    pack_size: int = 1
 
 
 class EventIn(ApiModel):
@@ -2304,7 +2399,12 @@ async def list_events(upcoming: Optional[bool] = None):
     for a in albums:
         albums_by_event.setdefault(a["event_id"], []).append(a)
     for e in items:
-        e["total_available"] = sum(max(0, w.get("available", w.get("capacity", 0))) for w in e.get("waves", []))
+        # Archived tiers are not stock. Their remaining capacity is deliberately withheld
+        # from sale, so counting it would tell a card there are tickets left on an event
+        # whose every buyable tier is gone.
+        e["total_available"] = sum(
+            max(0, w.get("available", w.get("capacity", 0)))
+            for w in e.get("waves", []) if wave_status(w) != "archived")
         e["albums"] = albums_by_event.get(e["event_id"], [])
         # An event can hold several albums now, but a card still wants one flat run of
         # media for its cover and its count, so both shapes are served.
@@ -2320,7 +2420,19 @@ async def get_event(slug: str):
     now_iso = now_utc().isoformat()
     active_waves = []
     for w in e.get("waves", []):
-        w["is_active"] = w["starts_at"] <= now_iso <= w["ends_at"]
+        status = wave_status(w)
+        # Archived is withheld from the page rather than shown greyed out. A paused tier
+        # is one an editor still wants a buyer to see — "VIP, back shortly" — and an
+        # archived one is a tier they have taken down; showing it would advertise
+        # something nobody can ever buy, including the tier they archived by mistake and
+        # are about to bring back.
+        if status == "archived":
+            continue
+        w["status"] = status
+        w["pack_size"] = wave_pack_size(w)
+        # Selling is a state AND a window. Paused fails the first, which is what keeps the
+        # tier on the page and out of the checkout at the same time.
+        w["is_active"] = status == "active" and w["starts_at"] <= now_iso <= w["ends_at"]
         w["available"] = max(0, w.get("available", w.get("capacity", 0)))
         active_waves.append(w)
     e["waves"] = active_waves
@@ -2702,15 +2814,23 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     await _cleanup_expired_reservations()   # every event, not just this one (audit L4)
     event = await db.events.find_one({"event_id": body.event_id}, {"_id": 0})
 
+    wave = _find_wave(event, body.wave_id)
+    unit_price, pack_size, special = await _resolve_pricing_source(body, event, wave)
+
+    # `body.quantity` is what the buyer picked — tickets on an ordinary tier, PACKS on a
+    # group one. From here on the two are kept apart by name, because every rule below
+    # counts one or the other and never both: stock, the per-user cap and the issue loop
+    # count tickets; the price counts units.
+    pack_count = body.quantity
+    ticket_count = pack_count * pack_size
+
     # Cheap rejection for the obvious case. Not the guarantee — _confirm_user_ticket_cap
     # after the insert is, because only then does this request have a position other
     # concurrent requests can see.
-    await _precheck_user_ticket_cap(event, user["user_id"], body.quantity)
-    wave = _find_wave(event, body.wave_id)
-    unit_price, special = await _resolve_pricing_source(body, event, wave)
+    await _precheck_user_ticket_cap(event, user["user_id"], ticket_count)
     discount_percent, discount_code_used = await _apply_discount(body, using_special=bool(special))
 
-    subtotal = unit_price * body.quantity
+    subtotal = unit_price * pack_count
     discount_amount = subtotal * (discount_percent / 100.0)
     total = round(subtotal - discount_amount, 2)
 
@@ -2718,16 +2838,25 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     # down wave stock. Both are conditional single-document writes, so the check and the
     # decrement cannot be separated by a concurrent request.
     if special:
-        await _atomic_hold_special_link(body.special_link_token, body.event_id, body.quantity)
+        await _atomic_hold_special_link(body.special_link_token, body.event_id, ticket_count)
     else:
-        await _atomic_hold_wave_stock(body.event_id, body.wave_id, body.quantity)
+        await _atomic_hold_wave_stock(body.event_id, body.wave_id, ticket_count)
 
     doc = {
         "reservation_id": new_id("res"),
         "user_id": user["user_id"],
         "event_id": body.event_id,
         "wave_id": body.wave_id,
-        "quantity": body.quantity,
+        # Still tickets, unchanged in meaning. Everything that already read this field —
+        # the holds, their release, the cap, the issue loop, the invoice — goes on
+        # counting the same things it always counted, which is why packs did not have to
+        # be threaded through any of them.
+        "quantity": ticket_count,
+        "pack_size": pack_size,
+        "pack_count": pack_count,
+        # The price of one unit: one ticket, or one whole pack. `subtotal_ron` is this
+        # times `pack_count`, NOT times `quantity` — for a pack those differ, and the
+        # subtotal is the one that was charged.
         "unit_price_ron": unit_price,
         "subtotal_ron": subtotal,
         "discount_percent": discount_percent,
@@ -2813,7 +2942,16 @@ def _find_wave(event, wave_id: str):
 
 
 async def _resolve_pricing_source(body: "ReserveIn", event, wave):
-    """Return (unit_price, special_doc_or_None). Validates special link or wave window/capacity."""
+    """Return (unit_price, pack_size, special_doc_or_None).
+
+    `unit_price` is the price of ONE THING THE BUYER PICKED — a ticket on an ordinary
+    tier, a whole pack on a group one — and `pack_size` is how many tickets that thing
+    turns into. Everything downstream multiplies with those two: stock and the per-user
+    cap count tickets, the money counts units.
+
+    Special links always sell singles. A link is a hand-made price for a named guest, and
+    a pack size on top of it would be two overrides of the same tier fighting each other.
+    """
     now_iso = now_utc().isoformat()
     if body.special_link_token:
         special = await db.special_links.find_one(
@@ -2825,13 +2963,22 @@ async def _resolve_pricing_source(body: "ReserveIn", event, wave):
         # the conditional $inc in _atomic_hold_special_link.
         if special.get("used", 0) + body.quantity > special["capacity"]:
             raise HTTPException(400, "Special link capacity exceeded")
-        return float(special["price_ron"]), special
+        return float(special["price_ron"]), 1, special
+    # A tier has to be sellable before it has to be in its window: "no longer on sale"
+    # and "not on sale yet" are different things to be told, and an archived tier is the
+    # first even when its dates say the second.
+    status = wave_status(wave)
+    if status == "archived":
+        raise HTTPException(400, "This tier is no longer on sale")
+    if status == "paused":
+        raise HTTPException(400, "This tier is not on sale right now")
     # Regular wave path: enforce sale window + inventory hint (atomic decrement will re-check)
     if not (wave["starts_at"] <= now_iso <= wave["ends_at"]):
         raise HTTPException(400, "Wave not active")
-    if wave.get("available", wave["capacity"]) < body.quantity:
+    pack_size = wave_pack_size(wave)
+    if wave.get("available", wave["capacity"]) < body.quantity * pack_size:
         raise HTTPException(400, "Not enough tickets available")
-    return float(wave["price_ron"]), None
+    return float(wave["price_ron"]), pack_size, None
 
 
 async def _apply_discount(body: "ReserveIn", using_special: bool):
@@ -3113,6 +3260,29 @@ async def _finalize_paid_reservation(reservation_id: str):
     event_code = await ensure_event_code(event_doc) if event_doc.get("event_id") else "EVT"
     type_code = wave_type_code(wave)
 
+    # What each ticket is individually worth, and which pack it came in.
+    #
+    # A group tier is bought as one line — four for the price of three, 300 RON — and
+    # issued as four separate tickets. Each one carries 75, its real share of the 300,
+    # because a ticket is refunded on its own: a guest turned away at the door is owed
+    # what they paid for their seat, and neither 100 nor 0 is that number. The shares are
+    # split in whole cents and add back up to the pack price exactly, so the fiscal
+    # summary still multiplies out.
+    #
+    # `pack_size` defaults to 1 for every reservation written before packs existed, which
+    # makes the general case here identical to what it was: one ticket, the unit price.
+    pack_size = max(1, int(r.get("pack_size") or 1))
+    pack_count = int(r.get("pack_count") or 0) or (r["quantity"] // pack_size)
+    per_pack_prices = _pack_ticket_prices(r["unit_price_ron"], pack_size)
+    pack_ids = [new_id("pack") for _ in range(pack_count)]
+    prices = per_pack_prices * pack_count
+    if len(prices) != r["quantity"]:
+        # A legacy or hand-edited reservation whose parts do not multiply out. Falling
+        # back to a flat unit price is wrong for a pack but right for everything that
+        # predates them, and it beats issuing the wrong NUMBER of tickets.
+        prices = [r["unit_price_ron"]] * r["quantity"]
+        pack_ids = []
+
     tickets = []
     for i in range(r["quantity"]):
         qr = f"SNTY-{uuid.uuid4().hex[:20].upper()}"
@@ -3130,12 +3300,21 @@ async def _finalize_paid_reservation(reservation_id: str):
             "wave_id": r["wave_id"],
             "wave_name": wave.get("name", ""),
             "tier": wave.get("tier", ""),
-            "price_ron": r["unit_price_ron"],
+            "price_ron": prices[i],
             "status": "issued",
             "scanned_at": None,
             "scanned_by": None,
             "created_at": now_utc().isoformat(),
         }
+        if pack_size > 1 and pack_ids:
+            # Which pack this ticket belongs to and where it sits in it. The id is what
+            # lets an admin see the four tickets of one group together; without it they
+            # are four unrelated rows that happen to share a reservation with everything
+            # else on that order.
+            t["pack_id"] = pack_ids[i // pack_size]
+            t["pack_size"] = pack_size
+            t["pack_index"] = (i % pack_size) + 1
+            t["pack_price_ron"] = round(float(r["unit_price_ron"]), 2)
         tickets.append(t)
     if tickets:
         await db.tickets.insert_many(tickets)
@@ -3669,7 +3848,34 @@ async def admin_stats(
 
 @api.get("/admin/events")
 async def admin_list_events(user=Depends(require_admin)):
-    return await db.events.find({}, {"_id": 0}).sort("starts_at", -1).to_list(500)
+    """Every event, each tier carrying what has actually been issued from it.
+
+    `sold` and `held` are what the editor's delete button is gated on. They are counted
+    here, in one aggregation across every listed event, rather than derived client-side
+    from capacity minus available — that difference is sales AND live holds AND any
+    manual capacity edit, which is a fine thing to show a promoter and a terrible thing to
+    decide a deletion on.
+    """
+    events = await db.events.find({}, {"_id": 0}).sort("starts_at", -1).to_list(500)
+    ids = [e["event_id"] for e in events]
+    sold = {r["_id"]: r["n"] for r in await db.tickets.aggregate([
+        {"$match": {"event_id": {"$in": ids}}},
+        {"$group": {"_id": "$wave_id", "n": {"$sum": 1}}},
+    ]).to_list(20000)}
+    held = {r["_id"]: r["n"] for r in await db.reservations.aggregate([
+        {"$match": {"event_id": {"$in": ids}, "status": "pending"}},
+        {"$group": {"_id": "$wave_id", "n": {"$sum": "$quantity"}}},
+    ]).to_list(20000)}
+    for e in events:
+        for w in e.get("waves", []):
+            wid = w.get("wave_id")
+            w["sold"] = sold.get(wid, 0)
+            w["held"] = held.get(wid, 0)
+            # Sent explicitly rather than left to the client to default, so an event
+            # saved before either field existed reads the same as one saved after.
+            w["status"] = wave_status(w)
+            w["pack_size"] = wave_pack_size(w)
+    return events
 
 
 @api.post("/admin/events")
@@ -3683,6 +3889,7 @@ async def admin_create_event(body: EventIn, user=Depends(require_admin)):
         w["available"] = w["capacity"]
         waves.append(w)
     _check_access_window(waves)
+    _check_wave_states(waves)
     e["waves"] = _sorted_waves(waves)
     e["created_at"] = now_utc().isoformat()
     await db.events.insert_one(e)
@@ -3690,6 +3897,63 @@ async def admin_create_event(body: EventIn, user=Depends(require_admin)):
     # anything is sold, and stays put if the title is edited afterwards.
     e["event_code"] = await ensure_event_code(e)
     return {**{k: v for k, v in e.items() if k != "_id"}}
+
+
+async def _wave_sales(event_id: str, wave_ids: Optional[List[str]] = None) -> dict:
+    """Tickets issued per tier, and stock currently held by unpaid reservations.
+
+    `sold` counts EVERY ticket row, refunded and cancelled ones included. That is
+    deliberate: a refunded ticket still carries a fiscal serial allocated against this
+    tier, and the tier has to stay resolvable for the export that serial appears in. The
+    number answers "may this tier be deleted", and the answer is no the moment one ticket
+    has ever been issued from it — refunding it afterwards does not unissue it.
+
+    `held` is separate because a live checkout is not a sale yet but is still a reason not
+    to pull the tier out from under it.
+    """
+    match = {"event_id": event_id}
+    if wave_ids is not None:
+        match["wave_id"] = {"$in": list(wave_ids)}
+    sold = {r["_id"]: r["n"] for r in await db.tickets.aggregate([
+        {"$match": match},
+        {"$group": {"_id": "$wave_id", "n": {"$sum": 1}}},
+    ]).to_list(1000)}
+    held = {r["_id"]: r["n"] for r in await db.reservations.aggregate([
+        {"$match": {**match, "status": "pending"}},
+        {"$group": {"_id": "$wave_id", "n": {"$sum": "$quantity"}}},
+    ]).to_list(1000)}
+    return {wid: {"sold": sold.get(wid, 0), "held": held.get(wid, 0)}
+            for wid in set(sold) | set(held) | set(wave_ids or ())}
+
+
+async def _guard_dropped_waves(event_id: str, before: dict, kept: set) -> None:
+    """Refuse to delete a tier that has sold, or that a live checkout is holding.
+
+    A PATCH says what the tier list IS, so a tier left out of it is a tier deleted — which
+    until now happened silently, taking with it the row the door reads an access window
+    from and the row an export reads a tier name from. A tier with nothing against it is
+    still free to go; one with tickets behind it has to be archived instead, which hides
+    it from buyers while leaving every one of those tickets valid and indexed.
+    """
+    dropped = [wid for wid in before if wid not in kept]
+    if not dropped:
+        return
+    sales = await _wave_sales(event_id, dropped)
+    blocked = [wid for wid in dropped
+               if sales.get(wid, {}).get("sold") or sales.get(wid, {}).get("held")]
+    if not blocked:
+        return
+    names = ", ".join(f"\"{before[wid].get('name') or wid}\"" for wid in blocked)
+    counts = sum(sales[wid]["sold"] for wid in blocked)
+    raise HTTPException(
+        400,
+        f"{names} cannot be deleted — {counts} ticket(s) have been issued against it and "
+        "those sales stay valid. Archive the tier instead: it disappears from the event "
+        "page and stops selling, and you can bring it back at any time."
+        if counts else
+        f"{names} cannot be deleted — a checkout is holding tickets from it right now. "
+        "Archive the tier instead, or try again once the hold expires.",
+    )
 
 
 @api.patch("/admin/events/{event_id}")
@@ -3735,6 +3999,8 @@ async def admin_update_event(event_id: str, body: EventPatchIn, user=Depends(req
                 w["available"] = w["capacity"]
             new_waves.append(w)
         _check_access_window(new_waves)
+        _check_wave_states(new_waves)
+        await _guard_dropped_waves(event_id, by_id, {w["wave_id"] for w in new_waves})
         patch["waves"] = _sorted_waves(new_waves)
 
     # Reachable now in a way it was not before: a body of nothing but unknown keys used to
@@ -4015,9 +4281,13 @@ async def admin_refund(reservation_id: str, user=Depends(require_admin)):
         await _release_reservation_holds(reservation)
         returned = True
 
+    amount = round(float(reservation.get("total_ron") or 0), 2)
     await _audit(user["user_id"], "order_refund", "reservation", reservation_id,
-                 {"stock_returned": returned})
-    return {"ok": True, "stock_returned": returned}
+                 {"stock_returned": returned, "refund_amount_ron": amount})
+    # The charge itself, not a sum of ticket values: a whole order refunds what was
+    # actually taken, discount and all. Per-ticket shares only matter when one seat is
+    # being unpicked from an order the rest of which stands.
+    return {"ok": True, "stock_returned": returned, "refund_amount_ron": amount}
 
 
 # Every status a ticket can hold, and who writes it:
@@ -4147,9 +4417,13 @@ async def admin_transactions_csv(
 
     buf = io.StringIO()
     w = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    # `price_ron` is this ticket's OWN value — a quarter of a four-for-three pack, not the
+    # pack price — so the column still sums to what was charged. `pack_size` and `pack_id`
+    # are appended (never inserted) so a reader keyed on column position still works:
+    # they say why four rows at 75 belong to one 300 RON sale.
     w.writerow(["serial", "event_code", "event", "event_starts_at", "ticket_type",
                 "tier", "price_ron", "status", "issued_at", "scanned_at", "buyer_email",
-                "reservation_id"])
+                "reservation_id", "pack_size", "pack_id"])
     for t in tickets:
         ev = events.get(t["event_id"], {})
         wave = _wave_of(ev, t.get("wave_id"))
@@ -4166,6 +4440,8 @@ async def admin_transactions_csv(
             t.get("scanned_at") or "",
             _csv_safe(buyers.get(t["user_id"], {}).get("email", "")),
             _csv_safe(t.get("reservation_id", "")),
+            t.get("pack_size", "") or "",
+            _csv_safe(t.get("pack_id", "")),
         ])
     return PlainTextResponse(
         buf.getvalue(),
@@ -4233,6 +4509,28 @@ async def admin_transactions_summary(
     }
 
 
+async def _ticket_refund_amount(t: dict) -> float:
+    """What one ticket is worth back, to the cent.
+
+    This is the number the admin hands to Stripe, so it has to be the money that ticket
+    actually brought in — not the tier's headline price.
+
+    Two things move it off that headline. A group ticket carries its own share of the
+    pack: one seat out of a four-for-three pack sold at 300 refunds 75, because 75 is what
+    was paid for it. And an order bought with a discount code paid less than list for
+    every ticket on it, so the same percentage comes off here — otherwise refunding one
+    ticket of a 20%-off order hands back more than the buyer was ever charged.
+
+    Whole-order refunds do not come through here: they return `total_ron`, which is the
+    charge itself and needs no reconstruction.
+    """
+    price = float(t.get("price_ron") or 0)
+    r = await db.reservations.find_one(
+        {"reservation_id": t.get("reservation_id")}, {"_id": 0, "discount_percent": 1})
+    pct = float((r or {}).get("discount_percent") or 0)
+    return round(price * (1 - pct / 100.0), 2)
+
+
 @api.post("/admin/tickets/{ticket_id}/refund")
 async def admin_refund_ticket(ticket_id: str, user=Depends(require_admin)):
     """Refund one ticket, not the order it came on.
@@ -4251,17 +4549,22 @@ async def admin_refund_ticket(ticket_id: str, user=Depends(require_admin)):
     t = await db.tickets.find_one({"ticket_id": ticket_id}, {"_id": 0})
     if not t:
         raise HTTPException(404, "Ticket not found")
+    amount = await _ticket_refund_amount(t)
     if t["status"] == "refunded":
-        return {"ok": True, "already": True, "ticket": t}
+        return {"ok": True, "already": True, "ticket": t, "refund_amount_ron": amount}
 
     await db.tickets.update_one(
         {"ticket_id": ticket_id},
-        {"$set": {"status": "refunded", "refunded_at": now_utc().isoformat()}},
+        {"$set": {"status": "refunded", "refunded_at": now_utc().isoformat(),
+                  "refund_amount_ron": amount}},
     )
     await _audit(user["user_id"], "ticket_refund", "ticket", ticket_id,
                  {"event_id": t["event_id"], "was": t["status"],
-                  "price_ron": t.get("price_ron")})
-    return {"ok": True, "ticket": await db.tickets.find_one({"ticket_id": ticket_id}, {"_id": 0})}
+                  "price_ron": t.get("price_ron"), "refund_amount_ron": amount,
+                  **({"pack_id": t["pack_id"], "pack_size": t.get("pack_size"),
+                      "pack_price_ron": t.get("pack_price_ron")} if t.get("pack_id") else {})})
+    return {"ok": True, "refund_amount_ron": amount,
+            "ticket": await db.tickets.find_one({"ticket_id": ticket_id}, {"_id": 0})}
 
 
 def _sort_artist_disciplines(payload: dict) -> None:
@@ -5151,7 +5454,12 @@ async def security_headers(request: Request, call_next):
 #     Without the bump migrate_artist_collab never runs, every existing artist stays
 #     untagged, and the Residents and Guests tabs come back empty on a site whose roster
 #     is full.
-SCHEMA_VERSION = 14
+# 15: tiers carry a `status` (active/paused/archived) and a `pack_size`. Without the bump
+#     migrate_wave_states never runs on an already-initialised database, and every
+#     existing tier reaches the admin editor with a blank state control and an empty pack
+#     size — which the first save then writes back as the editor's own defaults, one event
+#     at a time, for as long as nobody notices.
+SCHEMA_VERSION = 15
 
 
 async def init_app():
@@ -5286,6 +5594,11 @@ async def init_indexes():
         logger.exception("migrate_wave_tier_ids failed")
 
     try:
+        await migrate_wave_states()
+    except Exception:
+        logger.exception("migrate_wave_states failed")
+
+    try:
         # Order matters: ordering is assigned per album, so the albums have to exist and
         # every item has to know which one it is in before that runs.
         await migrate_gallery_albums()
@@ -5398,6 +5711,38 @@ async def migrate_session_token_hashes():
 #
 # It has already run everywhere it needed to; the key it cleaned up has not been written
 # by any version since. Do not reinstate it.
+
+
+async def migrate_wave_states():
+    """Give every tier written before states existed the state it has always had.
+
+    `active` and a pack of 1 are what those tiers already behaved as, so this changes
+    nothing about how the site sells — it only writes the defaults down. That matters
+    because the admin editor round-trips whatever it is given: an absent `status` reads
+    as a blank control, and saving the event would then write the editor's guess rather
+    than the tier's own history.
+
+    Only tiers actually missing a field are touched, and an event is written once.
+    """
+    fixed = 0
+    async for e in db.events.find(
+        {"$or": [{"waves.status": None}, {"waves.pack_size": None}]},
+        {"_id": 0, "event_id": 1, "waves": 1},
+    ):
+        waves = e.get("waves") or []
+        touched = False
+        for w in waves:
+            if w.get("status") not in WAVE_STATUSES:
+                w["status"] = "active"
+                touched = True
+            if not isinstance(w.get("pack_size"), int) or w["pack_size"] < 1:
+                w["pack_size"] = 1
+                touched = True
+        if touched:
+            await db.events.update_one({"event_id": e["event_id"]}, {"$set": {"waves": waves}})
+            fixed += 1
+    if fixed:
+        logger.info("Gave states to the tiers of %d event(s)", fixed)
 
 
 async def migrate_wave_tier_ids():

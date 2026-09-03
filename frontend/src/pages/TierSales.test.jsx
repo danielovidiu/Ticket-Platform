@@ -81,3 +81,45 @@ describe("what it says", () => {
     expect(grid.textContent).toContain("50 left");
   });
 });
+
+describe("tier state and pack size", () => {
+  test("a tier off sale is named as which kind of off", () => {
+    // "Archived" and "paused" both mean "not selling" for different reasons and with
+    // different remedies, so neither is collapsed into a plain greyed-out row.
+    const grid = draw([
+      { wave_id: "a", name: "FRIENDS", capacity: 20, available: 20, status: "archived" },
+      { wave_id: "b", name: "VIP", capacity: 40, available: 40, status: "paused" },
+    ]);
+    expect(grid.textContent).toContain("[arch]");
+    expect(grid.textContent).toContain("[paused]");
+  });
+
+  test("an active tier carries no state marker", () => {
+    expect(draw([{ wave_id: "a", name: "GENERAL", capacity: 50, available: 50, status: "active" }])
+      .textContent).not.toContain("[");
+  });
+
+  test("a group tier says how many tickets one purchase is", () => {
+    expect(draw([{ wave_id: "a", name: "GROUP", capacity: 200, available: 200, pack_size: 4 }])
+      .textContent).toContain("×4");
+  });
+
+  test("the issued count is preferred over capacity minus available", () => {
+    // The two differ by whatever a live checkout is holding. The editor's delete gate
+    // reads the issued count, and a list disagreeing with it on the same screen is how
+    // a promoter comes to believe a tier they cannot delete has sold nothing.
+    const grid = draw([
+      { wave_id: "a", name: "GENERAL", capacity: 100, available: 90, sold: 6 },
+    ]);
+    expect(grid.textContent).toContain("6/100");
+    // "Left" stays the stock the server is holding, which is the other four seats being
+    // held by a checkout in flight. Six sold and ninety left is the honest reading of a
+    // tier with four in someone's basket.
+    expect(grid.textContent).toContain("90 left");
+  });
+
+  test("and falls back to that arithmetic when no count was sent", () => {
+    const grid = draw([{ wave_id: "a", name: "GENERAL", capacity: 100, available: 90 }]);
+    expect(grid.textContent).toContain("10/100");
+  });
+});

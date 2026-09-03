@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
 import { ron } from "../lib/money";
+import { packSizeOf, packOptions, saleState } from "../lib/ticketTiers";
 import { useAuth, startLogin } from "../auth";
 import { toast } from "sonner";
 import { Play } from "lucide-react";
@@ -148,13 +149,26 @@ export default function EventDetail() {
     () => event?.waves?.find((w) => w.wave_id === waveId) || null,
     [event, waveId]
   );
-  const soldOut = !special && !!event && event.waves.length > 0 && event.waves.every((w) => !w.is_active || w.available <= 0);
+  /* How many tickets one purchase of the selected tier issues. A group tier — four for
+     the price of three — is bought as one thing and issued as four, so from here on the
+     quantity control counts PACKS. A special link always sells singles. */
+  const packSize = useMemo(
+    () => (special ? 1 : packSizeOf(selectedWave)),
+    [special, selectedWave]
+  );
+  const state = useMemo(() => saleState(event?.waves), [event]);
+  const soldOut = !special && state === "sold_out";
+  const paused = !special && state === "paused";
   const unitPrice = special ? special.price_ron : (selectedWave?.price_ron || 0);
   const total = useMemo(() => unitPrice * qty, [unitPrice, qty]);
-  const qtyOptions = useMemo(() => {
-    const cap = event?.max_tickets_per_user || 4;
-    return [1, 2, 3, 4].filter((n) => n <= cap);
-  }, [event]);
+  const qtyOptions = useMemo(
+    () => packOptions(event?.max_tickets_per_user, packSize),
+    [event, packSize]
+  );
+
+  /* The count resets whenever the pack size under it changes: three of one tier is not
+     three of the next when the next issues four tickets a go. */
+  useEffect(() => { setQty(1); }, [packSize]);
 
   const reserve = async () => {
     if (!user) {
@@ -234,46 +248,81 @@ export default function EventDetail() {
             </div>
           )}
 
-          {soldOut ? (
-            <div data-testid="sold-out-message" className="mt-6 border border-ink/15 bg-ink/5 p-6 text-center">
+          {soldOut || paused ? (
+            <div data-testid={paused ? "paused-message" : "sold-out-message"}
+                 className="mt-6 border border-ink/15 bg-ink/5 p-6 text-center">
               <div className="font-display text-2xl uppercase font-bold tracking-tight">
-                {event.sold_out_message || "Sold Out"}
+                {/* Two different pieces of news. A sell-out is final and the promoter gets
+                    to word it; a pause is temporary and the tickets still exist, so
+                    borrowing the sold-out message for it would be untrue. */}
+                {paused ? "Not On Sale" : (event.sold_out_message || "Sold Out")}
               </div>
+              {paused && (
+                <div className="mt-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
+                  Sales are paused — check back
+                </div>
+              )}
             </div>
           ) : (
             <>
               <div className="mt-6 space-y-3">
-                {!special && event.waves.map((w) => (
+                {!special && event.waves.map((w) => {
+                  const pack = Math.max(1, Number(w.pack_size) || 1);
+                  const off = !w.is_active || w.available <= 0;
+                  return (
                   <button key={w.wave_id} onClick={() => setWaveId(w.wave_id)} data-testid={`wave-${w.wave_id}`}
-                          disabled={!w.is_active || w.available <= 0}
-                          className={`w-full text-left border p-4 transition-colors ${waveId===w.wave_id ? "border-ink bg-ink/5" : "border-ink/15"} ${(!w.is_active || w.available<=0) ? "opacity-40 cursor-not-allowed" : "hover:border-ink"}`}>
-                    <div className="flex items-center justify-between">
-                      <div>
+                          disabled={off}
+                          className={`w-full text-left border p-4 transition-colors ${waveId===w.wave_id ? "border-ink bg-ink/5" : "border-ink/15"} ${off ? "opacity-40 cursor-not-allowed" : "hover:border-ink"}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
                         <div className="font-display uppercase font-bold">{w.name}</div>
                         {/* The exact remaining count is not the buyer's business — it
                             tells competitors and scalpers how a release is going, and a
                             large number reads as "no hurry" while a small one reads as
                             pressure. Only the two facts that change a decision are shown:
-                            it is gone, or it is nearly gone. */}
+                            it is gone, or it is nearly gone.
+
+                            A paused tier says so instead of any of that. It is listed
+                            precisely so a buyer knows it exists, and "sold out" would be
+                            a lie about a tier that still has stock behind it. */}
                         <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
-                          {w.available <= 0
-                            ? "SOLD OUT"
-                            : w.available < LOW_STOCK_AT
-                              ? <span className="text-brand" data-testid={`wave-low-stock-${w.wave_id}`}>Only a few left</span>
-                              : "Available"}
+                          {w.status === "paused"
+                            ? <span data-testid={`wave-paused-${w.wave_id}`}>Not on sale</span>
+                            : w.available <= 0
+                              ? "SOLD OUT"
+                              : w.available < LOW_STOCK_AT
+                                ? <span className="text-brand" data-testid={`wave-low-stock-${w.wave_id}`}>Only a few left</span>
+                                : "Available"}
                         </div>
                       </div>
-                      <div className="font-mono-x">{ron(w.price_ron)}</div>
+                      {/* The pack price is what is charged, so it is the number in the
+                          large type; the per-ticket rate sits under it because "300 for
+                          four" and "75 each" are the two halves of the same offer and a
+                          buyer compares tiers on the second one. */}
+                      <div className="font-mono-x text-right shrink-0">
+                        <div>{ron(w.price_ron)}</div>
+                        {pack > 1 && (
+                          <div className="text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1"
+                               data-testid={`wave-pack-${w.wave_id}`}>
+                            {pack} tickets · {ron(w.price_ron / pack)} each
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </button>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="mt-6 grid grid-cols-2 gap-3">
                 <label className="col-span-1">
-                  <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">Quantity</div>
+                  <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">
+                    {packSize > 1 ? `Packs of ${packSize}` : "Quantity"}
+                  </div>
                   <select value={qty} onChange={(e) => setQty(Number(e.target.value))} data-testid="qty-select" className="input-x">
-                    {qtyOptions.map(n => <option key={n} value={n}>{n}</option>)}
+                    {/* On a pack tier the option is the pack and the ticket count follows
+                        it, so nobody buys "2" believing they are getting two tickets. */}
+                    {qtyOptions.map(n => <option key={n} value={n}>{packSize > 1 ? `${n} (${n * packSize} tickets)` : n}</option>)}
                   </select>
                 </label>
                 {!special && (
@@ -360,7 +409,9 @@ export default function EventDetail() {
       </div>
 
       {!soldOut && (
-        <MobileBuyBar waveName={special ? special.label : selectedWave?.name}
+        <MobileBuyBar waveName={special ? special.label
+                        : [selectedWave?.name, packSize > 1 ? `· ${qty * packSize} tickets` : null]
+                            .filter(Boolean).join(" ")}
                       total={total} busy={busy} onBuy={reserve} />
       )}
 

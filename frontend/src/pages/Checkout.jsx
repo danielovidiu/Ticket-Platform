@@ -82,8 +82,23 @@ export default function Checkout() {
         </div>
 
         <div className="mt-6 space-y-3 font-mono-x text-sm">
+          {/* `quantity` is tickets and `pack_count` is what was bought, and on a group
+              tier those differ — one 300 RON pack, four tickets. Both are named, because
+              the buyer is about to pay the pack price and walk away with the tickets, and
+              a summary showing only one of the two numbers reads as an error either way. */}
           <div className="flex justify-between"><span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Tickets</span><span>{res.quantity}</span></div>
-          <div className="flex justify-between"><span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Unit</span><span>{ron(res.unit_price_ron)}</span></div>
+          {res.pack_size > 1 && (
+            <div className="flex justify-between" data-testid="checkout-packs">
+              <span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Packs</span>
+              <span>{res.pack_count} × {res.pack_size}</span>
+            </div>
+          )}
+          <div className="flex justify-between">
+            <span className="text-ink-4 uppercase tracking-[0.2em] text-xs">
+              {res.pack_size > 1 ? `Per pack of ${res.pack_size}` : "Unit"}
+            </span>
+            <span>{ron(res.unit_price_ron)}</span>
+          </div>
           <div className="flex justify-between"><span className="text-ink-4 uppercase tracking-[0.2em] text-xs">Subtotal</span><span>{ron(res.subtotal_ron)}</span></div>
           {res.discount_amount_ron > 0 && (
             <div className="flex justify-between text-ok">
