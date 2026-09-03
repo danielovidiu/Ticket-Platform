@@ -202,3 +202,32 @@ describe("emptied to the bone", () => {
     expect(footer.textContent).toMatch(/© \d{4}/);
   });
 });
+
+describe("it is an overlay, not the end of the page", () => {
+  test("it is fixed to the bottom and out of the flow", async () => {
+    // Out of the flow is the point: the page runs to the bottom of the window, so a
+    // background photo or a video reaches the edge of the screen instead of stopping
+    // above a bar.
+    const footer = await draw();
+    expect([...footer.classList]).toContain("fixed");
+    expect([...footer.classList]).toContain("bottom-0");
+  });
+
+  test("it sits under the header and the cookie banner, over the page", async () => {
+    // z-30: below the sticky header (z-40), its menu (z-50) and the consent banner
+    // (z-70), above ordinary content. A footer that covers the consent banner is a
+    // footer that stops someone dismissing it.
+    expect([...(await draw()).classList]).toContain("z-30");
+  });
+
+  test("on a page too short to scroll it is visible and interactive", async () => {
+    /* jsdom reports every element as zero-height, so `scrollHeight` and `innerHeight`
+       make the document exactly one screen — the not-scrollable case, where the reveal
+       is 1. That is the state worth asserting here anyway: a short page must not be
+       footerless, and its links must be clickable and focusable. */
+    const footer = await draw();
+    expect(footer.style.opacity).toBe("1");
+    expect(footer.style.visibility).toBe("visible");
+    expect(footer.style.pointerEvents).toBe("auto");
+  });
+});

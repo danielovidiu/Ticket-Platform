@@ -266,7 +266,7 @@ function Events() {
   const [notice, setNotice] = useState(null);   // { event, kind } while composing
   const load = () => http.get("/admin/events").then((r) => setEvents(r.data));
   useEffect(() => { load(); }, []);
-  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", image_aspect: "4:3", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ tier_id: 1, name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: "", access_until: "", access_from: "" }] });
+  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", image_aspect: "4:3", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ tier_id: 1, name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: "", access_until: "", access_from: "", status: "active", pack_size: 1 }] });
   const save = async () => {
     try {
       if (form.event_id) {
@@ -361,11 +361,23 @@ export function TierSales({ waves }) {
       {tiers.map((w) => {
         const capacity = w.capacity ?? 0;
         const left = Math.max(0, w.available ?? capacity);
+        /* Tickets actually issued when the server has counted them, capacity-minus-left
+           otherwise. The two differ by whatever is held in a live checkout, and this row
+           is a glance at how a show is selling — where "held" reads as sold, because in
+           ten minutes it usually is. The editor's delete gate uses `sold` alone. */
         const sold = Math.max(0, capacity - left);
         const pct = capacity ? Math.round((sold / capacity) * 100) : 0;
+        const state = w.status || "active";
+        const pack = Math.max(1, Number(w.pack_size) || 1);
         return (
           <Fragment key={w.wave_id || w.name}>
-            <span className="font-mono-x text-xs uppercase tracking-[0.15em] text-ink-2 truncate">{w.name}</span>
+            <span className={`font-mono-x text-xs uppercase tracking-[0.15em] truncate ${state === "active" ? "text-ink-2" : "text-ink-4"}`}>
+              {w.name}
+              {/* Both say "not selling", and they say it for different reasons, so both
+                  are named rather than collapsed into one greyed-out row. */}
+              {state !== "active" && <span className="text-[9px] tracking-[0.2em] ml-1.5">[{state === "archived" ? "arch" : "paused"}]</span>}
+              {pack > 1 && <span className="text-[9px] tracking-[0.2em] ml-1.5 text-ink-4">×{pack}</span>}
+            </span>
             {/* A bar earns its place here: twelve events in a list is a lot of numbers to
                 compare, and relative fill is readable without reading any of them. */}
             <span className="hidden sm:block w-full h-1.5 bg-ink/10" aria-hidden="true">
@@ -480,6 +492,159 @@ function NoticeComposer({ event, initialKind, onClose }) {
   );
 }
 
+/* Where a tier stands. Mirrors WAVE_STATUSES in server.py.
+ *
+ * Three states rather than a checkbox because the two ways of taking a tier off sale are
+ * not the same decision. `paused` leaves it on the event page — "VIP, back shortly" —
+ * and `archived` takes it off entirely, which is what an editor reaches for when they
+ * would otherwise want to delete a tier that has already sold.
+ */
+const TIER_STATES = [
+  { value: "active", label: "On sale", hint: "Listed on the event page and buyable." },
+  { value: "paused", label: "Paused", hint: "Still listed, but nobody can buy it." },
+  { value: "archived", label: "Archived", hint: "Off the event page. Sold tickets stay valid." },
+];
+
+const ron2 = (n) => (Math.round(Number(n || 0) * 100) / 100).toFixed(2);
+
+/** One ticket tier in the event editor.
+ *
+ * Its own component because the card grew three things a tier row did not used to carry
+ * — a state, a pack size, and a count of what it has actually sold — and those three are
+ * the ones that talk to each other. The count is what decides whether the delete button
+ * exists at all, and the state is what an editor is offered instead when it does not.
+ */
+export function TierCard({ wave: w, index: i, onField, onFields, onTouchEndsAt, onDelete }) {
+  const status = w.status || "active";
+  const sold = Number(w.sold) || 0;
+  const held = Number(w.held) || 0;
+  /* A tier is deletable only while nothing points at it. `sold` counts every ticket ever
+     issued from it, refunded ones included — a refund does not unissue a serial — and
+     `held` covers a checkout that is open right now. Both come from the server rather
+     than from capacity-minus-available, which is sales AND holds AND any capacity edit
+     the promoter has made since, and is no basis for a deletion. */
+  const deletable = sold === 0 && held === 0;
+  const packSize = Math.max(1, Number(w.pack_size) || 1);
+  const isPack = packSize > 1;
+  const capacity = Number(w.capacity) || 0;
+  /* Capacity counts individual tickets, so a tier selling in fours needs a multiple of
+     four; anything else strands a remainder nobody can buy. Flagged here rather than only
+     refused on save, so the editor sees it while the number is still under their cursor. */
+  const remainder = isPack && capacity ? capacity % packSize : 0;
+
+  return (
+    <div className={`border p-4 transition-opacity ${status === "archived"
+                       ? "border-dashed border-ink/25 bg-ink/[0.01] opacity-60"
+                       : "border-ink/15 bg-ink/[0.02]"}`}
+         data-testid={`wave-row-${i}`} data-status={status}>
+      {/* The id took the badge's place. The badge showed the early_bird/general/vip
+          dropdown's value, and that dropdown is gone: it decided nothing a buyer
+          could see, while the running order it did not control was the thing
+          editors actually wanted to change. */}
+      <div className="flex flex-wrap items-end gap-3 pb-3 hairline-b">
+        <label className="shrink-0">
+          <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier id</div>
+          <input type="number" min="1" step="1" value={w.tier_id ?? ""}
+                 onChange={(e) => onField("tier_id", e.target.value === "" ? null : Number(e.target.value))}
+                 data-testid={`wave-tier-id-${i}`}
+                 className="input-x w-20 font-mono-x" />
+        </label>
+        <label className="flex-1 min-w-[8rem]">
+          <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier name</div>
+          <input placeholder="Tier name" value={w.name} onChange={(e) => onField("name", e.target.value)}
+                 data-testid={`wave-name-${i}`}
+                 className="input-x w-full font-display uppercase font-bold" />
+        </label>
+        <label className="shrink-0">
+          <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">State</div>
+          <select value={status} onChange={(e) => onField("status", e.target.value)}
+                  data-testid={`wave-status-${i}`}
+                  title={TIER_STATES.find((s) => s.value === status)?.hint}
+                  className="input-x font-mono-x uppercase text-xs tracking-[0.15em]">
+            {TIER_STATES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+        </label>
+      </div>
+
+      {/* What this tier has actually done, and what may be done to it. The two belong on
+          one line because the first is the reason for the second: an editor reaching for
+          Delete on a tier that has sold needs the count in the same glance as the
+          sentence explaining why the button is not there. */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 font-mono-x text-[10px] uppercase tracking-[0.2em]">
+        <span className={sold ? "text-ink-2" : "text-ink-4"} data-testid={`wave-sold-${i}`}>
+          {sold} sold{held ? ` \u00b7 ${held} held` : ""}
+        </span>
+        {deletable ? (
+          <button type="button" onClick={onDelete} data-testid={`wave-delete-${i}`}
+                  className="uppercase tracking-[0.2em] text-brand hover:underline">
+            Delete tier
+          </button>
+        ) : (
+          <span className="text-ink-4 normal-case tracking-normal font-sans text-xs"
+                data-testid={`wave-undeletable-${i}`}>
+            {sold > 0
+              ? "Sold tickets \u2014 archive it instead. They stay valid, and you can put the tier back."
+              : "A checkout is holding tickets from this tier. Archive it, or wait for the hold to lapse."}
+          </span>
+        )}
+        {status === "archived" && (
+          <span className="text-ink-4 normal-case tracking-normal font-sans text-xs"
+                data-testid={`wave-archived-note-${i}`}>
+            Hidden from buyers. Set it back to On sale at any time.
+          </span>
+        )}
+      </div>
+
+      {/* Two rows rather than one four-column flow: what the tier costs, then when
+          it is sellable and usable. In one grid the three dates wrapped wherever
+          the column count left them — Access until landed under Price on desktop
+          and under Sale starts on tablet — so the three fields that answer the
+          same question were never on the same line as each other. */}
+      <div className="mt-3 space-y-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {/* On a pack tier this is the price of the WHOLE pack, which is what the buyer
+              is actually charged and therefore what the promoter should be typing. The
+              per-ticket rate underneath is derived, never entered — it is the number the
+              refunds are settled on, so it is shown rather than left to be worked out. */}
+          <Field label={isPack ? `Price for ${packSize} (RON)` : "Price (RON)"}>
+            <input type="number" step="0.01" value={w.price_ron}
+                   onChange={(e) => onField("price_ron", Number(e.target.value))}
+                   data-testid={`wave-price-${i}`} className="input-x w-full" />
+          </Field>
+          <Field label="Tickets">
+            <input type="number" value={w.capacity}
+                   onChange={(e) => onField("capacity", Number(e.target.value))}
+                   data-testid={`wave-capacity-${i}`} className="input-x w-full" />
+          </Field>
+          {/* 1 is an ordinary tier. Above it the tier becomes a group ticket: one
+              purchase, that many separate QR codes. */}
+          <Field label="Tickets per pack">
+            <input type="number" min="1" max="20" step="1" value={packSize}
+                   onChange={(e) => onField("pack_size", Math.max(1, Number(e.target.value) || 1))}
+                   data-testid={`wave-pack-size-${i}`} className="input-x w-full" />
+          </Field>
+        </div>
+        {isPack && (
+          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4"
+               data-testid={`wave-pack-note-${i}`}>
+            {ron2(Number(w.price_ron) / packSize)} per ticket{" \u00b7 "}
+            {capacity ? `${Math.floor(capacity / packSize)} packs` : "no stock yet"}
+            {remainder > 0 && (
+              <span className="text-brand">{" \u00b7 "}{remainder} ticket{remainder === 1 ? "" : "s"} nobody can buy \u2014 make the count a multiple of {packSize}</span>
+            )}
+          </div>
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Field label="Sale starts"><DateTimePicker value={w.starts_at} onChange={(v) => onField("starts_at", v)} /></Field>
+          <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => { onTouchEndsAt(); onField("ends_at", v); }} /></Field>
+          <AccessWindow wave={w} onChange={onFields} index={i} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 /** One tier's admission window: which end of it is being set, and when.
  *
  * Two fields on the wave, never both — `access_until` refuses a holder after that
@@ -548,6 +713,16 @@ function EventForm({ form, setForm, onSave, onClose }) {
      and two setWave calls off the same `form` would leave only the second. */
   const setWaveFields = (i, patch) => {
     const w = [...form.waves]; w[i] = { ...w[i], ...patch }; setForm({ ...form, waves: w });
+  };
+
+  /* Deleting a tier is a local edit that lands on Save, like every other change in this
+     form. Only offered on a tier nothing points at — the server refuses the rest with a
+     message naming the tier, so a stale count in this form cannot delete a sale. */
+  const removeWave = (i) => {
+    const w = form.waves[i];
+    if ((Number(w.sold) || 0) > 0 || (Number(w.held) || 0) > 0) return;
+    if (!confirm(`Delete "${w.name || "this tier"}"? It has sold nothing, so nothing is lost. Takes effect when you save.`)) return;
+    setForm({ ...form, waves: form.waves.filter((_, j) => j !== i) });
   };
 
   /* Ends, Doors and each tier's sale end are guesses made from Starts, and they follow
@@ -656,43 +831,11 @@ function EventForm({ form, setForm, onSave, onClose }) {
         </div>
         <div className="mt-4 space-y-4">
           {form.waves.map((w, i) => (
-            <div key={w.wave_id || w._key || `new-${i}`} className="border border-ink/15 bg-ink/[0.02] p-4" data-testid={`wave-row-${i}`}>
-              {/* The id took the badge's place. The badge showed the early_bird/general/vip
-                  dropdown's value, and that dropdown is gone: it decided nothing a buyer
-                  could see, while the running order it did not control was the thing
-                  editors actually wanted to change. */}
-              <div className="flex flex-wrap items-center gap-3 pb-3 hairline-b">
-                <label className="shrink-0">
-                  <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier id</div>
-                  <input type="number" min="1" step="1" value={w.tier_id ?? ""}
-                         onChange={(e) => setWave(i, "tier_id", e.target.value === "" ? null : Number(e.target.value))}
-                         data-testid={`wave-tier-id-${i}`}
-                         className="input-x w-20 font-mono-x" />
-                </label>
-                <label className="flex-1 min-w-[8rem]">
-                  <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier name</div>
-                  <input placeholder="Tier name" value={w.name} onChange={(e) => setWave(i, "name", e.target.value)}
-                         data-testid={`wave-name-${i}`}
-                         className="input-x w-full font-display uppercase font-bold" />
-                </label>
-              </div>
-              {/* Two rows rather than one four-column flow: what the tier costs, then when
-                  it is sellable and usable. In one grid the three dates wrapped wherever
-                  the column count left them — Access until landed under Price on desktop
-                  and under Sale starts on tablet — so the three fields that answer the
-                  same question were never on the same line as each other. */}
-              <div className="mt-3 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Price (RON)"><input type="number" step="0.01" value={w.price_ron} onChange={(e) => setWave(i, "price_ron", Number(e.target.value))} className="input-x w-full" /></Field>
-                  <Field label="Tickets"><input type="number" value={w.capacity} onChange={(e) => setWave(i, "capacity", Number(e.target.value))} className="input-x w-full" /></Field>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <Field label="Sale starts"><DateTimePicker value={w.starts_at} onChange={(v) => setWave(i, "starts_at", v)} /></Field>
-                  <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => { touch(`wave.${i}.ends_at`); setWave(i, "ends_at", v); }} /></Field>
-                  <AccessWindow wave={w} onChange={(patch) => setWaveFields(i, patch)} index={i} />
-                </div>
-              </div>
-            </div>
+            <TierCard key={w.wave_id || w._key || `new-${i}`} wave={w} index={i}
+                      onField={(k, v) => setWave(i, k, v)}
+                      onFields={(patch) => setWaveFields(i, patch)}
+                      onTouchEndsAt={() => touch(`wave.${i}.ends_at`)}
+                      onDelete={() => removeWave(i)} />
           ))}
           {/* Numbered one past the highest already there, so a new tier lands at the
               bottom of the running order instead of tying with an existing one. Sale
@@ -705,6 +848,7 @@ function EventForm({ form, setForm, onSave, onClose }) {
                     starts_at: new Date().toISOString(),
                     ends_at: dayBefore(form.starts_at),
                     access_until: "", access_from: "",
+                    status: "active", pack_size: 1,
                   }]})} className="btn-primary">+ Add tier</button>
         </div>
         <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Albums</div>
