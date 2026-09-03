@@ -38,9 +38,13 @@ export default function PageHeader({
         </div>
       )}
       {(heading || aside) && (
-        <div className="flex flex-wrap items-end justify-between gap-6">
+        // ml-auto on the aside, not justify-between on the row: with justify-between a
+        // solitary flex child (aside with no heading) sits at the start instead of the
+        // end, so the tab bar would drift left the moment an editor empties the heading.
+        // ml-auto keeps it pinned right whether or not the heading is there.
+        <div className="flex flex-wrap items-end gap-6">
           {heading && <h1 className={headingClass} data-testid={headingTestId}>{heading}</h1>}
-          {aside}
+          {aside && <div className="ml-auto">{aside}</div>}
         </div>
       )}
     </div>
