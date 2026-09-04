@@ -214,3 +214,52 @@ describe("uploading posters", () => {
     await waitFor(() => expect(screen.queryByTestId("event-posters-queue")).toBeNull());
   });
 });
+
+/**
+ * The bug that made this "do nothing", and the reason no test caught it.
+ *
+ * `input.files` is LIVE. The input's value is cleared after a pick so that choosing the
+ * same file twice in a row still fires a change — and in a real browser that clearing
+ * empties the FileList object itself. Code holding the list by reference therefore finds
+ * it empty on the very next line, and the upload never starts. Silently: no request, no
+ * toast, no row.
+ *
+ * jsdom does not model that. `value = ""` leaves `files` alone there, so every test
+ * passed — including one written specifically to prove the upload path worked. The only
+ * way to hold the line is to emulate the browser, which is what this does.
+ */
+describe("the picked file survives the input being reset", () => {
+  /** A FileList that empties itself when the input's value is cleared, as a browser's
+   *  does. Iterable, because the fix spreads it. */
+  const liveInput = (input, file) => {
+    const list = {
+      length: 1,
+      0: file,
+      item(i) { return this.length ? file : null; },
+      *[Symbol.iterator]() { if (this.length) yield file; },
+    };
+    Object.defineProperty(input, "files", { get: () => list, configurable: true });
+    Object.defineProperty(input, "value", {
+      get: () => "",
+      set: () => { list.length = 0; delete list[0]; },   // what the browser does
+      configurable: true,
+    });
+    return list;
+  };
+
+  test("a file chosen from the picker is still there when the upload starts", async () => {
+    post.mockReset();
+    post.mockResolvedValue({ data: { url: "/uploads/p1.png" } });
+    const onChange = vi.fn();
+    render(<PosterField value={[]} main="" onChange={onChange} onMainChange={vi.fn()} />);
+
+    const input = screen.getByTestId("event-posters-file");
+    const list = liveInput(input, new File([new Uint8Array([1])], "poster.png", { type: "image/png" }));
+    fireEvent.change(input);
+
+    // The list really was emptied, so this is testing what it claims to test.
+    expect(list.length).toBe(0);
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(["/uploads/p1.png"]));
+  });
+});
