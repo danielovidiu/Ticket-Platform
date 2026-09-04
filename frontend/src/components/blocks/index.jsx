@@ -877,6 +877,14 @@ function Split({ props }) {
   const natural = props.aspect === "natural";
   const aspect = natural ? "" : aspectClass(props.aspect, "aspect-square");
   const gap = splitGap(props);
+  /* The same gutter Split + Audio takes, so the two blocks read as one family: top-aligned
+     words sit level with the very top of the photograph otherwise, which looks like a crop
+     rather than a decision.
+
+     It does move something already published — a Split set to top drops 24px — which is
+     why it was left out when the sibling block got it, and put in when that was asked for.
+     Nothing else moves: middle and bottom are untouched. */
+  const topGutter = props.content_y === "top" ? "pt-6" : "";
 
   return (
     <section><Frame full={props.full_width}>
@@ -907,7 +915,7 @@ function Split({ props }) {
               The padding is what the gap gave up: at 40 the gap holds the words off the
               photograph and this is nothing, at 0 the tiles touch and this holds them off
               instead. Either way a line of text stops the same distance from the picture. */}
-          <div className={`h-full flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)} ${gap.padClass}`}
+          <div className={`h-full flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)} ${gap.padClass} ${topGutter}`}
                style={{ "--column-pad": `${gap.pad}px` }}
                data-testid="split-text">
             {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4`}>{props.eyebrow}</div>}
@@ -1153,16 +1161,14 @@ export function AudioPlaylist({ tracks }) {
                 <span className="shrink-0 font-mono-x text-[10px] tracking-[0.2em] text-ink-5 tabular-nums">
                   {String(i + 1).padStart(2, "0")}
                 </span>
+                {/* No progress bar per row. The transport's rail sits a few pixels above
+                    this list showing the same number, and two readouts of one position is
+                    one more than anybody reads. Which row is playing is already said by
+                    the pause icon and the brighter title. */}
                 <span className="flex-1 min-w-0">
                   <span className={`block font-mono-x text-[11px] uppercase tracking-[0.2em] truncate ${current === i ? "text-ink" : "text-ink-2"}`}>
                     {track.title || `Track ${i + 1}`}
                   </span>
-                  {current === i && (
-                    <span className="mt-1.5 block h-[2px] w-full bg-ink/10" data-testid="audio-progress">
-                      <span className="block h-full bg-ink"
-                            style={{ width: `${Math.min(100, (elapsed / span) * 100)}%` }} />
-                    </span>
-                  )}
                 </span>
                 {/* Every row's length, the way a record shop's player lists them — and
                     read from the block's own data, not from the network. The number was
@@ -1278,6 +1284,11 @@ function SplitAudio({ props }) {
   const maxHeight = bounded(props.max_height, SPLIT_MAX_HEIGHT_LIMITS);
   const ratio = bounded(props.ratio, SPLIT_RATIO_LIMITS);
   const gap = splitGap(props);
+  /* Top-aligned words sit against the top edge of the block, level with the very top of
+     the photograph, which reads as a crop rather than as a decision. A small gutter drops
+     them clear of it. Only when top-aligned: centred text is already clear of both edges,
+     and bottom-aligned text has the player's own margin beneath it. */
+  const topGutter = props.content_y === "top" ? "pt-6" : "";
 
   /* Where the join between the two sits.
    *
@@ -1342,10 +1353,17 @@ function SplitAudio({ props }) {
         <EdgeInset full={props.full_width} className="h-full">
           {/* The column is as tall as the photograph beside it. The words take whatever is
               left above the player and are placed within it — which is what top, middle
-              and bottom mean here — and the player sits at the bottom of the column. */}
-          <div className="h-full flex flex-col">
-            <div className={`flex-1 flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)} ${gap.padClass}`}
-                 style={{ "--column-pad": `${gap.pad}px` }}
+              and bottom mean here — and the player sits at the bottom of the column.
+
+              The gap padding belongs HERE, on the pair, rather than on the words alone.
+              It was on the text, so closing the gap indented the words off the photograph
+              and left the player where it was: the two things stacked in one column,
+              lining up with each other at 40px and drifting 40px apart at 0. One edge for
+              both, at every gap and whether or not the block is full width. */}
+          <div className={`h-full flex flex-col ${gap.padClass}`}
+               style={{ "--column-pad": `${gap.pad}px` }}
+               data-testid="split-audio-column-inner">
+            <div className={`flex-1 flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)} ${topGutter}`}
                  data-testid="split-audio-text">
               {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4`}>{props.eyebrow}</div>}
               {props.heading && (

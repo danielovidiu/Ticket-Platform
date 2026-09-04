@@ -120,9 +120,12 @@ describe("closing the gap, for a chessboard", () => {
   const grid = (type, over) =>
     draw(type, { image_url: "/p.jpg", heading: "Hi", ...over })
       .querySelector(`[data-testid="${type === "split" ? "split" : "split-audio"}"]`);
+  /* Whichever element carries the gap padding. In Split that is the text itself; in
+     Split + Audio it is the box holding the text AND the player, so the two keep one
+     edge — see "the player lines up with the words". */
   const textBox = (type, over) =>
     draw(type, { image_url: "/p.jpg", heading: "Hi", ...over })
-      .querySelector(`[data-testid="${type === "split" ? "split-text" : "split-audio-text"}"]`);
+      .querySelector(`[data-testid="${type === "split" ? "split-text" : "split-audio-column-inner"}"]`);
 
   test.each(["split", "split_audio"])("%s: the gap is a value, and zero is one of them", (type) => {
     expect(grid(type, { gap: 0 }).style.columnGap).toBe("0px");
@@ -167,6 +170,32 @@ describe("closing the gap, for a chessboard", () => {
     expect(grid("split", { gap: -20 }).style.columnGap).toBe("0px");
     expect(grid("split", { gap: 500 }).style.columnGap).toBe("80px");
     expect(grid("split", { gap: "" }).style.columnGap).toBe("40px");
+  });
+
+  test("the player lines up with the words, at any gap", () => {
+    /* The padding was on the text alone, so closing the gap moved the words off the
+       photograph and left the player where it was — two things in one column, level at
+       40 and 40px apart at 0. They share the padded box now, so one edge serves both. */
+    for (const gap of [0, 20, 40]) {
+      const c = draw("split_audio", { image_url: "/p.jpg", heading: "Hi", gap, tracks: [{ title: "One", url: "/a.mp3" }] });
+      const padded = c.querySelector('[data-testid="split-audio-column-inner"]');
+      expect(padded.querySelector('[data-testid="split-audio-text"]'), `gap ${gap}: text`).toBeTruthy();
+      expect(padded.querySelector('[data-testid="audio-playlist"]'), `gap ${gap}: player`).toBeTruthy();
+      // and nothing between them re-indents one and not the other
+      expect(c.querySelector('[data-testid="split-audio-text"]').className).not.toContain("column-pad");
+    }
+  });
+
+  test("they line up at full width too", () => {
+    // Full width swaps which wrapper carries the screen-edge inset; the pair has to stay
+    // inside the same padded box either way.
+    for (const full_width of [false, true]) {
+      const c = draw("split_audio", { image_url: "/p.jpg", heading: "Hi", gap: 0, full_width,
+                                      tracks: [{ title: "One", url: "/a.mp3" }] });
+      const padded = c.querySelector('[data-testid="split-audio-column-inner"]');
+      expect(padded.querySelector('[data-testid="split-audio-text"]')).toBeTruthy();
+      expect(padded.querySelector('[data-testid="audio-playlist"]')).toBeTruthy();
+    }
   });
 
   test("split's hairline can be dropped, which is the last of the gap", () => {
@@ -350,6 +379,21 @@ describe("split + audio: the words", () => {
     const second = c.querySelector('[data-testid="split-audio-cta-2"]');
     expect(second.textContent).toBe("Read more");
     expect(second.getAttribute("href")).toBe("/mission");
+  });
+
+  test.each([
+    ["split_audio", "split-audio-text"],
+    ["split", "split-text"],
+  ])("%s: top-aligned words get a gutter off the top edge", (type, testId) => {
+    // Flush against the top they sit level with the very top of the photograph, which
+    // reads as a crop rather than as a decision. Both blocks, so the family does not
+    // drift: the gutter went into the audio one first and the plain one followed.
+    const box = (over) => draw(type, { heading: "Hi", ...over }).querySelector(`[data-testid="${testId}"]`);
+    expect(box({ content_y: "top" }).className).toContain("pt-6");
+    // The other two are already clear — centred of both edges, bottom of whatever sits
+    // beneath — so they are left alone rather than nudged for symmetry.
+    expect(box({ content_y: "middle" }).className).not.toContain("pt-6");
+    expect(box({ content_y: "bottom" }).className).not.toContain("pt-6");
   });
 
   test("the text is placed within the height the photograph set", () => {
@@ -570,6 +614,15 @@ describe("the clip player", () => {
     Object.defineProperty(el, "duration", { value: 25, configurable: true });
     fireEvent.loadedMetadata(el);
     expect(c.querySelector('[data-testid="audio-length-0"]').textContent).toBe("0:25");
+  });
+
+  test("a row carries no progress bar of its own", () => {
+    // The transport's rail sits a few pixels above the list showing the same position.
+    // Which row is playing is said by the pause icon and the brighter title instead.
+    const c = withTracks({});
+    press(c, 0);
+    expect(c.querySelector('[data-testid="audio-progress"]')).toBeNull();
+    expect(c.querySelector('[data-testid="audio-seek"]')).toBeTruthy();
   });
 
   test("the length is not counted as a row", () => {
