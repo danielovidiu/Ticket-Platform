@@ -69,7 +69,7 @@ export default function Artists() {
                   className="group block border border-ink/10 hover:border-ink transition-colors">
               {a.image_url && (
                 <div className="aspect-square overflow-hidden">
-                  <img src={mediaUrl(a.image_url)} alt={a.name}
+                  <img src={mediaUrl(a.image_url)} alt={a.name} loading="lazy" decoding="async"
                        className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" />
                 </div>
               )}

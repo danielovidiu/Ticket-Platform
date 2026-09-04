@@ -8,6 +8,7 @@ import { Menu, X, ShoppingBag, ChevronDown, User } from "lucide-react";
 import { useCart } from "../lib/cart";
 import { loadNav, onNavChanged, readCachedNav } from "../lib/nav";
 import { prefetchBackstage } from "../pages/backstage";
+import { prefetchAccount } from "../pages/account";
 
 /** Nav of last resort: shown only if /cms/nav cannot be reached at all.
  *
@@ -143,6 +144,13 @@ const Header = ({ cmsNav, navFailed, site }) => {
   // an unrelated field of the account object changes; the loaders are idempotent anyway,
   // since a module already imported resolves from the module registry.
   useEffect(() => { prefetchBackstage(user?.role); }, [user?.role]);
+  // The same trade for the account routes, which are split for the same reason (see
+  // pages/account.js). Gated on being signed in rather than on a role: My Tickets, My
+  // Orders, Profile and the cart are what the account menu opens for everybody, and
+  // warming them for a visitor who has not signed in would fetch four chunks that
+  // visitor has no way to reach.
+  const signedIn = Boolean(user);
+  useEffect(() => { if (signedIn) prefetchAccount(); }, [signedIn]);
   // Order, labels and hrefs all come from the CMS — see cms_routes.get_public_nav.
   //
   // Empty until the answer is known, rather than showing the built-ins and adding the

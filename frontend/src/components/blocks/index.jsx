@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
-import DOMPurify from "dompurify";
 import { resolveEmbed, withPlayback, AUDIO_PROVIDERS } from "../../lib/embeds";
 import { http } from "../../api";
 import { toast } from "sonner";
@@ -284,6 +283,13 @@ function Hero({ props }) {
   const media = props.image_url && (
     <div className="absolute inset-0">
       <img src={mediaUrl(props.image_url)} alt="" className="w-full h-full object-cover"
+           /* The hero IS the LCP element on nearly every page here, and the browser
+              cannot know that: it discovers this tag after the CSS, and by default
+              gives an <img> low priority until layout proves it is in view.
+              Deliberately NOT loading="lazy" — a lazy in-viewport image still loads,
+              just later and behind everything else, which is the opposite of what
+              the largest thing on the screen wants. */
+           fetchPriority="high" decoding="async"
            style={{ objectPosition }} data-testid="hero-image" />
       {overlayMode(props) === "gradient" ? (
         // The original treatment: a theme-wide image opacity plus a bottom gradient,
@@ -390,7 +396,7 @@ function GalleryGrid({ props }) {
       <div className="columns-1 md:columns-3 gap-4 space-y-4">
         {items.map((g) => (
           <figure key={g.gallery_id} className="break-inside-avoid border border-ink/10">
-            <img src={mediaUrl(g.image_url)} alt={g.caption} className="w-full block" />
+            <img src={mediaUrl(g.image_url)} alt={g.caption} loading="lazy" decoding="async" className="w-full block" />
           </figure>
         ))}
       </div>
@@ -438,7 +444,7 @@ function EventsGrid({ props }) {
                   {cover.media_type === "video" ? (
                     <video src={mediaUrl(cover.image_url)} className="w-full h-full object-cover" muted preload="metadata" />
                   ) : (
-                    <img src={mediaUrl(cover.thumbnail_url || cover.image_url)} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                    <img src={mediaUrl(cover.thumbnail_url || cover.image_url)} alt={e.title} loading="lazy" decoding="async" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                   )}
                   <div className="absolute bottom-2 right-2 bg-scrim/70 px-2 py-1 flex items-center gap-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink">
                     <Camera size={11} /> {e.gallery.length}
@@ -446,7 +452,7 @@ function EventsGrid({ props }) {
                 </button>
               ) : (
                 <Link to={`/events/${e.slug}`} className={`${cardAspect} overflow-hidden block shrink-0`}>
-                  <img src={mediaUrl(e.image_url)} alt={e.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                  <img src={mediaUrl(e.image_url)} alt={e.title} loading="lazy" decoding="async" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                 </Link>
               )}
               <Link to={`/events/${e.slug}`} className="p-6 flex-1 flex flex-col justify-center">
@@ -489,7 +495,7 @@ function ArtistsGrid({ props }) {
         <div className={`grid grid-cols-2 ${cols} gap-4`}>
         {artists.map((a) => (
           <Link key={a.artist_id} to={`/artists/${a.slug}`} className="group block border border-ink/10">
-            <div className={`${aspectClass(props.card_aspect, "aspect-square")} overflow-hidden`}><img src={mediaUrl(a.image_url)} alt={a.name} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" /></div>
+            <div className={`${aspectClass(props.card_aspect, "aspect-square")} overflow-hidden`}><img src={mediaUrl(a.image_url)} alt={a.name} loading="lazy" decoding="async" className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition duration-500" /></div>
             <div className="p-4"><div className="font-display uppercase font-semibold">{a.name}</div></div>
           </Link>
         ))}
@@ -746,6 +752,17 @@ function VideoEmbed({ props, preview }) {
   );
 }
 
+/**
+ * DOMPurify, fetched the first time a page actually contains a custom_html block.
+ *
+ * It is 122 kB of source and it was statically imported, so it rode in the entry chunk
+ * on every page load of every deployment — to serve one block type that most pages do
+ * not use at all. The promise is cached at module scope, so a page with five of these
+ * blocks fetches it once and the second render resolves from the module registry.
+ */
+let purifier = null;
+const loadPurifier = () => (purifier ??= import("dompurify").then((m) => m.default));
+
 function CustomHTML({ props }) {
   // Second of two sanitization passes, not the only one. The server now cleans this
   // HTML on write with nh3 (backend/sanitize.py, audit M10) so the database never holds
@@ -758,7 +775,34 @@ function CustomHTML({ props }) {
   // FORBID_TAGS/FORBID_ATTR lists went with it — they were redundant with DOMPurify's
   // defaults, so they read as the protection while doing none of the work, which is
   // worse than not being there.
-  const safe = DOMPurify.sanitize(props.html || "", { USE_PROFILES: { html: true } });
+  //
+  // THE EMPTY STRING IS THE SAFETY PROPERTY, not a loading nicety. Making the sanitizer
+  // async introduces a window in which the component has the raw HTML and not yet the
+  // thing that cleans it; feeding dangerouslySetInnerHTML "" through that window is what
+  // stops the unsanitized markup reaching the DOM. There is deliberately no branch
+  // anywhere below that writes props.html — not on first paint, not on a failed import.
+  //
+  // The wrapper renders from the first frame even so. Returning null until the chunk
+  // landed also worked, and cost a layout shift for every custom_html block on the page:
+  // the section, its width cap and its padding would pop in a tick later. Only the
+  // CONTENT is deferred, so the block occupies its frame immediately and fills in.
+  const [safe, setSafe] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    loadPurifier()
+      .then((DOMPurify) => {
+        if (live) setSafe(DOMPurify.sanitize(props.html || "", { USE_PROFILES: { html: true } }));
+      })
+      .catch(() => {
+        // The chunk did not arrive. Nothing can be rendered safely, so the block stays
+        // empty rather than falling back to the author's unsanitized string.
+        if (live) setSafe("");
+      });
+    // Re-sanitizes when the HTML changes, which is every keystroke in the CMS preview.
+    return () => { live = false; };
+  }, [props.html]);
+
   return <section><Frame full={props.full_width}><div dangerouslySetInnerHTML={{ __html: safe }} /></Frame></section>;
 }
 

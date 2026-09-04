@@ -82,7 +82,7 @@ export default function ProductDetail() {
               {images.map((src, i) => (
                 <button key={src + i} onClick={() => setImgIdx(i)}
                         className={`w-20 h-20 overflow-hidden border ${i === imgIdx ? "border-ink" : "border-ink/10"}`}>
-                  <img src={mediaUrl(src)} alt="" className="w-full h-full object-cover" />
+                  <img src={mediaUrl(src)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                 </button>
               ))}
             </div>

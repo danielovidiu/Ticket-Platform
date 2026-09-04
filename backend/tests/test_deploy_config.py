@@ -47,6 +47,15 @@ def _vercel_headers() -> dict:
     return {h["key"]: h["value"] for h in entries}
 
 
+def _vercel_header_rule(source: str) -> dict:
+    """The header rule for one source pattern, as {key: value}."""
+    data = json.loads(VERCEL_JSON.read_text())
+    for rule in data["services"]["frontend"]["headers"]:
+        if rule.get("source") == source:
+            return {h["key"]: h["value"] for h in rule["headers"]}
+    raise AssertionError(f"vercel.json has no header rule for {source!r}")
+
+
 class TestSourceMapsAreNotShipped:
     """3.9 MB of maps against 912 KB of app, consumed by nothing — there is no error
     tracker wired up. Not a secrecy claim (the bundle carries no secrets, verified
@@ -295,3 +304,32 @@ class TestDeepLinksReachTheApp:
         assert m, "the nginx block no longer has a `location /`"
         assert "/index.html" in m.group(1), \
             f"`location /` no longer falls back to index.html: {m.group(1)!r}"
+
+
+class TestHashedAssetsAreCachedForever:
+    """Measured on the beta deploy before this rule existed: the 461 kB entry chunk came
+    back `public, max-age=0, must-revalidate`, so every reload paid a conditional request
+    per asset before any of the app could run.
+
+    Vite fingerprints everything it writes into /assets, so those URLs are immutable by
+    construction — a rebuild emits new names and a new index.html pointing at them.
+    """
+
+    def test_assets_are_immutable(self):
+        cache = _vercel_header_rule("/assets/(.*)")["Cache-Control"]
+        assert "immutable" in cache, cache
+        assert "max-age=31536000" in cache, cache
+
+    def test_the_shell_is_not_cached_that_way(self):
+        """index.html is the one URL that does not change, so caching it for a year would
+        pin every visitor to the build they first saw."""
+        assert "Cache-Control" not in _vercel_header_rule("/(.*)")
+
+    def test_the_build_actually_fingerprints_what_it_puts_there(self):
+        """The rule is only safe while the filenames carry a hash. Vite does this by
+        default, so what has to hold is that nobody has turned it off."""
+        src = VITE_CONFIG.read_text()
+        assert not re.search(r"entryFileNames|chunkFileNames|assetFileNames", src), (
+            "vite.config.mjs now names output files itself — check the names still carry "
+            "a content hash before trusting the immutable Cache-Control in vercel.json"
+        )

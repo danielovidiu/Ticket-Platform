@@ -79,7 +79,7 @@ export default function Cart() {
                    data-testid={`cart-line-${l.variant_id}`}>
                 <div className="flex items-start gap-3 min-w-0 sm:flex-1">
                   <Link to={`/shop/${l.slug}`} className="w-16 h-16 sm:w-20 sm:h-20 shrink-0 overflow-hidden border border-ink/10">
-                    {l.image ? <img src={mediaUrl(l.image)} alt="" className="w-full h-full object-cover" />
+                    {l.image ? <img src={mediaUrl(l.image)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                              : <div className="w-full h-full bg-surface-2" />}
                   </Link>
                   <div className="min-w-0 flex-1">
