@@ -19,6 +19,7 @@ import uuid
 import subprocess
 import json
 import pytest
+import support
 import requests
 
 from support import (BASE_URL, API, db, mint_user, register_user, registered_user_doc,
@@ -308,19 +309,68 @@ class TestSeedAdminGating:
 
 # ---------- Rate limiting ----------
 
+# Shares a worker with the one test outside this file that POSTs to /newsletter — see the
+# note on it in test_input_hardening.py. The limiter is per IP, and every xdist worker is
+# the same IP, so a bucket cannot be reserved by grouping alone; what grouping buys is
+# that the two are not in flight at the same moment.
+NEWSLETTER_WINDOW_SECONDS = 60
+
+
+@pytest.mark.xdist_group("newsletter_budget")
 class TestRateLimitNewsletter:
-    """Limit is 10/min. 11th must return 429."""
-    def test_newsletter_11th_returns_429(self):
-        emails = [f"TEST_rl_nl_{int(time.time())}_{i}@t.dev" for i in range(11)]
-        codes = []
-        retry_after = None
-        for i, e in enumerate(emails):
-            r = requests.post(f"{BASE_URL}/api/newsletter", json={"email": e, "source": "rl-test"})
+    """Limit is 10/min. 11th must return 429.
+
+    This was flaky, and the two obvious fixes both failed to fix it, which is worth
+    recording. The observed failure was always `[200 x9, 429]`: a real limiter, doing its
+    job, counted from nine because something else had spent a slot in the same sixty
+    seconds. That something was one request in test_input_hardening.py — the limiter keys
+    on client IP, and every xdist worker is the same IP.
+
+      * Putting both in one xdist_group was not enough. Grouping stops them running at the
+        same moment; it does not stop them running forty seconds apart, and forty seconds
+        apart is still inside the window.
+      * Probing for a "clean window" first, the way TestRateLimitContact does, was not
+        enough either. The window is a sliding deque (server._rate_check), so a probe that
+        returns 200 proves the bucket is not FULL — it cannot tell an empty bucket from
+        one with a single slot spent nine seconds ago, which is exactly the case here.
+
+    So it counts optimistically, and only when the count comes out short does it wait a
+    whole window for every timestamp to age out and count again. Doing that wait
+    unconditionally also worked and cost ~97s on every suite run; this pays it only when
+    a neighbour actually collided.
+    """
+
+    def _post(self, tag):
+        return requests.post(f"{BASE_URL}/api/newsletter",
+                             json={"email": f"TEST_rl_nl_{tag}@t.dev", "source": "rl-test"},
+                             timeout=15)
+
+    def _count_to_the_limit(self):
+        """Fire up to eleven and report what came back. Leaves the bucket AT its ceiling,
+        which is what makes the retry below cost only the sleep."""
+        codes, retry_after, stamp = [], None, int(time.time() * 1000)
+        for i in range(11):
+            r = self._post(f"{stamp}_{i}")
             codes.append(r.status_code)
             if r.status_code == 429:
                 retry_after = r.headers.get("Retry-After")
                 break
-        # First 10 must succeed, 11th must be 429
+        return codes, retry_after
+
+    def test_newsletter_11th_returns_429(self):
+        # Optimistically first: when nothing else has touched the bucket this is exact and
+        # costs nothing. Emptying the window unconditionally also worked and added ~97s to
+        # the whole suite, which is a lot to pay on every run for a collision that only
+        # happens when a neighbour's single request lands in the same minute.
+        codes, retry_after = self._count_to_the_limit()
+
+        if codes[:10].count(200) != 10:
+            # Contaminated: somebody spent a slot inside the window. The run above drove
+            # the limiter to 429, so the bucket is full and one window of sleep empties it
+            # completely — then the count is exact by construction.
+            time.sleep(NEWSLETTER_WINDOW_SECONDS + 1)
+            codes, retry_after = self._count_to_the_limit()
+
         assert codes[:10].count(200) == 10, f"expected first 10 to be 200, got {codes}"
         assert codes[-1] == 429, f"expected 11th to be 429, got {codes}"
         assert retry_after is not None, "Retry-After header missing on 429"
@@ -338,21 +388,11 @@ class TestRateLimitContact:
     refused" is meaningless if the 1st already was.
     """
 
-    def _fresh_window(self, attempts=2):
-        """Return the first response, having waited out a window already in progress."""
-        for attempt in range(attempts):
-            r = requests.post(
-                f"{BASE_URL}/api/contact",
-                json={"name": "TEST_rl_probe", "email": "rl@t.dev", "message": "window probe"},
-                timeout=15)
-            if r.status_code != 429:
-                return r
-            if attempt < attempts - 1:
-                time.sleep(min(int(r.headers.get("Retry-After", 60) or 60), 70) + 1)
-        return r
-
     def test_contact_6th_returns_429(self):
-        first = self._fresh_window()
+        first = support.past_rate_limit(lambda: requests.post(
+            f"{BASE_URL}/api/contact",
+            json={"name": "TEST_rl_probe", "email": "rl@t.dev", "message": "window probe"},
+            timeout=15))
         assert first.status_code == 200, (
             f"could not get a clean /contact window: {first.status_code} {first.text[:120]}")
 

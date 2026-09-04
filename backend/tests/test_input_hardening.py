@@ -10,6 +10,7 @@ import uuid
 import pytest
 import requests
 
+import support
 from support import API, TIMEOUT, db, mint_user, skip_if_rate_limited
 import server
 from models_base import DEFAULT_STR_MAX, LONG_TEXT, MAX_JSON_DOC_BYTES
@@ -53,13 +54,22 @@ class TestEmailsRejectControlCharacters:
         assert server._valid_email("someone@example.com") is True
         assert server._valid_email("  someone@example.com  ") is True
 
+    # Overrides this module's own group. This is the only test outside
+    # test_security_hardening.py that POSTs to /newsletter, and the limiter there is 10
+    # per minute PER IP — which every xdist worker shares, because they are all the same
+    # client as far as the server is concerned. Run on another worker, this one request
+    # spent a slot out of the window TestRateLimitNewsletter was about to count, and that
+    # test saw nine successes where it asserted ten. Same worker means same sequence.
+    @pytest.mark.xdist_group("newsletter_budget")
     def test_the_endpoint_actually_calls_it(self):
         """The wiring, once. A validator nothing calls is a comment."""
-        r = skip_if_rate_limited(
-            requests.post(f"{API}/newsletter",
-                          json={"email": "a@b.com\r\nBcc: attacker@evil.example"},
-                          timeout=TIMEOUT),
-            "newsletter")
+        # Waits for a slot rather than skipping: this needs ONE request to get through,
+        # the window is a minute, and reporting a critical test as "didn't run" because a
+        # neighbour spent the budget is worse than sitting out the window.
+        r = support.past_rate_limit(lambda: requests.post(
+            f"{API}/newsletter",
+            json={"email": "a@b.com\r\nBcc: attacker@evil.example"},
+            timeout=TIMEOUT))
         assert r.status_code == 400, f"{r.status_code}: {r.text[:120]}"
         assert db.newsletter_subscriptions.find_one(
             {"email": {"$regex": "evil.example"}}) is None, "stored despite the refusal"
