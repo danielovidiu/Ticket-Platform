@@ -220,14 +220,14 @@ export const BLOCK_DEFAULTS = {
   // rendered from that, so none of them move.
   split: () => ({
     direction: "image-left", image_url: "", eyebrow: "", heading: "", body: "",
-    cta_label: "", cta_href: "", aspect: "natural",
+    cta_label: "", cta_href: "", aspect: "natural", gap: 40,
     content_y: "middle", align: "left", text_case: "as-typed",
   }),
   // Split's layout with the far column cut in two: words above, a short-clip player
   // below. The ratio is the whole point of the block — an image column that can be a
   // third of the width or two thirds of it — so it is a slider rather than a fixed half.
   split_audio: () => ({
-    direction: "image-left", ratio: 50, center_seam: true, image_url: "", max_height: 640,
+    direction: "image-left", ratio: 50, center_seam: true, image_url: "", max_height: 640, gap: 40,
     eyebrow: "", heading: "Listen.", body: "",
     heading_size_desktop: 48, heading_size_mobile: 32, text_case: "as-typed",
     content_y: "middle", align: "left",

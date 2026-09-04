@@ -113,6 +113,78 @@ describe("split: the element takes the photograph's height", () => {
   });
 });
 
+describe("closing the gap, for a chessboard", () => {
+  /* Two split blocks stacked with opposite directions tile like a chessboard only if the
+     photographs reach the column boundary. At the old fixed 40px there is a permanent band
+     down the middle and the corners never meet. */
+  const grid = (type, over) =>
+    draw(type, { image_url: "/p.jpg", heading: "Hi", ...over })
+      .querySelector(`[data-testid="${type === "split" ? "split" : "split-audio"}"]`);
+  const textBox = (type, over) =>
+    draw(type, { image_url: "/p.jpg", heading: "Hi", ...over })
+      .querySelector(`[data-testid="${type === "split" ? "split-text" : "split-audio-text"}"]`);
+
+  test.each(["split", "split_audio"])("%s: the gap is a value, and zero is one of them", (type) => {
+    expect(grid(type, { gap: 0 }).style.columnGap).toBe("0px");
+    expect(grid(type, { gap: 64 }).style.columnGap).toBe("64px");
+  });
+
+  test.each(["split", "split_audio"])("%s: a block that never set one keeps the old 40px", (type) => {
+    expect(grid(type, {}).style.columnGap).toBe("40px");
+  });
+
+  test.each(["split", "split_audio"])("%s: closing it does not stack the words on the photo", (type) => {
+    // Below md the two columns become one on top of the other, and a zero COLUMN gap must
+    // not take the row gap with it — the words would sit against the bottom of the picture.
+    expect(grid(type, { gap: 0 }).style.rowGap).toBe("2.5rem");
+  });
+
+  test.each(["split", "split_audio"])("%s: what the gap gives up, the text takes as padding", (type) => {
+    // The point of the pair: the tiles touch, the words keep their distance.
+    expect(textBox(type, { gap: 0 }).style.getPropertyValue("--column-pad")).toBe("40px");
+    expect(textBox(type, { gap: 15 }).style.getPropertyValue("--column-pad")).toBe("25px");
+    expect(textBox(type, { gap: 40 }).style.getPropertyValue("--column-pad")).toBe("0px");
+    // A gap wider than the breathing room needs no help, and must not go negative.
+    expect(textBox(type, { gap: 80 }).style.getPropertyValue("--column-pad")).toBe("0px");
+  });
+
+  test.each(["split", "split_audio"])("%s: only the side facing the photograph is padded", (type) => {
+    // Padding the outer edge would pull the text off the margin every other block on the
+    // page lines up with.
+    expect(textBox(type, { gap: 0, direction: "image-left" }).className).toContain("column-pad-start");
+    expect(textBox(type, { gap: 0, direction: "image-right" }).className).toContain("column-pad-end");
+  });
+
+  test.each(["split", "split_audio"])("%s: the padding is a variable, so a phone is not indented", (type) => {
+    // `.column-pad-*` only applies it from md up. Inline padding would indent the text on
+    // a stacked phone layout, where there is no photograph beside it to move away from.
+    const el = textBox(type, { gap: 0 });
+    expect(el.style.paddingLeft).toBe("");
+    expect(el.style.paddingRight).toBe("");
+  });
+
+  test("a gap outside the slider is pulled back into it", () => {
+    expect(grid("split", { gap: -20 }).style.columnGap).toBe("0px");
+    expect(grid("split", { gap: 500 }).style.columnGap).toBe("80px");
+    expect(grid("split", { gap: "" }).style.columnGap).toBe("40px");
+  });
+
+  test("split's hairline can be dropped, which is the last of the gap", () => {
+    // Measured before this existed: with the gap at 0 the CELLS met exactly, but a 1px
+    // border on each photograph left a 2px seam between tiles in both directions.
+    const media = (over) => draw("split", { image_url: "/p.jpg", ...over })
+      .querySelector('[data-testid="split-media"]');
+    expect(media({}).className).toContain("border");
+    expect(media({ hairline: true }).className).toContain("border");
+    expect(media({ hairline: false }).className).not.toContain("border");
+  });
+
+  test("a block that predates the toggle still draws its hairline", () => {
+    const c = draw("split", { image_url: "/p.jpg" });
+    expect(c.querySelector('[data-testid="split-media"]').className).toContain("border-ink/10");
+  });
+});
+
 describe("split + audio: proportions", () => {
   const grid = (over) => draw("split_audio", { image_url: "/p.jpg", ...over }).querySelector('[data-testid="split-audio"]');
 
@@ -216,7 +288,10 @@ describe("split + audio: the join between the two", () => {
     // The gap is what the words are indented BY; the inset is what keeps them off the
     // glass at full width. Neither survives on its own if the column wrapper swallows it.
     const c = draw("split_audio", { image_url: "/p.jpg", heading: "Hi", center_seam: true, full_width: true });
-    expect(c.querySelector('[data-testid="split-audio"]').className).toContain("gap-10");
+    // The gap became a value rather than a class when it was made adjustable; the default
+    // is still the 40px `gap-10` drew, and the assertion is about the distance, not the
+    // mechanism.
+    expect(c.querySelector('[data-testid="split-audio"]').style.columnGap).toBe("40px");
     expect(c.querySelector("h2").closest(".edge-inset")).toBeTruthy();
   });
 
@@ -386,6 +461,79 @@ describe("the clip player", () => {
     fireEvent.click(second.querySelector('[data-testid="audio-track-0"]'));
     expect(pressed(second, 0)).toBe(true);
     expect(pressed(first, 0)).toBe(false);
+  });
+
+  test("the transport drives the same player the rows do", () => {
+    const c = withTracks({});
+    const playpause = c.querySelector('[data-testid="audio-playpause"]');
+    fireEvent.click(playpause);
+    expect(playing(c, 0)).toBe(true);
+    expect(playpause.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(playpause);
+    expect(playing(c, 0)).toBe(false);
+  });
+
+  test("pausing keeps the track loaded instead of rewinding it", () => {
+    // The reason which-track and whether-it-is-playing are separate state. Combined, pause
+    // had to mean "nothing selected", so the controls pointed at nothing and resuming
+    // started the clip again from zero.
+    const c = withTracks({});
+    press(c, 1);
+    fireEvent.click(c.querySelector('[data-testid="audio-playpause"]'));   // pause
+    expect(c.querySelector('[data-testid="audio-now-playing"]').textContent).toBe("Two");
+    fireEvent.click(c.querySelector('[data-testid="audio-playpause"]'));   // resume
+    expect(playing(c, 1)).toBe(true);
+  });
+
+  test("previous and next step through the list", () => {
+    const c = withTracks({});
+    fireEvent.click(c.querySelector('[data-testid="audio-next"]'));
+    expect(c.querySelector('[data-testid="audio-now-playing"]').textContent).toBe("Two");
+    fireEvent.click(c.querySelector('[data-testid="audio-prev"]'));
+    expect(c.querySelector('[data-testid="audio-now-playing"]').textContent).toBe("One");
+  });
+
+  test("they stop at the ends rather than wrapping", () => {
+    const c = withTracks({});
+    expect(c.querySelector('[data-testid="audio-prev"]')).toBeDisabled();
+    fireEvent.click(c.querySelector('[data-testid="audio-next"]'));
+    expect(c.querySelector('[data-testid="audio-next"]')).toBeDisabled();
+  });
+
+  test("the scrubber seeks the audio, not just the readout", () => {
+    const c = withTracks({});
+    press(c, 0);
+    const el = c.querySelector('[data-testid="audio-element"]');
+    fireEvent.change(c.querySelector('[data-testid="audio-seek"]'), { target: { value: "12" } });
+    expect(el.currentTime).toBe(12);
+    expect(c.querySelector('[data-testid="audio-elapsed"]').textContent).toBe("0:12");
+  });
+
+  test("it cannot be dragged past the point the clip will stop at", () => {
+    // A control that let you seek to 1:40 of something that stops at 1:30 would be lying
+    // about what it is going to play.
+    const c = withTracks({});
+    expect(c.querySelector('[data-testid="audio-seek"]').getAttribute("max"))
+      .toBe(String(AUDIO_TRACK_MAX_SECONDS));
+    expect(c.querySelector('[data-testid="audio-duration"]').textContent).toBe("1:30");
+  });
+
+  test("mute and volume reach the element", () => {
+    const c = withTracks({});
+    const el = c.querySelector('[data-testid="audio-element"]');
+    fireEvent.change(c.querySelector('[data-testid="audio-volume"]'), { target: { value: "0.4" } });
+    expect(el.volume).toBeCloseTo(0.4);
+    fireEvent.click(c.querySelector('[data-testid="audio-mute"]'));
+    expect(el.muted).toBe(true);
+    fireEvent.click(c.querySelector('[data-testid="audio-mute"]'));
+    expect(el.muted).toBe(false);
+  });
+
+  test("every control says what it is, for anyone not using a mouse", () => {
+    const c = withTracks({});
+    for (const id of ["audio-prev", "audio-playpause", "audio-next", "audio-seek", "audio-mute", "audio-volume"]) {
+      expect(c.querySelector(`[data-testid="${id}"]`).getAttribute("aria-label")).toBeTruthy();
+    }
   });
 
   test("a row with no name of its own still has one", () => {

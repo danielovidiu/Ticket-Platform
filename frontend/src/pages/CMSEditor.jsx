@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home, CalendarRange } from "lucide-react";
 import {
   BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize, HERO_HEIGHT_LIMITS, heroHeight, contentOffset,
-  splitHeadingSize, SPLIT_RATIO_LIMITS, SPLIT_MAX_HEIGHT_LIMITS,
+  splitHeadingSize, SPLIT_RATIO_LIMITS, SPLIT_MAX_HEIGHT_LIMITS, SPLIT_GAP_LIMITS,
 } from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
 import { THEME_PRESETS, presetIdFor, themeChoicePatch } from "../lib/themePresets";
@@ -1398,6 +1398,10 @@ const FIELDS = {
     // photograph rather than cropping every photograph to the same shape. The named
     // ratios stay for blocks that want one, and for every block already published.
     { k: "aspect", label: "Image aspect", type: "select", options: ["natural", "1:1", "4:3", "3:4", "16:9", "16:10", "3:2"] },
+    { k: "gap", label: "Gap between the columns", type: "size", unit: "px", limits: SPLIT_GAP_LIMITS },
+    { k: "hairline", label: "Hairline around the photo", type: "checkbox", fallback: true },
+    { k: "_gap_note", label: "", type: "note",
+      text: "Set the gap to 0 and untick the hairline, and the photograph reaches the middle of the block. Two of these stacked with opposite directions then tile like a chessboard. The words keep their distance from the picture either way." },
     { k: "eyebrow", label: "Eyebrow" },
     { k: "heading", label: "Heading", type: "textarea" },
     { k: "heading_size_desktop", label: "Heading size — desktop", type: "size", breakpoint: "desktop",
@@ -1427,6 +1431,9 @@ const FIELDS = {
     // No aspect control on purpose: the photograph keeps its own proportions here and
     // this is the only thing that limits it.
     { k: "max_height", label: "Max height", type: "size", unit: "px", limits: SPLIT_MAX_HEIGHT_LIMITS },
+    { k: "gap", label: "Gap between the columns", type: "size", unit: "px", limits: SPLIT_GAP_LIMITS },
+    { k: "_gap_note", label: "", type: "note",
+      text: "Set it to 0 and the photograph reaches the middle of the block. Two of these stacked with opposite directions then tile like a chessboard. The words keep their distance from the picture either way." },
     { k: "eyebrow", label: "Eyebrow" },
     { k: "heading", label: "Heading", type: "textarea" },
     { k: "heading_size_desktop", label: "Heading size — desktop", type: "size", breakpoint: "desktop",
@@ -1598,8 +1605,13 @@ function PropsEditor({ block, onChange }) {
                    question only the block can answer: a split with no size set is at
                    30/48px and a hero with none is at 48/72. `f.current` is that block's
                    own resolver; the hero's is the default because it was here first. */
+                /* `Number(x) || fallback` reads 0 as absent and snaps it to the default,
+                   which is the same fault the nav size had. 0 is a real setting here and
+                   the interesting one — it is what closes the column gap — so absence is
+                   tested for directly rather than inferred from falsiness. */
                 current={f.limits
-                  ? (Number(v[f.k]) || f.limits.fallback)
+                  ? (v[f.k] === undefined || v[f.k] === null || v[f.k] === "" || Number.isNaN(Number(v[f.k]))
+                      ? f.limits.fallback : Number(v[f.k]))
                   : f.breakpoint ? (f.current || heroHeadingSize)(v)[f.breakpoint] : heroHeight(v)}
               />
             ) : f.type === "offset" ? (

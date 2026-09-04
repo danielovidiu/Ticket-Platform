@@ -408,3 +408,19 @@ body {
    * right half already starts there. */
   .seam-share-end { margin-left: auto; }
 }
+
+/* Keeping words off a photograph the column gap no longer holds them off.
+ *
+ * Closing the gap to nothing is what makes two stacked split blocks tile like a
+ * chessboard: the photographs reach the column boundary and meet the ones above and below
+ * at the corner. It also walks the text straight into the picture beside it, so the text
+ * column takes back, as padding, whatever the gap gave up — the tiles touch, the words do
+ * not. Only on the side facing the photograph: padding on the outer edge would pull the
+ * text away from the page margin every other block lines up with.
+ *
+ * Below `md` there is one column and no photograph alongside, so it is dropped — the same
+ * reason `.seam-share` and `.column-ratio` are written this way. */
+@media (min-width: 768px) {
+  .column-pad-start { padding-left: var(--column-pad, 0); }
+  .column-pad-end { padding-right: var(--column-pad, 0); }
+}

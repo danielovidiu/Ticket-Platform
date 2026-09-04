@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { renderRich } from "../../lib/richText";
 import { mediaUrl } from "../../lib/media";
 import { Lightbox } from "../ui/lightbox";
-import { Camera, Pause, Play } from "lucide-react";
+import { Camera, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 
@@ -876,12 +876,22 @@ function Split({ props }) {
      and `aspectClass`'s own fallback is still the square those blocks were drawn at. */
   const natural = props.aspect === "natural";
   const aspect = natural ? "" : aspectClass(props.aspect, "aspect-square");
+  const gap = splitGap(props);
 
   return (
     <section><Frame full={props.full_width}>
-      <div className={`grid md:grid-cols-2 gap-10 items-stretch ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}>
-        {/* The image is NOT inset: asked for explicitly, and it keeps the column edge. */}
-        <div className={`${aspect} overflow-hidden border border-ink/10`} data-testid="split-media">
+      {/* The column gap is a value, not a class, and only the COLUMN one: below `md` the
+          two stack, and a gap of zero there would sit the words directly against the
+          bottom of the photograph. The row gap stays at what `gap-10` always drew. */}
+      <div className={`grid md:grid-cols-2 items-stretch ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}
+           style={{ columnGap: `${gap.column}px`, rowGap: "2.5rem" }}
+           data-testid="split" data-gap={gap.column}>
+        {/* The image is NOT inset: asked for explicitly, and it keeps the column edge.
+            The hairline is the last thing standing between two of these and a chessboard —
+            a 1px border on each photograph is a 2px seam where two tiles meet, in both
+            directions. Absent means drawn, which is what every published block has. */}
+        <div className={`${aspect} overflow-hidden ${props.hairline === false ? "" : "border border-ink/10"}`}
+             data-testid="split-media">
           {props.image_url ? (
             <img src={mediaUrl(props.image_url)} alt=""
                  className={natural ? "w-full h-auto block" : "w-full h-full object-cover"} />
@@ -892,8 +902,13 @@ function Split({ props }) {
         <EdgeInset full={props.full_width}>
           {/* The text's own box, full height so it has something to be aligned within.
               Without this the column had exactly the height of its words and top,
-              middle and bottom all meant the same thing. */}
-          <div className={`h-full flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)}`}
+              middle and bottom all meant the same thing.
+
+              The padding is what the gap gave up: at 40 the gap holds the words off the
+              photograph and this is nothing, at 0 the tiles touch and this holds them off
+              instead. Either way a line of text stops the same distance from the picture. */}
+          <div className={`h-full flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)} ${gap.padClass}`}
+               style={{ "--column-pad": `${gap.pad}px` }}
                data-testid="split-text">
             {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4`}>{props.eyebrow}</div>}
             {props.heading && (
@@ -934,52 +949,92 @@ const fmtClock = (seconds) => {
 };
 
 /**
- * A list of short clips, one playing at a time.
+ * A list of short clips with a transport, one playing at a time.
  *
  * ONE `<audio>` element for the whole list, not one per row. Two elements can play at
- * once, and a playlist whose second track starts over the top of the first is the bug
- * this shape makes impossible: switching tracks is switching the source of the single
- * player, so the previous one stops by construction.
+ * once, and a playlist whose second track starts over the top of the first is the bug this
+ * shape makes impossible: switching tracks is switching the source of the single player,
+ * so the previous one stops by construction.
  *
- * The three behaviours asked for map onto three handlers. Pressing a row toggles it —
- * the same row pauses, a different row switches. `onEnded` steps to the next row and
- * stops at the end of the list rather than looping, which is what "until the end" means.
- * `onTimeUpdate` enforces the ninety-second cap by taking the same step early.
+ * WHICH track is loaded and WHETHER it is playing are separate pieces of state, which is
+ * what a transport needs and a bare list of toggles does not. With one combined value,
+ * pausing has to mean "nothing is selected", so the controls have nothing to point at and
+ * resuming would start the clip again from zero. Split apart, pause leaves the track
+ * loaded at its position and the scrubber keeps working while stopped.
+ *
+ * The behaviours asked for map onto the handlers below. Pressing a row toggles it — the
+ * same row pauses, a different row switches. `onEnded` steps to the next row and stops at
+ * the end of the list rather than looping, which is what "until the end" means.
+ * `onTimeUpdate` enforces the ninety-second cap by taking the same step early, and the
+ * scrubber cannot be dragged past that cap either — a control that let you seek to 1:20 of
+ * a clip that stops at 1:30 would be lying about what it will play.
  */
 export function AudioPlaylist({ tracks }) {
   const list = (Array.isArray(tracks) ? tracks : []).filter((t) => t && t.url);
-  const [playing, setPlaying] = useState(null);
+  const [current, setCurrent] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [duration, setDuration] = useState(null);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
   const audioRef = useRef(null);
+  // Read by the load effect so it can start a newly chosen track without taking
+  // `isPlaying` as a dependency, which would restart the clip on every pause and resume.
+  const playingRef = useRef(false);
+  playingRef.current = isPlaying;
 
-  // The source is derived rather than kept in state, so the effect below has a dependency
-  // that is stable across re-renders — `list` is rebuilt on every one of them.
-  const currentUrl = playing === null ? null : list[playing]?.url || null;
+  // Derived rather than kept in state, so the load effect has a dependency that is stable
+  // across re-renders — `list` is rebuilt on every one of them.
+  const currentUrl = list[current]?.url || null;
+
+  const start = useCallback((el) => {
+    // A browser can refuse — an autoplay policy, a file it cannot decode — and jsdom has
+    // no media stack at all. Neither is worth throwing a render away for.
+    try { el.play()?.catch(() => {}); } catch { /* no media support here */ }
+  }, []);
 
   const advance = useCallback(() => {
-    setPlaying((at) => (at !== null && at + 1 < list.length ? at + 1 : null));
+    setCurrent((at) => {
+      if (at + 1 < list.length) return at + 1;
+      setIsPlaying(false);   // the end of the list stops rather than looping
+      return at;
+    });
   }, [list.length]);
+
+  /* Loading a track. Separate from the play/pause effect below so that resuming continues
+     from where it stopped instead of rewinding: setting `src` resets the position, and a
+     single effect covering both would do it on every pause. */
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !currentUrl) return;
+    el.src = mediaUrl(currentUrl);
+    setElapsed(0);
+    setDuration(null);
+    if (playingRef.current) {
+      /* One player at a time on the whole PAGE, not merely within one block. A page can
+         carry two of these, and starting the second while the first was running left both
+         sounding at once — the same fault the single shared <audio> rules out inside a
+         block, one level up. Module scope, because two sibling blocks share no state and
+         there is only ever one pair of ears. */
+      if (nowPlaying && nowPlaying !== setIsPlaying) nowPlaying(false);
+      nowPlaying = setIsPlaying;
+      start(el);
+    }
+  }, [currentUrl, start]);
 
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
-    setElapsed(0);
-    setDuration(null);
-    if (!currentUrl) { el.pause(); return; }
-    /* One player at a time on the whole PAGE, not merely within one block. A page can
-       carry two of these, and starting the second while the first was running left both
-       sounding at once — the same fault the single shared <audio> rules out inside a
-       block, one level up. Module scope, because two sibling blocks share no state and
-       there is only ever one pair of ears. */
-    if (nowPlaying && nowPlaying !== setPlaying) nowPlaying(null);
-    nowPlaying = setPlaying;
-    el.src = mediaUrl(currentUrl);
-    // A browser can refuse to start — an autoplay policy, a file it cannot decode — and
-    // jsdom has no media stack at all. Neither is worth throwing a render away for: the
-    // row simply stays un-played.
-    try { el.play()?.catch(() => {}); } catch { /* no media support here */ }
-  }, [currentUrl]);
+    if (!isPlaying) { el.pause(); return; }
+    if (nowPlaying && nowPlaying !== setIsPlaying) nowPlaying(false);
+    nowPlaying = setIsPlaying;
+    start(el);
+  }, [isPlaying, start]);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (el) { el.volume = volume; el.muted = muted; }
+  }, [volume, muted]);
 
   const onTimeUpdate = (e) => {
     const at = e.currentTarget.currentTime;
@@ -987,49 +1042,109 @@ export function AudioPlaylist({ tracks }) {
     setElapsed(at);
   };
 
+  const choose = (i) => {
+    if (i === current) { setIsPlaying((on) => !on); return; }
+    setCurrent(i);
+    setIsPlaying(true);
+  };
+
+  const step = (by) => {
+    const to = current + by;
+    if (to < 0 || to >= list.length) return;
+    setCurrent(to);
+  };
+
+  const seek = (to) => {
+    const el = audioRef.current;
+    setElapsed(to);
+    if (el) el.currentTime = to;
+  };
+
   if (!list.length) return null;
 
-  // What the bar fills against: the clip's own length, or the cap when the clip is longer
-  // than the cap — because the cap is where it will actually stop.
+  /* What the scrubber runs against: the clip\'s own length, or the cap when the clip is
+     longer than the cap — because the cap is where it will actually stop. */
   const span = Math.min(duration || AUDIO_TRACK_MAX_SECONDS, AUDIO_TRACK_MAX_SECONDS);
+  const button = "shrink-0 w-8 h-8 border border-ink/20 hover:border-ink transition-colors flex items-center justify-center disabled:opacity-30 disabled:hover:border-ink/20";
 
   return (
     <div className="mt-8 border-t border-ink/10" data-testid="audio-playlist">
       <audio ref={audioRef} preload="none" onEnded={advance} onTimeUpdate={onTimeUpdate}
              onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+             onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)}
              data-testid="audio-element" />
-      <ul>
+
+      {/* The transport. Text-left regardless of the block\'s own alignment: a row of
+          controls that shifts to the right on a centred block reads as a mistake. */}
+      <div className="py-4 text-left" data-testid="audio-transport">
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => step(-1)} disabled={current === 0}
+                  aria-label="Previous track" data-testid="audio-prev" className={button}>
+            <SkipBack size={12} />
+          </button>
+          <button type="button" onClick={() => setIsPlaying((on) => !on)}
+                  aria-label={isPlaying ? "Pause" : "Play"} aria-pressed={isPlaying}
+                  data-testid="audio-playpause" className={button}>
+            {isPlaying ? <Pause size={13} /> : <Play size={13} />}
+          </button>
+          <button type="button" onClick={() => step(1)} disabled={current >= list.length - 1}
+                  aria-label="Next track" data-testid="audio-next" className={button}>
+            <SkipForward size={12} />
+          </button>
+
+          <span className="shrink-0 font-mono-x text-[10px] tracking-[0.2em] text-ink-4 tabular-nums"
+                data-testid="audio-elapsed">{fmtClock(elapsed)}</span>
+          {/* A range input rather than a styled div: it can be dragged, clicked anywhere
+              along its length AND driven from the keyboard, none of which comes free with
+              a bar and a mousedown handler. */}
+          <input type="range" min={0} max={span} step={0.01} value={Math.min(elapsed, span)}
+                 onChange={(e) => seek(Number(e.target.value))}
+                 aria-label="Seek" data-testid="audio-seek"
+                 className="flex-1 min-w-0 accent-[color:var(--accent)]" />
+          <span className="shrink-0 font-mono-x text-[10px] tracking-[0.2em] text-ink-4 tabular-nums"
+                data-testid="audio-duration">{fmtClock(span)}</span>
+
+          <button type="button" onClick={() => setMuted((m) => !m)}
+                  aria-label={muted ? "Unmute" : "Mute"} aria-pressed={muted}
+                  data-testid="audio-mute" className={button}>
+            {muted || volume === 0 ? <VolumeX size={12} /> : <Volume2 size={12} />}
+          </button>
+          <input type="range" min={0} max={1} step={0.01} value={muted ? 0 : volume}
+                 onChange={(e) => { setVolume(Number(e.target.value)); setMuted(false); }}
+                 aria-label="Volume" data-testid="audio-volume"
+                 className="w-16 shrink-0 accent-[color:var(--accent)] hidden sm:block" />
+        </div>
+        <div className="mt-2 font-mono-x text-[10px] uppercase tracking-[0.25em] text-ink-4 truncate"
+             data-testid="audio-now-playing">
+          {list[current]?.title || `Track ${current + 1}`}
+        </div>
+      </div>
+
+      <ul className="border-t border-ink/10">
         {list.map((track, i) => {
-          const active = playing === i;
+          const active = current === i && isPlaying;
           return (
             <li key={`${track.url}-${i}`} className="border-b border-ink/10 last:border-b-0">
-              <button type="button" onClick={() => setPlaying(active ? null : i)}
+              <button type="button" onClick={() => choose(i)}
                       aria-pressed={active} data-testid={`audio-track-${i}`}
                       className="group w-full flex items-center gap-3 py-3 text-left">
                 <span className="shrink-0 w-8 h-8 border border-ink/20 group-hover:border-ink transition-colors flex items-center justify-center">
                   {active ? <Pause size={12} /> : <Play size={12} />}
                 </span>
+                <span className="shrink-0 font-mono-x text-[10px] tracking-[0.2em] text-ink-5 tabular-nums">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
                 <span className="flex-1 min-w-0">
-                  <span className="block font-mono-x text-[11px] uppercase tracking-[0.2em] truncate">
+                  <span className={`block font-mono-x text-[11px] uppercase tracking-[0.2em] truncate ${current === i ? "text-ink" : "text-ink-2"}`}>
                     {track.title || `Track ${i + 1}`}
                   </span>
-                  {active && (
+                  {current === i && (
                     <span className="mt-1.5 block h-[2px] w-full bg-ink/10" data-testid="audio-progress">
                       <span className="block h-full bg-ink"
                             style={{ width: `${Math.min(100, (elapsed / span) * 100)}%` }} />
                     </span>
                   )}
                 </span>
-                {/* Only the row that is playing carries a clock. A row that is not has
-                    no honest number to show — `preload="none"` means its length has not
-                    been fetched — and printing "--:--" against every idle track reads as
-                    a broken readout rather than as a resting one. */}
-                {active && (
-                  <span className="shrink-0 font-mono-x text-[10px] tracking-[0.2em] text-ink-4 tabular-nums"
-                        data-testid="audio-elapsed">
-                    {fmtClock(elapsed)}
-                  </span>
-                )}
               </button>
             </li>
           );
@@ -1043,6 +1158,38 @@ export function AudioPlaylist({ tracks }) {
  *  sliver with a cropped photograph in it, and the block below has no use for either end. */
 export const SPLIT_RATIO_LIMITS = { min: 20, max: 80, fallback: 50 };
 export const SPLIT_MAX_HEIGHT_LIMITS = { min: 200, max: 1400, fallback: 640 };
+
+/**
+ * The channel between the two columns. 40px is what `gap-10` has always drawn, so a block
+ * that has never been touched keeps it.
+ *
+ * Zero is the interesting end and the reason this is a control at all: it is what lets two
+ * stacked split blocks with opposite directions tile like a chessboard, the photograph in
+ * one meeting the photograph in the next at the corner instead of across a permanent 40px
+ * band. See `SPLIT_TEXT_BREATHING` for the half that keeps the words readable when it does.
+ */
+export const SPLIT_GAP_LIMITS = { min: 0, max: 80, fallback: 40 };
+
+/** How close a line of text may come to the photograph beside it. Whatever the gap does
+ *  not provide, the text column takes as padding on that side — so the tiles can touch
+ *  while the words keep the same distance from the picture they always had. */
+const SPLIT_TEXT_BREATHING = 40;
+
+/**
+ * The channel between the columns, and the padding the text needs to survive closing it.
+ *
+ * `reverse` says which side of the text column the photograph is on: image-left puts it to
+ * the text's left, image-right to its right. Only that side is padded — padding the outer
+ * edge would pull the text off the margin every other block on the page lines up with.
+ */
+function splitGap(props) {
+  const column = bounded(props.gap, SPLIT_GAP_LIMITS);
+  return {
+    column,
+    padClass: props.direction === "image-right" ? "column-pad-end" : "column-pad-start",
+    pad: Math.max(0, SPLIT_TEXT_BREATHING - column),
+  };
+}
 
 /** A number within its limits, or the default when there isn't one.
  *
@@ -1094,6 +1241,7 @@ function SplitAudio({ props }) {
   const upper = casing(props);
   const maxHeight = bounded(props.max_height, SPLIT_MAX_HEIGHT_LIMITS);
   const ratio = bounded(props.ratio, SPLIT_RATIO_LIMITS);
+  const gap = splitGap(props);
 
   /* Where the join between the two sits.
    *
@@ -1133,9 +1281,11 @@ function SplitAudio({ props }) {
 
   return (
     <section><Frame full={props.full_width}>
-      <div className={`grid gap-10 items-stretch column-ratio ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}
-           style={{ "--column-ratio-a": `${columns[0]}fr`, "--column-ratio-b": `${columns[1]}fr` }}
-           data-testid="split-audio" data-ratio={ratio} data-centred={centred ? "true" : "false"}>
+      <div className={`grid items-stretch column-ratio ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}
+           style={{ "--column-ratio-a": `${columns[0]}fr`, "--column-ratio-b": `${columns[1]}fr`,
+                    columnGap: `${gap.column}px`, rowGap: "2.5rem" }}
+           data-testid="split-audio" data-ratio={ratio} data-centred={centred ? "true" : "false"}
+           data-gap={gap.column}>
         {/* No border and not inset: the photograph reaches the edge of its column, and of
             the screen when the block is full width. */}
         <div className={`overflow-hidden ${image.className}`} style={image.style}
@@ -1158,7 +1308,8 @@ function SplitAudio({ props }) {
               left above the player and are placed within it — which is what top, middle
               and bottom mean here — and the player sits at the bottom of the column. */}
           <div className="h-full flex flex-col">
-            <div className={`flex-1 flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)}`}
+            <div className={`flex-1 flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)} ${gap.padClass}`}
+                 style={{ "--column-pad": `${gap.pad}px` }}
                  data-testid="split-audio-text">
               {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4`}>{props.eyebrow}</div>}
               {props.heading && (
