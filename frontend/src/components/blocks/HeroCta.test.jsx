@@ -1,6 +1,6 @@
 /**
- * Hero and CTA banner: what the CMS controls, and what a block authored before those
- * controls existed still looks like.
+ * The hero: what the CMS controls, and what a block authored before those controls
+ * existed still looks like.
  *
  * The second half matters as much as the first. These fields were added to blocks that
  * are already published, so "absent" has to keep meaning what it meant — otherwise the
@@ -9,6 +9,7 @@
 import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { BlockRenderer } from "./index";
+import { BLOCK_DEFAULTS, BLOCK_LABELS } from "../../lib/cms";
 
 const draw = (type, props) =>
   render(
@@ -138,30 +139,28 @@ describe("hero full frame", () => {
   });
 });
 
-describe("cta banner is authored, not hardcoded", () => {
-  test("the eyebrow is the author's, not the literal string CTA", () => {
-    const c = draw("cta_banner", { eyebrow: "Join the list", heading: "Hi" });
-    expect(c.textContent).toContain("Join the list");
+describe("the CTA banner is gone", () => {
+  test("it is not a block anyone can add", () => {
+    // Removed rather than deprecated: Split and Image band both do what it did, with
+    // controls it never had.
+    expect(BLOCK_LABELS.cta_banner).toBeUndefined();
+    expect(BLOCK_DEFAULTS.cta_banner).toBeUndefined();
   });
 
-  test("an image can stand in the left column", () => {
-    const img = draw("cta_banner", { image_url: "/promo.jpg", heading: "Hi" }).querySelector('[data-testid="cta-image"]');
-    expect(img.getAttribute("src")).toContain("/promo.jpg");
+  test("a page still holding one shows a visitor nothing", () => {
+    // Retiring a type turned every page carrying one into a page printing
+    // "Unknown block: cta_banner" at its readers. A visitor can neither read that nor
+    // act on it, which is the same reasoning the unsupported-embed notice follows.
+    const c = draw("cta_banner", { heading: "Come" });
+    expect(c.textContent.trim()).toBe("");
   });
 
-  test("the button carries the authored label and link", () => {
-    const b = draw("cta_banner", { cta_label: "Buy now", cta_href: "/events" }).querySelector('[data-testid="cta-button"]');
-    expect(b.textContent).toBe("Buy now");
-    expect(b.getAttribute("href")).toBe("/events");
-  });
-
-  test("the description keeps its line breaks", () => {
-    const c = draw("cta_banner", { body: "line one\nline two" });
-    expect(c.querySelectorAll("br").length).toBe(1);
-  });
-
-  test("a block with no eyebrow set still shows the original label", () => {
-    const c = draw("cta_banner", { heading: "Hi" });
-    expect(c.textContent).toContain("CTA");
+  test("the editor is told, because the editor can delete it", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <BlockRenderer block={{ block_id: "b1", type: "cta_banner", enabled: true, props: {} }} preview />
+      </MemoryRouter>
+    );
+    expect(container.querySelector('[data-testid="unknown-block"]').textContent).toMatch(/cta_banner/);
   });
 });

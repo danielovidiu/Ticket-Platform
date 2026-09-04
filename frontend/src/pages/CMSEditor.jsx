@@ -3,7 +3,10 @@ import { http, errorText, setUnsavedWorkGuard } from "../api";
 import { useAuth } from "../auth";
 import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Trash2, Plus, Eye, EyeOff, Undo2, Redo2, Smartphone, Monitor, Palette, FileText, History, Home, CalendarRange } from "lucide-react";
-import { BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize, HERO_HEIGHT_LIMITS, heroHeight, contentOffset } from "../components/blocks";
+import {
+  BlockRenderer, HERO_SIZE_LIMITS, heroHeadingSize, HERO_HEIGHT_LIMITS, heroHeight, contentOffset,
+  splitHeadingSize, SPLIT_RATIO_LIMITS, SPLIT_MAX_HEIGHT_LIMITS, SPLIT_GAP_LIMITS,
+} from "../components/blocks";
 import { BLOCK_DEFAULTS, BLOCK_LABELS, BLOCK_TYPES, newBlockId, applyTheme } from "../lib/cms";
 import { THEME_PRESETS, presetIdFor, themeChoicePatch } from "../lib/themePresets";
 import { failingPairs, AA_TEXT } from "../lib/contrast";
@@ -11,6 +14,7 @@ import { applyCustomFonts } from "../lib/fonts";
 import { FormatToolbar } from "../lib/richText";
 import ImageField from "../components/ImageField";
 import VideoField from "../components/VideoField";
+import AudioTracksField from "../components/AudioTracksField";
 import FontPicker from "../components/FontPicker";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 import FontManager from "../components/FontManager";
@@ -1242,6 +1246,11 @@ const FIELDS = {
     { k: "heading", label: "Heading", type: "textarea" },
     { k: "body", label: "Body", type: "textarea", format: true },
     { k: "image_url", label: "Background image", type: "image" },
+    // Phones only, and named for what it decides rather than for the CSS it sets. A wide
+    // photograph loses most of its width to the crop on a 375px screen, and this says
+    // which part of it is the part worth keeping.
+    { k: "mobile_focus", label: "Mobile view", type: "select", options: ["left", "center", "right"],
+      fallback: "center", when: (v) => !!v.image_url },
     { k: "full_frame", label: "Full frame (edge to edge)", type: "checkbox", fallback: true },
     { k: "overlay", label: "Overlay", type: "select", options: ["gradient", "solid", "none"], fallback: "gradient" },
     { k: "overlay_color", label: "Overlay colour", type: "color", fallback: "#050505", when: (v) => v.overlay === "solid" },
@@ -1307,17 +1316,6 @@ const FIELDS = {
     { k: "items", label: "Fallback items (used only when there are no upcoming events)", type: "list" },
     { k: "full_width", label: "Full width (edge to edge)", type: "checkbox", fallback: true },
   ],
-  cta_banner: [
-    { k: "image_url", label: "Image", type: "image" },
-    { k: "eyebrow", label: "Eyebrow" },
-    { k: "heading", label: "Title", type: "textarea" },
-    { k: "body", label: "Description", type: "textarea", format: true, rows: 5 },
-    { k: "cta_label", label: "Button label" },
-    { k: "cta_href", label: "Button link" },
-    { k: "cta_style", label: "Button style", type: "select", options: ["outline", "accent"], fallback: "outline" },
-    { k: "text_case", label: "Text case", type: "select", options: ["as-typed", "uppercase"], fallback: "uppercase" },
-    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
-  ],
   contact_form: [
     { k: "heading", label: "Heading" },
     { k: "success_message", label: "Success message", type: "textarea", rows: 2 },
@@ -1355,6 +1353,11 @@ const FIELDS = {
   ],
   image_band: [
     { k: "image_url", label: "Background image", type: "image" },
+    // Hidden for the fixed variant: that photo is drawn at full width with its height
+    // left free, so there is no horizontal crop for this to choose from. A control that
+    // looks editable and changes nothing is the bug the overlay boolean had.
+    { k: "mobile_focus", label: "Mobile view", type: "select", options: ["left", "center", "right"],
+      fallback: "center", when: (v) => !!v.image_url && !v.fixed_bg },
     { k: "fixed_bg", label: "Fixed background (photo stays put as you scroll)", type: "checkbox",
       // Desktop only: mobile browsers ignore background-attachment, so the fixed variant
       // shows no photo below md rather than a broken version of the effect.
@@ -1391,12 +1394,62 @@ const FIELDS = {
   split: [
     { k: "direction", label: "Direction", type: "select", options: ["image-left", "image-right"] },
     { k: "image_url", label: "Image", type: "image" },
-    { k: "aspect", label: "Image aspect", type: "select", options: ["1:1", "4:3", "3:4", "16:9", "16:10", "3:2"] },
+    // "natural" first, and the default on new blocks: the element takes the height of the
+    // photograph rather than cropping every photograph to the same shape. The named
+    // ratios stay for blocks that want one, and for every block already published.
+    { k: "aspect", label: "Image aspect", type: "select", options: ["natural", "1:1", "4:3", "3:4", "16:9", "16:10", "3:2"] },
+    { k: "gap", label: "Gap between the columns", type: "size", unit: "px", limits: SPLIT_GAP_LIMITS },
+    { k: "hairline", label: "Hairline around the photo", type: "checkbox", fallback: true },
+    { k: "_gap_note", label: "", type: "note",
+      text: "Set the gap to 0 and untick the hairline, and the photograph reaches the middle of the block. Two of these stacked with opposite directions then tile like a chessboard. The words keep their distance from the picture either way." },
     { k: "eyebrow", label: "Eyebrow" },
-    { k: "heading", label: "Heading" },
+    { k: "heading", label: "Heading", type: "textarea" },
+    { k: "heading_size_desktop", label: "Heading size — desktop", type: "size", breakpoint: "desktop",
+      current: splitHeadingSize },
+    { k: "heading_size_mobile", label: "Heading size — mobile", type: "size", breakpoint: "mobile",
+      current: splitHeadingSize },
+    { k: "text_case", label: "Text case", type: "select", options: ["as-typed", "uppercase"], fallback: "uppercase" },
     { k: "body", label: "Body", type: "textarea", format: true },
+    { k: "align", label: "Text align (horizontal)", type: "select", options: ["left", "center", "right"], fallback: "left" },
+    { k: "content_y", label: "Text position (vertical)", type: "select", options: ["top", "middle", "bottom"], fallback: "middle" },
     { k: "cta_label", label: "CTA label" },
     { k: "cta_href", label: "CTA link" },
+    { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
+  ],
+  split_audio: [
+    { k: "direction", label: "Direction", type: "select", options: ["image-left", "image-right"] },
+    // The block's own control: how the width is shared out. At 50 the two halves meet in
+    // the middle of the block, which is where "image central" lands.
+    { k: "ratio", label: "Image width (share of the block)", type: "range",
+      min: SPLIT_RATIO_LIMITS.min, max: SPLIT_RATIO_LIMITS.max, fallback: SPLIT_RATIO_LIMITS.fallback },
+    { k: "center_seam", label: "Photo and text meet in the middle", type: "checkbox" },
+    { k: "_seam_note", label: "", type: "note",
+      text: "On, the join between the two stays on the centre line whatever the ratio is — "
+          + "the narrower side gives its spare width to the outside edge. Off, the ratio "
+          + "sizes the columns themselves and the join moves with it." },
+    { k: "image_url", label: "Image", type: "image" },
+    // No aspect control on purpose: the photograph keeps its own proportions here and
+    // this is the only thing that limits it.
+    { k: "max_height", label: "Max height", type: "size", unit: "px", limits: SPLIT_MAX_HEIGHT_LIMITS },
+    { k: "gap", label: "Gap between the columns", type: "size", unit: "px", limits: SPLIT_GAP_LIMITS },
+    { k: "_gap_note", label: "", type: "note",
+      text: "Set it to 0 and the photograph reaches the middle of the block. Two of these stacked with opposite directions then tile like a chessboard. The words keep their distance from the picture either way." },
+    { k: "eyebrow", label: "Eyebrow" },
+    { k: "heading", label: "Heading", type: "textarea" },
+    { k: "heading_size_desktop", label: "Heading size — desktop", type: "size", breakpoint: "desktop",
+      current: splitHeadingSize },
+    { k: "heading_size_mobile", label: "Heading size — mobile", type: "size", breakpoint: "mobile",
+      current: splitHeadingSize },
+    { k: "text_case", label: "Text case", type: "select", options: ["as-typed", "uppercase"], fallback: "as-typed" },
+    { k: "body", label: "Body", type: "textarea", format: true },
+    { k: "align", label: "Text align (horizontal)", type: "select", options: ["left", "center", "right"], fallback: "left" },
+    { k: "content_y", label: "Text position (vertical)", type: "select", options: ["top", "middle", "bottom"], fallback: "middle" },
+    { k: "cta_label", label: "Primary CTA label" },
+    { k: "cta_href", label: "Primary CTA link" },
+    { k: "cta_style", label: "Primary CTA style", type: "select", options: ["outline", "accent"], fallback: "outline" },
+    { k: "second_cta_label", label: "Secondary CTA label" },
+    { k: "second_cta_href", label: "Secondary CTA link" },
+    { k: "tracks", label: "Audio tracks", type: "tracks" },
     { k: "full_width", label: "Full width (edge to edge)", type: "checkbox" },
   ],
 };
@@ -1499,6 +1552,12 @@ function PropsEditor({ block, onChange }) {
         }
         // Same reason as the image field, plus one more: an upload fills the file and its
         // poster together, so this one commits a patch rather than a single value.
+        // A list of uploads, each with a name of its own — same reason as the two above,
+        // and it manages a whole array rather than a single value.
+        if (f.type === "tracks") {
+          return <AudioTracksField key={key} label={f.label} value={v[f.k]}
+                                   onChange={commitField(f.k)} testId={testId} />;
+        }
         if (f.type === "video") {
           const fileKey = f.fileKey || "file_url";
           const posterKey = f.posterKey || "poster_url";
@@ -1542,9 +1601,18 @@ function PropsEditor({ block, onChange }) {
                 // own bounds. Without the last case a panel height in px would silently
                 // borrow the hero's 10-100vh limits.
                 limits={f.limits || (f.breakpoint ? HERO_SIZE_LIMITS[f.breakpoint] : HERO_HEIGHT_LIMITS)}
+                /* The placeholder has to be what the block renders at TODAY, which is a
+                   question only the block can answer: a split with no size set is at
+                   30/48px and a hero with none is at 48/72. `f.current` is that block's
+                   own resolver; the hero's is the default because it was here first. */
+                /* `Number(x) || fallback` reads 0 as absent and snaps it to the default,
+                   which is the same fault the nav size had. 0 is a real setting here and
+                   the interesting one — it is what closes the column gap — so absence is
+                   tested for directly rather than inferred from falsiness. */
                 current={f.limits
-                  ? (Number(v[f.k]) || f.limits.fallback)
-                  : (f.breakpoint ? heroHeadingSize(v)[f.breakpoint] : heroHeight(v))}
+                  ? (v[f.k] === undefined || v[f.k] === null || v[f.k] === "" || Number.isNaN(Number(v[f.k]))
+                      ? f.limits.fallback : Number(v[f.k]))
+                  : f.breakpoint ? (f.current || heroHeadingSize)(v)[f.breakpoint] : heroHeight(v)}
               />
             ) : f.type === "offset" ? (
               /* A slider from the top of the image to the bottom, with the three places

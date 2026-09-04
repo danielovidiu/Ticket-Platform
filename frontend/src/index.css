@@ -372,3 +372,55 @@ body {
 @media (min-width: 768px) {
   .hero-heading { font-size: var(--hero-heading-desktop, 72px); }
 }
+
+/* Two columns whose share of the width is set per block, for the same reason and by the
+ * same means as the heading above: the value belongs to one block so it cannot be a
+ * utility class, and the breakpoint cannot be written inline.
+ *
+ * Inline `grid-template-columns` would be the obvious way and is wrong here — an inline
+ * style beats a `md:` class, so a phone would get two thin columns instead of a stack.
+ *
+ * Fractions, not percentages: two percentages adding to 100 leave nothing for the gap and
+ * the row overflows by exactly the gap's width. `minmax(0, …)` is what stops a wide
+ * photograph from forcing its track past the share it was given. */
+.column-ratio { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 768px) {
+  .column-ratio {
+    grid-template-columns: minmax(0, var(--column-ratio-a, 1fr)) minmax(0, var(--column-ratio-b, 1fr));
+  }
+}
+
+/* Holding the join between two columns on the centre line.
+ *
+ * The ratio alone cannot do it: giving the photograph 70% of the width puts the join at
+ * 70%, which is the one place it is not centred. So each side takes half the block, and
+ * the ratio decides how much of its own half it fills — the smaller side hands its spare
+ * width back to the OUTER edge, where it reads as margin, rather than to the middle,
+ * where it would read as a hole.
+ *
+ * Below `md` there are no columns to join, so the share is dropped and each element is
+ * full width again. Same reason `.column-ratio` is written this way: an inline width
+ * would apply at every size and leave a phone showing a 43%-wide photograph. */
+.seam-share { width: 100%; }
+@media (min-width: 768px) {
+  .seam-share { width: var(--seam-share, 100%); }
+  /* The element in the LEFT half, pushed across to sit against the join. The one in the
+   * right half already starts there. */
+  .seam-share-end { margin-left: auto; }
+}
+
+/* Keeping words off a photograph the column gap no longer holds them off.
+ *
+ * Closing the gap to nothing is what makes two stacked split blocks tile like a
+ * chessboard: the photographs reach the column boundary and meet the ones above and below
+ * at the corner. It also walks the text straight into the picture beside it, so the text
+ * column takes back, as padding, whatever the gap gave up — the tiles touch, the words do
+ * not. Only on the side facing the photograph: padding on the outer edge would pull the
+ * text away from the page margin every other block lines up with.
+ *
+ * Below `md` there is one column and no photograph alongside, so it is dropped — the same
+ * reason `.seam-share` and `.column-ratio` are written this way. */
+@media (min-width: 768px) {
+  .column-pad-start { padding-left: var(--column-pad, 0); }
+  .column-pad-end { padding-right: var(--column-pad, 0); }
+}

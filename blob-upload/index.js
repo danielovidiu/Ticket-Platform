@@ -69,8 +69,23 @@ async function getHandleUpload() {
   return cachedHandleUpload;
 }
 
-/** Only what a <video> can play, and what the block's own CSP `media-src` permits. */
-const ALLOWED_CONTENT_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
+/**
+ * What may be uploaded this way: only what a <video> or an <audio> can play, and only
+ * what the CSP's `media-src` will then load back.
+ *
+ * This list is the WHOLE gate for anything that takes the direct route — a file that
+ * goes to Blob never passes the Python side's container sniffing, as the note above
+ * says. It must stay in step with `VIDEO_CONTENT_TYPES` and `AUDIO_CONTENT_TYPES` in
+ * backend/server.py, which is not a wish: the audio types were added there and not here,
+ * and the result was an upload that worked on a laptop and failed on the deployment with
+ * "Connection lost" — a token refusal has no HTTP response for the client to read, so the
+ * pipeline classified it as a dropped connection and retried it three times.
+ * `test_audio_uploads.py` compares the two lists now so the next one cannot be silent.
+ */
+const ALLOWED_CONTENT_TYPES = [
+  "video/mp4", "video/webm", "video/quicktime",
+  "audio/mpeg", "audio/wav", "audio/x-wav", "audio/ogg", "audio/mp4", "audio/aac",
+];
 
 /** The same ceiling the Python side enforces, so the two cannot drift into disagreeing
  *  about what "too large" means. */

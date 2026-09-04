@@ -161,6 +161,10 @@ export const BLOCK_DEFAULTS = {
     heading: "New hero",
     body: "Short paragraph describing the section.",
     image_url: "",
+    // Which part of the photograph survives the crop on a phone. "center" is what an
+    // <img> does anyway, so a new hero looks exactly as it always has until someone
+    // decides the subject is off to one side.
+    mobile_focus: "center",
     full_frame: true,
     overlay: "solid",
     overlay_color: "#050505",
@@ -183,10 +187,6 @@ export const BLOCK_DEFAULTS = {
   events_grid: () => ({ heading: "Events", eyebrow: "Programme", limit: 4, layout: "grid-2", card_aspect: "16:10" }),
   artists_grid: () => ({ heading: "Artists", eyebrow: "Roster", limit: 6, layout: "grid-3", card_aspect: "1:1" }),
   marquee: () => ({ items: ["ITEM ONE", "ITEM TWO", "ITEM THREE"] }),
-  cta_banner: () => ({
-    eyebrow: "CTA", image_url: "", heading: "Big statement here.", body: "Supporting line.",
-    cta_label: "Do it", cta_href: "#", cta_style: "outline", text_case: "as-typed",
-  }),
   contact_form: () => ({ heading: "Say hello", success_message: "Sent." }),
   newsletter: () => ({ heading: "Subscribe", body: "Occasional emails.", cta_label: "Subscribe" }),
   // A new video block is a silent looping backdrop, not a player: muted, looping, inline,
@@ -203,6 +203,7 @@ export const BLOCK_DEFAULTS = {
   }),
   image_band: () => ({
     eyebrow: "", heading: "Statement over an image.", body: "", image_url: "",
+    mobile_focus: "center",
     overlay_color: "#050505", overlay_opacity: 50, height: "medium", align: "left",
     content_y: "middle",
     text_case: "as-typed", full_width: true, cta_label: "", cta_href: "", cta_style: "outline",
@@ -213,7 +214,26 @@ export const BLOCK_DEFAULTS = {
     height: 320, width: "normal", align: "center", text_align: "left", full_width: false,
   }),
   spacer: () => ({ height: "4rem" }),
-  split: () => ({ direction: "image-left", image_url: "", eyebrow: "", heading: "", body: "", cta_label: "", cta_href: "", aspect: "1:1" }),
+  // `aspect: "natural"` on new blocks, where it used to be a forced square: the element
+  // takes the height of the photograph put in it rather than cropping every photograph
+  // to the same shape. Blocks already published carry their own saved aspect and are
+  // rendered from that, so none of them move.
+  split: () => ({
+    direction: "image-left", image_url: "", eyebrow: "", heading: "", body: "",
+    cta_label: "", cta_href: "", aspect: "natural", gap: 40,
+    content_y: "middle", align: "left", text_case: "as-typed",
+  }),
+  // Split's layout with the far column cut in two: words above, a short-clip player
+  // below. The ratio is the whole point of the block — an image column that can be a
+  // third of the width or two thirds of it — so it is a slider rather than a fixed half.
+  split_audio: () => ({
+    direction: "image-left", ratio: 50, center_seam: true, image_url: "", max_height: 640, gap: 40,
+    eyebrow: "", heading: "Listen.", body: "",
+    heading_size_desktop: 48, heading_size_mobile: 32, text_case: "as-typed",
+    content_y: "middle", align: "left",
+    cta_label: "", cta_href: "", second_cta_label: "", second_cta_href: "",
+    tracks: [],
+  }),
 };
 
 export const BLOCK_LABELS = {
@@ -228,7 +248,6 @@ export const BLOCK_LABELS = {
   events_grid: "Events grid",
   artists_grid: "Artists grid",
   marquee: "Marquee",
-  cta_banner: "CTA banner",
   contact_form: "Contact form",
   newsletter: "Newsletter",
   video: "Video / audio embed",
@@ -237,6 +256,7 @@ export const BLOCK_LABELS = {
   spacer: "Spacer",
   text_panel: "Text panel (scrolling)",
   split: "Split (image + text)",
+  split_audio: "Split (image, text & audio)",
 };
 
 /**
