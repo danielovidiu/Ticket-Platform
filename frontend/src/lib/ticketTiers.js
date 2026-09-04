@@ -32,6 +32,40 @@ export function perTicketPrice(wave) {
  * event, and the honest place to say so is the server's refusal, not an empty dropdown
  * the buyer cannot act on.
  */
+/** How many tickets one person may hold FROM THIS TIER.
+ *
+ * Mirrors wave_ticket_cap in server.py, and has to: this is the number the quantity
+ * dropdown is built from, and a dropdown offering six on a tier the server caps at one
+ * is an offer the buyer can only discover is false at checkout.
+ *
+ * The tier's own number when it sets one, the event's otherwise. Null is "no opinion",
+ * not zero, which is what every tier written before the field existed carries.
+ */
+export function tierTicketCap(event, wave) {
+  const own = wave?.max_tickets_per_user;
+  return own == null ? event?.max_tickets_per_user : own;
+}
+
+/** The words shown when the WHOLE event is sold out.
+ *
+ * The message belongs to the tier now, but a sold-out event shows one panel rather than
+ * one per tier, so something has to choose. The event's own message wins where one was
+ * ever set — that is what every event written before the move carries, and taking it away
+ * would silently unpublish a promoter's words.
+ *
+ * Failing that, the last tier in running order to have any is the one that speaks. It is
+ * the tier that was still on sale when the last ticket went, so its wording is about the
+ * moment the buyer has just missed rather than about a tier that closed weeks ago.
+ */
+export function soldOutMessage(event) {
+  if (event?.sold_out_message) return event.sold_out_message;
+  const waves = event?.waves || [];
+  for (let i = waves.length - 1; i >= 0; i--) {
+    if (waves[i]?.sold_out_message) return waves[i].sold_out_message;
+  }
+  return "Sold Out";
+}
+
 export function packOptions(maxPerUser, packSize, most = 4) {
   const cap = Number(maxPerUser) || 4;
   const size = Math.max(1, Number(packSize) || 1);

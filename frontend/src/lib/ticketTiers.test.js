@@ -5,7 +5,63 @@
  * price misprices a refund. A paused tier read as a sell-out tells someone who would have
  * bought to stop coming back.
  */
-import { packSizeOf, perTicketPrice, packOptions, saleState } from "./ticketTiers";
+import {
+  packSizeOf, perTicketPrice, packOptions, saleState, tierTicketCap, soldOutMessage,
+} from "./ticketTiers";
+
+describe("tierTicketCap", () => {
+  test("a tier's own cap wins over the event's", () => {
+    expect(tierTicketCap({ max_tickets_per_user: 6 }, { max_tickets_per_user: 1 })).toBe(1);
+  });
+
+  test("a tier with no cap of its own inherits the event's", () => {
+    expect(tierTicketCap({ max_tickets_per_user: 6 }, { max_tickets_per_user: null })).toBe(6);
+  });
+
+  test("so does a tier written before the field existed", () => {
+    expect(tierTicketCap({ max_tickets_per_user: 6 }, {})).toBe(6);
+    expect(tierTicketCap({ max_tickets_per_user: 6 }, null)).toBe(6);
+  });
+
+  test("the quantity dropdown follows the tier, not the event", () => {
+    // The bug this exists to prevent: six offered on a tier the server caps at one, which
+    // the buyer discovers only when the checkout refuses them.
+    const event = { max_tickets_per_user: 6 };
+    expect(packOptions(tierTicketCap(event, { max_tickets_per_user: 1 }), 1)).toEqual([1]);
+    expect(packOptions(tierTicketCap(event, { max_tickets_per_user: null }), 1)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("soldOutMessage", () => {
+  test("the event's own words win where they were ever set", () => {
+    // Every event written before the message moved onto the tier carries one here, and
+    // taking it away would silently unpublish what a promoter wrote.
+    expect(soldOutMessage({
+      sold_out_message: "Gone",
+      waves: [{ sold_out_message: "Tier words" }],
+    })).toBe("Gone");
+  });
+
+  test("otherwise the last tier in running order to have words speaks", () => {
+    // It is the tier that was still selling when the last ticket went.
+    expect(soldOutMessage({
+      sold_out_message: "",
+      waves: [{ sold_out_message: "Early birds gone" }, { sold_out_message: "At the door" }],
+    })).toBe("At the door");
+  });
+
+  test("a later tier with nothing to say does not silence an earlier one", () => {
+    expect(soldOutMessage({
+      waves: [{ sold_out_message: "Members only" }, { sold_out_message: "" }],
+    })).toBe("Members only");
+  });
+
+  test("an event nobody worded falls back to Sold Out", () => {
+    expect(soldOutMessage({ waves: [{ sold_out_message: "" }] })).toBe("Sold Out");
+    expect(soldOutMessage({ waves: [] })).toBe("Sold Out");
+    expect(soldOutMessage(null)).toBe("Sold Out");
+  });
+});
 
 describe("packSizeOf", () => {
   test("an ordinary tier is one ticket a purchase", () => {

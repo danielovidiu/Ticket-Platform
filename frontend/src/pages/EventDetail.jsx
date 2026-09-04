@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { http } from "../api";
 import { ron } from "../lib/money";
-import { packSizeOf, packOptions, saleState } from "../lib/ticketTiers";
+import { packSizeOf, packOptions, saleState, tierTicketCap, soldOutMessage } from "../lib/ticketTiers";
 import { useAuth, startLogin } from "../auth";
 import { toast } from "sonner";
 import { Play } from "lucide-react";
@@ -162,9 +162,13 @@ export default function EventDetail() {
   const paused = !special && state === "paused";
   const unitPrice = special ? special.price_ron : (selectedWave?.price_ron || 0);
   const total = useMemo(() => unitPrice * qty, [unitPrice, qty]);
+  /* Built from the SELECTED TIER's cap, not the event's. The two parted company when the
+     limit moved onto the tier, and a dropdown still counting to the event's number would
+     offer six on a tier the server caps at one — an offer that survives exactly as far as
+     the checkout that refuses it. */
   const qtyOptions = useMemo(
-    () => packOptions(event?.max_tickets_per_user, packSize),
-    [event, packSize]
+    () => packOptions(tierTicketCap(event, selectedWave), packSize),
+    [event, selectedWave, packSize]
   );
 
   /* The count resets whenever the pack size under it changes: three of one tier is not
@@ -262,7 +266,7 @@ export default function EventDetail() {
                   {/* Two different pieces of news. A sell-out is final and the promoter gets
                       to word it; a pause is temporary and the tickets still exist, so
                       borrowing the sold-out message for it would be untrue. */}
-                  {paused ? "Not On Sale" : (event.sold_out_message || "Sold Out")}
+                  {paused ? "Not On Sale" : soldOutMessage(event)}
                 </div>
                 {paused && (
                   <div className="mt-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
@@ -359,7 +363,10 @@ export default function EventDetail() {
                 </button>
                 <p className="mt-4 text-xs text-ink-4 leading-relaxed">
                   Tickets are held for 10 minutes while you pay via Stripe. All sales final unless the event is cancelled.
-                  Max {event.max_tickets_per_user} tickets per person.
+                  {/* The selected tier's limit, for the same reason the dropdown counts to
+                      it: this sentence is read as a promise, and a promise made in the
+                      event's number is broken by a tier that sets its own. */}
+                  Max {tierTicketCap(event, selectedWave)} tickets per person.
                 </p>
               </>
             )}
