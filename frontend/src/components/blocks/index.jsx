@@ -396,7 +396,13 @@ function GalleryGrid({ props }) {
       <div className="columns-1 md:columns-3 gap-4 space-y-4">
         {items.map((g) => (
           <figure key={g.gallery_id} className="break-inside-avoid border border-ink/10">
-            <img src={mediaUrl(g.image_url)} alt={g.caption} loading="lazy" decoding="async" className="w-full block" />
+            {/* The THUMBNAIL, as every other gallery surface already uses — Gallery.jsx,
+                AlbumPage and the event page all read thumbnail_url and this block was the
+                one that did not. Three columns of a 1400px frame is a ~430px tile, drawn
+                here from the full-size original: measured on the deployed site, one such
+                tile was a 3000x3000 file for a 425px box. `|| image_url` because a row
+                whose thumbnail failed to generate still has to render. */}
+            <img src={mediaUrl(g.thumbnail_url || g.image_url)} alt={g.caption} loading="lazy" decoding="async" className="w-full block" />
           </figure>
         ))}
       </div>

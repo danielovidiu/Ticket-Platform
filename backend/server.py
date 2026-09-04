@@ -566,6 +566,39 @@ AUDIO_CONTENT_TYPES = {"audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/x-wav":
 # a 4 MB body gets a 401 from this app, a 5 MB body gets a 413 from the edge. Hosted
 # uploads that large need the browser to talk to blob storage directly.
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+# The long edge of a STORED image, and the quality it is re-encoded at.
+#
+# 2560 is not a new opinion: lib/imagePipeline.js already downscales to exactly this
+# before uploading, on the grounds that it "is larger than any slot on this site renders".
+# That was only ever enforced for files over 3.5 MB, because its real job there is dodging
+# the 4.5 MB serverless body limit — so a 3 MB, 3000x3000 photograph arrived untouched and
+# was stored, and served, at 3000x3000 to fill a 425px box. This is the same rule applied
+# to every image regardless of what it weighed on the way in.
+#
+# Deliberately not lower. The widest slot here renders about 1272 CSS px, which a 2x
+# display wants 2544 real pixels for; anything under that trades a visibly soft hero for
+# bytes. Rendering SMALL images from big ones is a separate problem, solved by the
+# thumbnails this endpoint already generates rather than by cutting this number.
+STORED_IMAGE_MAX_EDGE = 2560
+# 82 matches QUALITY in lib/imagePipeline.js, for the same reason the edge does: an image
+# that took the client path and one that did not should not be stored at two qualities.
+STORED_IMAGE_QUALITY = 82
+
+
+def _fit_to_max_edge(img, max_edge: int = STORED_IMAGE_MAX_EDGE):
+    """`img` shrunk so its long edge is at most `max_edge`. Never enlarges.
+
+    LANCZOS rather than the default: these are photographs being reduced by a large
+    factor, which is exactly the case a cheap filter aliases.
+    """
+    width, height = img.size
+    longest = max(width, height)
+    if longest <= max_edge:
+        return img
+    scale = max_edge / longest
+    return img.resize((max(1, round(width * scale)), max(1, round(height * scale))),
+                      Image.LANCZOS)
 UPLOAD_CHUNK_BYTES = 64 * 1024
 
 # What a serverless platform will carry in a request body before anything of ours runs.
@@ -676,15 +709,35 @@ def _reencode_image(data: bytes, declared: str) -> tuple:
 
     out = io.BytesIO()
     if getattr(img, "is_animated", False):
+        # An animation is left alone: Pillow can resize a single frame, and rebuilding a
+        # multi-frame GIF at a new size is a different job from the one this does.
         img.save(out, format=fmt, save_all=True)
         return out.getvalue(), declared, IMAGE_CONTENT_TYPES[declared]
-    if fmt == "PNG":
-        img.convert("RGBA").save(out, format="PNG", optimize=True)
-        return out.getvalue(), "image/png", ".png"
+
+    img = _fit_to_max_edge(img)
+
     if fmt == "WEBP":
-        img.convert("RGBA").save(out, format="WEBP", quality=90)
+        img.convert("RGBA").save(out, format="WEBP", quality=STORED_IMAGE_QUALITY, method=6)
         return out.getvalue(), "image/webp", ".webp"
-    img.convert("RGB").save(out, format="JPEG", quality=90, optimize=True)
+    if fmt == "PNG":
+        # PNG IN, WEBP OUT — this is the single biggest transfer saving in the app, and it
+        # is here rather than at the render sites because it is where every image already
+        # passes through.
+        #
+        # Measured on the deployed homepage: one photograph stored as PNG was 2,252,542
+        # bytes, against a 60 kB thumbnail of the same picture sitting beside it in the
+        # same bucket. PNG is lossless, so a photograph saved as one is enormous however
+        # hard `optimize=True` works — and the old branch above did exactly that, spending
+        # CPU to make a format choice that was wrong for the content.
+        #
+        # WebP is the right target for BOTH kinds of PNG this receives: it keeps the alpha
+        # channel a logo needs (which is why this is not JPEG), and it compresses a
+        # photograph like JPEG does. lib/imagePipeline.js already makes precisely this
+        # mapping client-side for files over its threshold — this makes it true for every
+        # file, including the ones under it, which is where the 2.25 MB one slipped in.
+        img.convert("RGBA").save(out, format="WEBP", quality=STORED_IMAGE_QUALITY, method=6)
+        return out.getvalue(), "image/webp", ".webp"
+    img.convert("RGB").save(out, format="JPEG", quality=STORED_IMAGE_QUALITY, optimize=True)
     return out.getvalue(), "image/jpeg", ".jpg"
 
 
