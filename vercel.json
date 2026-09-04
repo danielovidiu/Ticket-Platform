@@ -42,7 +42,6 @@
           ]
         },
         {
-          "//": "Everything under /assets carries a content hash in its filename (vite's default), so a given URL's bytes can never change - a new build emits a new name and index.html points at it. Without this rule Vercel serves them 'public, max-age=0, must-revalidate', which was measured on the beta deploy: every reload spent a conditional request per asset, including the 461 kB entry chunk, before a single byte of the app could run. index.html itself is deliberately NOT covered - it is the one file whose URL stays put, and it has to be re-read to learn the new hashes.",
           "source": "/assets/(.*)",
           "headers": [
             {
