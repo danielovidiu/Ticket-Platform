@@ -89,6 +89,17 @@
    to carry the handful of decisions a person actually makes.
    =========================================================================== */
 :root {
+  /* Which way round this document runs, told to the BROWSER rather than only drawn by
+     this stylesheet. Everything the browser paints for itself reads this: a select's
+     open option list, scrollbars, the focus ring, a date picker's calendar. Without it
+     they are drawn from the DEVICE's scheme, so a dark site opened on a light-themed
+     laptop got a white dropdown list — with the select's own white text inherited into
+     it in several browsers, which is a list of invisible options.
+
+     Dark is the default because the app's palette above is, and applyTheme() flips this
+     with data-theme when a customer's CMS theme is light. */
+  color-scheme: dark;
+
   /* --- Source of truth: written by applyTheme() from the CMS theme ------- */
   --bg: #050505;
   --surface: #0f0f0f;
@@ -264,7 +275,10 @@ body {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.6'/></svg>");
 }
 :root[data-theme="light"] .grain-overlay { opacity: 0.02; }
-:root[data-theme="light"] { --hero-image-opacity: 0.85; }
+/* The other half of the pair at the top of this file: a light CMS theme has to tell the
+   browser so too, or its dropdown lists and scrollbars come back dark on a dark device —
+   the same fault as before, facing the other way. */
+:root[data-theme="light"] { --hero-image-opacity: 0.85; color-scheme: light; }
 
 .marquee { display: flex; overflow: hidden; }
 .marquee-track {
@@ -313,6 +327,37 @@ body {
 }
 .input-x:focus { border-color: var(--text); }
 .input-x::placeholder { color: var(--text-5); }
+
+/* A dropdown's LIST is drawn by the browser, not by this stylesheet.
+ *
+ * `.input-x` gives a select `color: var(--text)` and no background, which is right for
+ * the closed control sitting on the page. The open list is a different surface: the
+ * browser paints it from the DEVICE's colour scheme, and several of them let the
+ * select's own colour inherit into the options. On a dark site opened from a
+ * light-themed phone or laptop that is white text on a white list — the options are
+ * still there, still clickable, and completely invisible.
+ *
+ * `color-scheme` above is the half that fixes the cause: it tells the browser which way
+ * round this document runs, so the list, the scrollbar and the focus ring are all drawn
+ * to match the site rather than the device. These two rules are the belt to that
+ * braces, for the browsers that inherit anyway.
+ *
+ * The pair is the platform's own: --text on --surface, the panel colours every dialog
+ * and card in the app already uses, and the ones the theme editor holds to AA (see
+ * CONTRAST_PAIRS in lib/contrast.js — "muted text on surface" is checked, and --text is
+ * stronger than --text-muted, so a palette that passes there passes here). It follows
+ * the CMS theme, so a customer's own light or dark palette stays honoured.
+ *
+ * Bare `option` rather than `.input-x option`: nearly every select in the app carries
+ * that class but not quite all of them, and an invisible dropdown is not a thing to fix
+ * per class. A native option only ever exists inside a select, and the ui/ components
+ * render their listboxes as divs, so nothing else can be caught by this.
+ */
+option,
+optgroup {
+  background: var(--surface);
+  color: var(--text);
+}
 
 /* Utility spacers */
 .section-y { padding-top: 6rem; padding-bottom: 6rem; }
