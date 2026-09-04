@@ -159,7 +159,17 @@ export default function PosterField({
             socials, the flyer back — and one-at-a-time is the same job done four times. */}
         <input ref={inputRef} type="file" accept="image/*" multiple className="hidden"
                data-testid={`${testId}-file`}
-               onChange={(e) => { const f = e.target.files; e.target.value = ""; if (f?.length) upload(f); }} />
+               /* COPY the list before clearing the input, which is not a style choice.
+                  `e.target.files` is live: resetting `value` — done so that choosing the
+                  same file twice in a row still fires a change — empties that very
+                  object. Held by reference, the picked file was gone by the next line and
+                  the upload silently did nothing, which is exactly what "I clicked upload
+                  and chose a file and nothing happened" was. The album manager spreads
+                  first and has always worked; this is the same line.
+
+                  jsdom does not empty `files` on reset, so no test could see it until one
+                  emulated the browser — see PosterField.test.jsx. */
+               onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ""; if (f.length) upload(f); }} />
       </div>
 
       {/* Outside the dropzone, or clicking the field would open the file picker — the
