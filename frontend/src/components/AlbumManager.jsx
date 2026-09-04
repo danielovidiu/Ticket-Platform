@@ -241,7 +241,7 @@ export default function AlbumManager({ albumId, emptyHint }) {
       try {
         await http.post("/admin/gallery", { image_url: url, thumbnail_url, media_type, album_id: albumId });
         added++;
-      } catch (first) {
+      } catch {
         try {
           await http.post("/admin/gallery", { image_url: url, thumbnail_url, media_type, album_id: albumId });
           added++;

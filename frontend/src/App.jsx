@@ -5,41 +5,56 @@ import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "./auth";
 import { CartProvider } from "./lib/cart";
 import Layout from "./components/Layout";
+/* Statically imported, on purpose: any of these can be the URL a visitor ARRIVES on.
+   A shared link to one event is the normal way into this site, so putting a round trip
+   in front of it would cost the common case to save the rare one. Everything reachable
+   only after a session or a purchase is split — see pages/account.js. */
 import DynamicPage from "./pages/DynamicPage";
 import Events from "./pages/Events";
 import EventDetail from "./pages/EventDetail";
-import Checkout from "./pages/Checkout";
-import CheckoutSuccess from "./pages/CheckoutSuccess";
-import MyTickets from "./pages/MyTickets";
 import Artists from "./pages/Artists";
 import ArtistDetail from "./pages/ArtistDetail";
 import Gallery from "./pages/Gallery";
 import AlbumPage from "./pages/AlbumPage";
 import Shop from "./pages/Shop";
 import ProductDetail from "./pages/ProductDetail";
-import Cart from "./pages/Cart";
-import ShopCheckout from "./pages/ShopCheckout";
-import ShopSuccess from "./pages/ShopSuccess";
-import MyOrders from "./pages/MyOrders";
-import Login from "./pages/Login";
-import CompleteProfile from "./pages/CompleteProfile";
-import VerifyEmail from "./pages/VerifyEmail";
-import ResetPassword from "./pages/ResetPassword";
-import Settings from "./pages/Settings";
-import NewsletterConfirm from "./pages/NewsletterConfirm";
-import NewsletterUnsubscribe from "./pages/NewsletterUnsubscribe";
-/* Admin, CMSEditor and Scan are the only routes not imported at the top of this file.
-   They are staff-only and they are big — together about a quarter of the application
-   source — so importing them here would put the CMS editor in front of every visitor
-   who came to buy a ticket. The loaders they wrap are shared with prefetchBackstage(),
-   which warms exactly these chunks for signed-in staff; see pages/backstage.js. */
+/* The split routes. Admin, CMSEditor and Scan are staff-only and big — together about a
+   quarter of the application source — so importing them here would put the CMS editor in
+   front of every visitor who came to buy a ticket. The account and checkout routes below
+   are the same argument one audience further out: nobody reading the programme needs the
+   cart, the invoice list, or the QR encoder MyTickets draws a ticket with.
+
+   Both sets of loaders are shared with a prefetch — prefetchBackstage() for staff,
+   prefetchAccount() for anyone signed in — which warms exactly these chunks off the
+   critical path, so the split costs a round trip only for someone who has never been
+   signed in on this device. */
 import { loadAdmin, loadCMSEditor, loadScan } from "./pages/backstage";
+import {
+  loadLogin, loadCompleteProfile, loadVerifyEmail, loadResetPassword, loadSettings,
+  loadCart, loadCheckout, loadCheckoutSuccess, loadShopCheckout, loadShopSuccess,
+  loadMyTickets, loadMyOrders, loadNewsletterConfirm, loadNewsletterUnsubscribe,
+} from "./pages/account";
 import ThemeLoader from "./components/ThemeLoader";
 import CookieConsent from "./components/CookieConsent";
 
 const Admin = lazy(loadAdmin);
 const CMSEditor = lazy(loadCMSEditor);
 const Scan = lazy(loadScan);
+
+const Login = lazy(loadLogin);
+const CompleteProfile = lazy(loadCompleteProfile);
+const VerifyEmail = lazy(loadVerifyEmail);
+const ResetPassword = lazy(loadResetPassword);
+const Settings = lazy(loadSettings);
+const Cart = lazy(loadCart);
+const Checkout = lazy(loadCheckout);
+const CheckoutSuccess = lazy(loadCheckoutSuccess);
+const ShopCheckout = lazy(loadShopCheckout);
+const ShopSuccess = lazy(loadShopSuccess);
+const MyTickets = lazy(loadMyTickets);
+const MyOrders = lazy(loadMyOrders);
+const NewsletterConfirm = lazy(loadNewsletterConfirm);
+const NewsletterUnsubscribe = lazy(loadNewsletterUnsubscribe);
 
 /** Shown only while a split chunk is in flight, which for staff is usually never —
  * prefetchBackstage() has normally already fetched it. Deliberately the same line the

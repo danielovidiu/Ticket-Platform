@@ -13,6 +13,7 @@ import ImageField from "../components/ImageField";
 import PosterField from "../components/PosterField";
 import { ShopProducts, ShopOrders, ShopSettings } from "../components/ShopAdmin";
 import { eventStatus, STATUS_CLASS, TICKET_FILTERS, TICKET_STATUS_CLASS } from "../lib/ticketStatus";
+import { dateTime } from "../lib/dates";
 
 const TABS = ["stats", "events", "orders", "transactions", "shop", "shop orders", "shop settings",
               "artists", "discounts", "invites", "users", "gallery", "newsletter"];
@@ -323,7 +324,7 @@ function Events() {
             <div className="min-w-0">
               <div className="font-display font-bold uppercase break-words text-lg leading-tight">{e.title}</div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
-                <span>{new Date(e.starts_at).toLocaleString("en-GB")}</span>
+                <span>{dateTime(e.starts_at)}</span>
                 {[e.venue, e.city].filter(Boolean).length > 0 && <span>{[e.venue, e.city].filter(Boolean).join(", ")}</span>}
                 <span className={STATUS_CLASS[eventStatus(e)]}>{eventStatus(e)}</span>
                 {e.event_code && <span className="text-ink-3" title="Code used in ticket serials">{e.event_code}</span>}
@@ -497,7 +498,7 @@ function NoticeComposer({ event, initialKind, onClose }) {
                 {past.map((n) => (
                   <div key={n.notice_id} className="border border-ink/10 p-3">
                     <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">
-                      {NOTICE_KIND_LABELS[n.kind] || n.kind} · {new Date(n.at).toLocaleString("en-GB")} · {n.sent}/{n.recipient_count} delivered
+                      {NOTICE_KIND_LABELS[n.kind] || n.kind} · {dateTime(n.at)} · {n.sent}/{n.recipient_count} delivered
                     </div>
                     <div className="text-sm mt-1 whitespace-pre-wrap break-words">{n.message}</div>
                   </div>
@@ -1148,7 +1149,7 @@ function Transactions() {
       {showSummary && summary && (
         <div className="border border-ink/10 bg-surface p-4" data-testid="tx-summary">
           <div className="font-mono-x text-[10px] uppercase tracking-[0.3em] text-ink-4">
-            Executive summary · {new Date(summary.generated_at).toLocaleString("en-GB")}
+            Executive summary · {dateTime(summary.generated_at)}
           </div>
 
           {summary.lines.length === 0 ? (
@@ -1242,7 +1243,7 @@ function OrderList() {
           <div className="lg:col-span-2 min-w-0 font-mono-x">{ron(o.total_ron)}</div>
           <div className="lg:col-span-1 min-w-0">{o.quantity}×</div>
           <div className="lg:col-span-2 min-w-0"><span className="inline-block border border-ink/20 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em]">{o.status}</span></div>
-          <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-ink-3">{new Date(o.created_at).toLocaleString("en-GB")}</div>
+          <div className="lg:col-span-2 min-w-0 font-mono-x text-xs text-ink-3">{dateTime(o.created_at)}</div>
           <div className="lg:col-span-2 min-w-0 lg:text-right">{o.status === "paid" && <button onClick={() => refund(o.reservation_id)} className="btn-primary text-xs">Refund</button>}</div>
         </div>
       ))}
@@ -1967,7 +1968,7 @@ function NewsletterAdmin() {
               {subStatus(s)}
             </div>
             <div className="lg:col-span-2 min-w-0 text-ink-3 text-xs break-words">{s.source || "—"}</div>
-            <div className="lg:col-span-3 min-w-0 font-mono-x text-xs text-ink-3">{new Date(s.created_at).toLocaleString("en-GB")}</div>
+            <div className="lg:col-span-3 min-w-0 font-mono-x text-xs text-ink-3">{dateTime(s.created_at)}</div>
             <div className="lg:col-span-1 min-w-0 lg:text-right">
               <button onClick={() => del(s.sub_id)} className="btn-primary text-[10px]" data-testid={`newsletter-del-${s.sub_id}`}>Del</button>
             </div>

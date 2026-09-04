@@ -566,6 +566,66 @@ AUDIO_CONTENT_TYPES = {"audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/x-wav":
 # a 4 MB body gets a 401 from this app, a 5 MB body gets a 413 from the edge. Hosted
 # uploads that large need the browser to talk to blob storage directly.
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+# The long edge of a STORED image, and the quality it is re-encoded at.
+#
+# 2560 is not a new opinion: lib/imagePipeline.js already downscales to exactly this
+# before uploading, on the grounds that it "is larger than any slot on this site renders".
+# That was only ever enforced for files over 3.5 MB, because its real job there is dodging
+# the 4.5 MB serverless body limit — so a 3 MB, 3000x3000 photograph arrived untouched and
+# was stored, and served, at 3000x3000 to fill a 425px box. This is the same rule applied
+# to every image regardless of what it weighed on the way in.
+#
+# Deliberately not lower. The widest slot here renders about 1272 CSS px, which a 2x
+# display wants 2544 real pixels for; anything under that trades a visibly soft hero for
+# bytes. Rendering SMALL images from big ones is a separate problem, solved by the
+# thumbnails this endpoint already generates rather than by cutting this number.
+STORED_IMAGE_MAX_EDGE = 2560
+# Two qualities, because there are two different situations and one number for both is
+# wrong for one of them.
+#
+# 90 is what this endpoint has always re-encoded at, and it stays for a JPEG stored as a
+# JPEG or a WebP stored as a WebP. Those bytes have already been through a lossy encoder
+# once, so a second pass is generational loss — visible on gradients and edges, and paid
+# by an image-led site on every photograph. Measured across the deployed library, dropping
+# these to 82 bought about 15% and spent quality on 60-odd photographs to get it; that is
+# a trade for a person to make deliberately, not a side effect of a performance change.
+STORED_IMAGE_QUALITY = 90
+# 82 is for PNG -> WebP, where it is the FIRST lossy encode rather than the second: PNG is
+# lossless, so nothing has been discarded yet and this is the same single compression the
+# client applies at QUALITY = 0.82 in lib/imagePipeline.js. It is also where the size wins
+# actually are — 85-98% on the deployed library, against 15% for the re-encodes above.
+PNG_TO_WEBP_QUALITY = 82
+
+# Formats that can genuinely hold an animation, and are therefore passed through whole.
+#
+# The test is NOT `is_animated` on its own, which was the bug this list exists to prevent.
+# Pillow reports MPO — what an iPhone writes, a primary image plus a gain or depth map —
+# as a two-frame animated file. So every photo taken on a phone matched the animation
+# branch and was passed straight through: not downscaled, and not re-encoded either, which
+# quietly took the polyglot defence and the EXIF strip with it for exactly the files most
+# likely to be carrying GPS. Twelve of them were sitting in the deployed library at
+# 3024x4032 and 4284x5712, each over a megabyte, each reported by the reprocessing script
+# as saving 0.0%.
+#
+# The extra frames are auxiliary data no browser on this site renders, so an MPO is
+# treated as the still photograph it looks like.
+ANIMATED_FORMATS = {"GIF", "WEBP"}
+
+
+def _fit_to_max_edge(img, max_edge: int = STORED_IMAGE_MAX_EDGE):
+    """`img` shrunk so its long edge is at most `max_edge`. Never enlarges.
+
+    LANCZOS rather than the default: these are photographs being reduced by a large
+    factor, which is exactly the case a cheap filter aliases.
+    """
+    width, height = img.size
+    longest = max(width, height)
+    if longest <= max_edge:
+        return img
+    scale = max_edge / longest
+    return img.resize((max(1, round(width * scale)), max(1, round(height * scale))),
+                      Image.LANCZOS)
 UPLOAD_CHUNK_BYTES = 64 * 1024
 
 # What a serverless platform will carry in a request body before anything of ours runs.
@@ -675,16 +735,36 @@ def _reencode_image(data: bytes, declared: str) -> tuple:
                  f"declared type {declared}")
 
     out = io.BytesIO()
-    if getattr(img, "is_animated", False):
+    if fmt in ANIMATED_FORMATS and getattr(img, "is_animated", False):
+        # A real animation is left alone: Pillow can resize a single frame, and rebuilding
+        # a multi-frame GIF at a new size is a different job from the one this does.
         img.save(out, format=fmt, save_all=True)
         return out.getvalue(), declared, IMAGE_CONTENT_TYPES[declared]
-    if fmt == "PNG":
-        img.convert("RGBA").save(out, format="PNG", optimize=True)
-        return out.getvalue(), "image/png", ".png"
+
+    img = _fit_to_max_edge(img)
+
     if fmt == "WEBP":
-        img.convert("RGBA").save(out, format="WEBP", quality=90)
+        img.convert("RGBA").save(out, format="WEBP", quality=STORED_IMAGE_QUALITY)
         return out.getvalue(), "image/webp", ".webp"
-    img.convert("RGB").save(out, format="JPEG", quality=90, optimize=True)
+    if fmt == "PNG":
+        # PNG IN, WEBP OUT — this is the single biggest transfer saving in the app, and it
+        # is here rather than at the render sites because it is where every image already
+        # passes through.
+        #
+        # Measured on the deployed homepage: one photograph stored as PNG was 2,252,542
+        # bytes, against a 60 kB thumbnail of the same picture sitting beside it in the
+        # same bucket. PNG is lossless, so a photograph saved as one is enormous however
+        # hard `optimize=True` works — and the old branch above did exactly that, spending
+        # CPU to make a format choice that was wrong for the content.
+        #
+        # WebP is the right target for BOTH kinds of PNG this receives: it keeps the alpha
+        # channel a logo needs (which is why this is not JPEG), and it compresses a
+        # photograph like JPEG does. lib/imagePipeline.js already makes precisely this
+        # mapping client-side for files over its threshold — this makes it true for every
+        # file, including the ones under it, which is where the 2.25 MB one slipped in.
+        img.convert("RGBA").save(out, format="WEBP", quality=PNG_TO_WEBP_QUALITY)
+        return out.getvalue(), "image/webp", ".webp"
+    img.convert("RGB").save(out, format="JPEG", quality=STORED_IMAGE_QUALITY, optimize=True)
     return out.getvalue(), "image/jpeg", ".jpg"
 
 

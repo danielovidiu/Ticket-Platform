@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
@@ -39,7 +39,11 @@ export default function PosterField({
   const [busy, setBusy] = useState(0);   // how many files are still in flight
   const [over, setOver] = useState(false);
   const [queue, setQueue] = useState([]);
-  const posters = Array.isArray(value) ? value : [];
+  /* Memoized on `value`, not rebuilt per render. The `[]` branch allocates a NEW empty
+     array every time, so an unset field handed `append` a fresh dependency on every
+     render — the callback was rebuilt each pass and any child taking it as a prop lost
+     its memoization. Keyed on `value` itself, an unchanged field yields the same array. */
+  const posters = useMemo(() => (Array.isArray(value) ? value : []), [value]);
 
   const send = useCallback(async (file) => {
     const fd = new FormData();

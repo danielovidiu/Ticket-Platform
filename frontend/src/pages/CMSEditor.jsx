@@ -19,6 +19,7 @@ import FontPicker from "../components/FontPicker";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 import FontManager from "../components/FontManager";
 import { navChanged } from "../lib/nav";
+import { dateTime } from "../lib/dates";
 import { useAutosave, useDebouncedField } from "../lib/useAutosave";
 import {
   AUTOSAVE_INTERVAL_MS, anySaverDirty, firstSaverError, flushAllSavers,
@@ -72,7 +73,6 @@ export default function CMSEditor() {
   const lastEditRef = useRef({ key: null, at: 0 });
   const savedDraftRef = useRef(null); // identity of the last draft the server acknowledged
   const dirtySinceRef = useRef(0);
-  const [revision, setRevision] = useState(0); // bumps per edit; re-arms the save timer
 
   /** Refetch the uploaded faces and install them. Called on mount and after every
    * upload or delete, so a font is selectable in the picker — and visible in the live
@@ -171,7 +171,6 @@ export default function CMSEditor() {
     setPage(nextPage);
     if (!dirtySinceRef.current) dirtySinceRef.current = Date.now();
     setDirty(true);
-    setRevision((r) => r + 1);
   }, [pushHistory]);
 
   const applyHistory = useCallback((from, to) => {
@@ -187,7 +186,6 @@ export default function CMSEditor() {
     setPage(nextPage);
     if (!dirtySinceRef.current) dirtySinceRef.current = Date.now();
     setDirty(true);
-    setRevision((r) => r + 1);
     setHistoryTick((t) => t + 1);
   }, []);
 
@@ -249,8 +247,13 @@ export default function CMSEditor() {
   // continuous typing was never interrupted long enough to trigger a save at all.
   useEffect(() => {
     // Same policy as every other surface: off means nothing is scheduled, on means one
-    // write per interval. `revision` stays out of the dependencies deliberately — with
-    // it the timer restarts on every keystroke and a steady typist is never written.
+    // write per interval. The timer is armed by `dirty` GOING true and re-armed by
+    // `saveTick`, deliberately not by anything that changes per keystroke — a dependency
+    // that moved on every edit would restart the timeout each time and a steady typist
+    // would never be written at all. A `revision` counter used to be bumped on every edit
+    // for exactly this purpose and was then, just as deliberately, left out of this list;
+    // it was read nowhere else either, so all it did was re-render the editor once more
+    // per keypress.
     if (!autosaveOn || !dirty) return undefined;
     const t = setTimeout(saveNow, AUTOSAVE_INTERVAL_MS);
     return () => clearTimeout(t);
@@ -637,7 +640,7 @@ export default function CMSEditor() {
                 data-testid="save-draft-btn" className="btn-primary !py-1.5 !px-3 !text-xs disabled:opacity-30">
           Save now
         </button>
-        {page && <a href={`/p/${page.slug}`} target="_blank" rel="noreferrer" className="btn-primary !py-1.5 !px-3 !text-xs">View live</a>}
+        {page && <a href={`/${page.slug}`} target="_blank" rel="noreferrer" className="btn-primary !py-1.5 !px-3 !text-xs">View live</a>}
         <button onClick={publish} data-testid="publish-page-btn" className="btn-accent !py-2 !px-4 !text-xs">Publish</button>
       </div>
 
@@ -1789,7 +1792,7 @@ function VersionList({ page, onRevert }) {
       {versions.map((v) => (
         <div key={v.version_id} className="border border-ink/10 p-2 flex items-center justify-between">
           <div>
-            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{new Date(v.published_at).toLocaleString("en-GB")}</div>
+            <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4">{dateTime(v.published_at)}</div>
             <div className="text-xs">{v.blocks?.length || 0} blocks</div>
           </div>
           <button onClick={() => onRevert(v.version_id)} className="btn-primary !py-1.5 !px-2 !text-[10px]">Revert</button>

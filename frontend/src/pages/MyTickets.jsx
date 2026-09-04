@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import { X } from "lucide-react";
 import { http, API } from "../api";
+import { numericDate } from "../lib/dates";
 import { money } from "../lib/money";
 import { useAuth, startLogin } from "../auth";
 import { Link } from "react-router-dom";
@@ -157,7 +158,7 @@ export default function MyTickets() {
             {invoices.map((i) => (
               <div key={i.invoice_id} className="grid grid-cols-12 gap-4 py-4 items-center">
                 <div className="col-span-4 font-mono-x">{i.series}-{String(i.number).padStart(6, "0")}</div>
-                <div className="col-span-4 font-mono-x text-xs text-ink-3">{new Date(i.issued_at).toLocaleDateString("en-GB")}</div>
+                <div className="col-span-4 font-mono-x text-xs text-ink-3">{numericDate(i.issued_at)}</div>
                 <div className="col-span-2 font-mono-x">{money(i.total)} {i.currency}</div>
                 <div className="col-span-2 text-right">
                   <a href={`${API}/invoices/${i.invoice_id}/pdf`} target="_blank" rel="noreferrer"

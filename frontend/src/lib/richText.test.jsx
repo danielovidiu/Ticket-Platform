@@ -6,7 +6,7 @@
  * promoted any ALL-CAPS line to a styled eyebrow. Authored text came out as something
  * the author had not written.
  */
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { renderRich, richToPlain, excerpt } from "./richText";
 
 const html = (md) => {

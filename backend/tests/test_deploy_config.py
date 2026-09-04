@@ -47,6 +47,15 @@ def _vercel_headers() -> dict:
     return {h["key"]: h["value"] for h in entries}
 
 
+def _vercel_header_rule(source: str) -> dict:
+    """The header rule for one source pattern, as {key: value}."""
+    data = json.loads(VERCEL_JSON.read_text())
+    for rule in data["services"]["frontend"]["headers"]:
+        if rule.get("source") == source:
+            return {h["key"]: h["value"] for h in rule["headers"]}
+    raise AssertionError(f"vercel.json has no header rule for {source!r}")
+
+
 class TestSourceMapsAreNotShipped:
     """3.9 MB of maps against 912 KB of app, consumed by nothing — there is no error
     tracker wired up. Not a secrecy claim (the bundle carries no secrets, verified
@@ -295,3 +304,71 @@ class TestDeepLinksReachTheApp:
         assert m, "the nginx block no longer has a `location /`"
         assert "/index.html" in m.group(1), \
             f"`location /` no longer falls back to index.html: {m.group(1)!r}"
+
+
+class TestHashedAssetsAreCachedForever:
+    """Measured on the beta deploy before this rule existed: the 461 kB entry chunk came
+    back `public, max-age=0, must-revalidate`, so every reload paid a conditional request
+    per asset before any of the app could run.
+
+    Vite fingerprints everything it writes into /assets, so those URLs are immutable by
+    construction — a rebuild emits new names and a new index.html pointing at them.
+    """
+
+    def test_assets_are_immutable(self):
+        cache = _vercel_header_rule("/assets/(.*)")["Cache-Control"]
+        assert "immutable" in cache, cache
+        assert "max-age=31536000" in cache, cache
+
+    def test_the_shell_is_not_cached_that_way(self):
+        """index.html is the one URL that does not change, so caching it for a year would
+        pin every visitor to the build they first saw."""
+        assert "Cache-Control" not in _vercel_header_rule("/(.*)")
+
+    def test_the_build_actually_fingerprints_what_it_puts_there(self):
+        """The rule is only safe while the filenames carry a hash. Vite does this by
+        default, so what has to hold is that nobody has turned it off."""
+        src = VITE_CONFIG.read_text()
+        assert not re.search(r"entryFileNames|chunkFileNames|assetFileNames", src), (
+            "vite.config.mjs now names output files itself — check the names still carry "
+            "a content hash before trusting the immutable Cache-Control in vercel.json"
+        )
+
+
+class TestVercelJsonCarriesNothingTheSchemaRefuses:
+    """`vercel.json` is validated by Vercel on every deploy, and it rejects unknown keys
+    rather than ignoring them — a failed schema check is a failed build.
+
+    This exists because of a specific mistake: the /assets cache rule was added with a
+    "//" key holding the reasoning, the way package.json carries "//resolutions". npm
+    tolerates arbitrary keys there; Vercel does not, and the deploy came back with
+    `services.frontend.headers[1] should NOT have additional property //`. The comment
+    moved into the class above, which is where an explanation belongs anyway — it is read
+    by anyone changing the rule, and it cannot break a build.
+    """
+
+    def test_header_rules_carry_only_source_and_headers(self):
+        data = json.loads(VERCEL_JSON.read_text())
+        for service, config in data.get("services", {}).items():
+            for i, rule in enumerate(config.get("headers", [])):
+                assert set(rule) <= {"source", "headers", "has", "missing"}, (
+                    f"services.{service}.headers[{i}] has keys the schema will refuse: "
+                    f"{sorted(set(rule) - {'source', 'headers', 'has', 'missing'})}"
+                )
+
+    def test_nothing_anywhere_uses_a_comment_key(self):
+        """JSON has no comments and vercel.json has no place to fake one."""
+        def comment_keys(node, path="(root)"):
+            found = []
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key.startswith("//"):
+                        found.append(f"{path}.{key}")
+                    found += comment_keys(value, f"{path}.{key}")
+            elif isinstance(node, list):
+                for i, value in enumerate(node):
+                    found += comment_keys(value, f"{path}[{i}]")
+            return found
+
+        found = comment_keys(json.loads(VERCEL_JSON.read_text()))
+        assert not found, f"vercel.json carries comment keys the schema refuses: {found}"

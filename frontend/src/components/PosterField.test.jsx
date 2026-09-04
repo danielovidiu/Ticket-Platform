@@ -235,7 +235,7 @@ describe("the picked file survives the input being reset", () => {
     const list = {
       length: 1,
       0: file,
-      item(i) { return this.length ? file : null; },
+      item(_i) { return this.length ? file : null; },
       *[Symbol.iterator]() { if (this.length) yield file; },
     };
     Object.defineProperty(input, "files", { get: () => list, configurable: true });

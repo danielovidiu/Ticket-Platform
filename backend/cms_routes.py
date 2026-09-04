@@ -10,6 +10,9 @@ import json
 import re
 import uuid
 import hashlib
+# Google's CSS2 API takes the family as a query value; a space must become %20 (or
+# '+'), which is exactly what quote() with no safe characters produces.
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
@@ -396,6 +399,61 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
     # the live CMS preview and for Google-hosted families; on a public page it now finds
     # everything already applied and changes nothing.
 
+    # Families index.css already self-hosts from @fontsource, plus the one Google does not
+    # serve at all. Asking Google for any of these is either a duplicate download of a face
+    # the page already has, or — for Clash Display — a 404 that takes the whole combined
+    # request down with it. Mirrors NON_GOOGLE in lib/cms.js; the two must agree.
+    _SELF_HOSTED = frozenset({"Clash Display", "Manrope", "IBM Plex Mono"})
+
+    # The weights ensureFontLoaded() has always asked for. Kept identical on purpose: the
+    # browser then serves the JS-injected <link> from cache instead of fetching a second,
+    # differently-weighted copy of the same family.
+    _GOOGLE_WEIGHTS = "300;400;500;600;700;800;900"
+
+    def _google_font_imports(f: dict, fonts: list) -> str:
+        """`@import` lines for whichever theme families Google has to serve.
+
+        WHY THIS IS IN THE STYLESHEET. The families are chosen in the CMS, so index.html
+        cannot name them at build time and the browser only learned them from JS: the app
+        booted, ThemeLoader fetched /cms/theme as JSON, applyTheme called ensureFontLoaded,
+        and only then was a <link> to Google appended. Measured on the beta deploy, that
+        put the request for the site's own display face at t=5117ms — the page spent its
+        first five seconds in a fallback and then reflowed. This stylesheet is already
+        render-blocking and already knows the family name, so the request starts with it.
+
+        The cost is honest and worth naming: an @import is a second round trip chained
+        behind this file rather than issued alongside it. It is still four seconds earlier
+        than what it replaces, and it is the only shape available while the family is a
+        per-deployment setting — a static preconnect in index.html would open a connection
+        to Google for every visitor of every customer, including the ones whose theme uses
+        nothing but the self-hosted faces.
+
+        Uploaded families are excluded because _font_face_css below already points them at
+        their own blob URL; asking Google for a customer's private face would 404.
+        """
+        uploaded = {(x.get("family") or "").strip() for x in (fonts or [])}
+        wanted, seen = [], set()
+        for key in ("display", "body", "mono"):
+            family = (f.get(key) or "").strip()
+            if not family or family in seen or family in _SELF_HOSTED or family in uploaded:
+                continue
+            # The same gate the family already passes to be written into a declaration.
+            # A name that cannot appear in `font-family:` has no business in a URL either.
+            if not FAMILY_RE.match(family):
+                continue
+            seen.add(family)
+            wanted.append(family)
+        if not wanted:
+            return ""
+        # One @import per family, not one combined request. Google's CSS2 API fails the
+        # WHOLE request if any single family in it is unknown, so a combined line would
+        # let one bad name in the CMS strip the typography off the entire site.
+        return "\n".join(
+            f'@import url("https://fonts.googleapis.com/css2'
+            f'?family={quote(family)}:wght@{_GOOGLE_WEIGHTS}&display=swap");'
+            for family in wanted
+        )
+
     def _font_face_css(fonts: list) -> str:
         """@font-face rules for the uploaded faces. Mirrors fontFaceCss() in lib/fonts.js
         — the two must agree, or the live CMS preview and the served page disagree about
@@ -570,6 +628,11 @@ def register_cms_routes(api: APIRouter, db, require_admin, require_admin_or_edit
         blocks = [":root:root {\n" + "\n".join(decls) + "\n}"]
         if light:
             blocks.append(":root:root .grain-overlay { opacity: 0.02; }")
+
+        # @import FIRST, because CSS says so: an @import after any rule is dropped.
+        imports = _google_font_imports(f, fonts)
+        if imports:
+            blocks.insert(0, imports)
 
         # The uploaded faces ride along, so `--font-display: "SomeUpload"` resolves at
         # first paint too. Without this the page renders one frame in the fallback face.

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { http, API } from "../api";
 import { useAuth, startLogin } from "../auth";
 import { ron } from "../lib/cart";
+import { numericDate } from "../lib/dates";
 
 // The customer-facing half of the lifecycle. `pending` means the payment never landed
 // and the hold has been released, so it is described as such rather than as an order.
@@ -54,7 +55,7 @@ export default function MyOrders() {
             <div key={o.order_id} className="border border-ink/10 bg-surface p-5" data-testid={`order-${o.order_id}`}>
               <div className="flex flex-wrap items-baseline justify-between gap-3">
                 <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 break-all">
-                  {o.order_id} · {new Date(o.created_at).toLocaleDateString("en-GB")}
+                  {o.order_id} · {numericDate(o.created_at)}
                 </div>
                 <div className={`font-mono-x text-[10px] uppercase tracking-[0.25em] ${STATUS_CLASS[o.status] || "text-ink-3"}`}>
                   {STATUS_LABEL[o.status] || o.status}
