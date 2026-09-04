@@ -789,6 +789,24 @@ def wave_pack_size(wave: dict) -> int:
     return min(max(n, 1), MAX_PACK_SIZE)
 
 
+def wave_ticket_cap(event: dict, wave: dict) -> int:
+    """How many tickets one person may hold FROM THIS TIER.
+
+    The cap is a property of the tier now, not of the night: a promoter caps the
+    four-packs at one per person while general admission stays at six. The tier's own
+    number when it sets one, the event's otherwise — so every wave written before the
+    field existed carries None, inherits, and behaves exactly as it did.
+
+    Counted per tier, which is the whole point: the same buyer may hold their limit on
+    each of two tiers. See _user_ticket_count, which counts by wave_id for the same
+    reason.
+    """
+    cap = (wave or {}).get("max_tickets_per_user")
+    if cap is None:
+        return event.get("max_tickets_per_user", 4)
+    return cap
+
+
 def _pack_ticket_prices(pack_price: float, pack_size: int) -> List[float]:
     """What each ticket in one pack is individually worth.
 
@@ -1515,6 +1533,16 @@ class WaveIn(ApiModel):
     # ticket, where `price_ron` is the price of the WHOLE pack and `capacity` still counts
     # individual tickets — so a 200-ticket tier selling in fours has fifty packs in it.
     pack_size: int = 1
+    # The two selling rules, moved down from the event: one person's limit ON THIS TIER,
+    # and what to say when THIS TIER runs out. Both are overrides — None and blank mean
+    # the tier has no opinion and the event's own value stands, which is what every wave
+    # written before these fields existed says. See wave_ticket_cap.
+    #
+    # ge=1 rather than ge=0: a tier nobody may buy from is a paused tier, and saying it
+    # twice invites the two to disagree. It also keeps `is None` the only inherit signal,
+    # so a deliberate cap can never be mistaken for an absent one.
+    max_tickets_per_user: Optional[int] = Field(default=None, ge=1)
+    sold_out_message: str = ""
 
 
 class EventIn(ApiModel):
@@ -2864,7 +2892,7 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     # Cheap rejection for the obvious case. Not the guarantee — _confirm_user_ticket_cap
     # after the insert is, because only then does this request have a position other
     # concurrent requests can see.
-    await _precheck_user_ticket_cap(event, user["user_id"], ticket_count)
+    await _precheck_user_ticket_cap(event, wave, user["user_id"], ticket_count)
     discount_percent, discount_code_used = await _apply_discount(body, using_special=bool(special))
 
     subtotal = unit_price * pack_count
@@ -2907,40 +2935,48 @@ async def create_reservation(body: ReserveIn, user=Depends(get_current_user)):
     }
     await db.reservations.insert_one(doc)
 
-    if not await _confirm_user_ticket_cap(event, user["user_id"], doc):
+    if not await _confirm_user_ticket_cap(event, wave, user["user_id"], doc):
         # Delete before releasing. A crash between the two leaves stock held by nothing,
         # which the expiry sweep and an admin can both recover. The other order would
         # leave a live reservation holding stock already given back — an oversell, and
         # the failure this whole function exists to prevent.
         await db.reservations.delete_one({"reservation_id": doc["reservation_id"]})
         await _release_reservation_holds(doc)
-        cap = event.get("max_tickets_per_user", 4)
+        cap = wave_ticket_cap(event, wave)
         raise HTTPException(400, f"Ticket limit reached ({cap} per user)")
 
     return {**{k: v for k, v in doc.items() if k != "_id"}, "hold_minutes": HOLD_MINUTES}
 
 
-async def _user_ticket_count(event_id: str, user_id: str) -> int:
-    return await db.tickets.count_documents({"event_id": event_id, "user_id": user_id})
+async def _user_ticket_count(event_id: str, user_id: str, wave_id: str) -> int:
+    """Tickets this person already holds ON ONE TIER.
+
+    Scoped to the wave because the cap is: holding six on general admission says nothing
+    about how many four-packs the same person may take.
+    """
+    return await db.tickets.count_documents(
+        {"event_id": event_id, "user_id": user_id, "wave_id": wave_id})
 
 
-async def _precheck_user_ticket_cap(event, user_id: str, quantity: int):
+async def _precheck_user_ticket_cap(event, wave, user_id: str, quantity: int):
     """Fast path only — rejects a request already over the cap before doing any work.
 
     Racy by nature, and deliberately so: it reads a pre-state that a concurrent request
     can invalidate. _confirm_user_ticket_cap is what actually enforces the cap.
     """
-    max_per_user = event.get("max_tickets_per_user", 4)
-    existing = await _user_ticket_count(event["event_id"], user_id)
+    max_per_user = wave_ticket_cap(event, wave)
+    wave_id = wave["wave_id"]
+    existing = await _user_ticket_count(event["event_id"], user_id, wave_id)
     pending_docs = await db.reservations.find(
-        {"event_id": event["event_id"], "user_id": user_id, "status": "pending"}, {"_id": 0, "quantity": 1}
+        {"event_id": event["event_id"], "user_id": user_id, "wave_id": wave_id, "status": "pending"},
+        {"_id": 0, "quantity": 1},
     ).to_list(50)
     pending_qty = sum(r["quantity"] for r in pending_docs)
     if existing + pending_qty + quantity > max_per_user:
         raise HTTPException(400, f"Ticket limit reached ({max_per_user} per user)")
 
 
-async def _confirm_user_ticket_cap(event, user_id: str, doc: dict) -> bool:
+async def _confirm_user_ticket_cap(event, wave, user_id: str, doc: dict) -> bool:
     """SECURITY [M5 — fixed]: enforce the per-user cap *after* the reservation exists.
 
     Counting before inserting is unfixable without a transaction: every concurrent
@@ -2955,11 +2991,16 @@ async def _confirm_user_ticket_cap(event, user_id: str, doc: dict) -> bool:
     A racer that queries before a rolled-back sibling is deleted counts a reservation
     that no longer exists and gives up its own place. That direction is safe — it
     under-sells by one, and the caller can retry.
+
+    Every count here is scoped to ONE TIER, because the cap is. The peers that can crowd
+    this reservation out are the ones on the same wave; a reservation the same buyer holds
+    on another tier is counted against that tier's own cap, not this one.
     """
-    cap = event.get("max_tickets_per_user", 4)
-    issued = await _user_ticket_count(event["event_id"], user_id)
+    cap = wave_ticket_cap(event, wave)
+    wave_id = wave["wave_id"]
+    issued = await _user_ticket_count(event["event_id"], user_id, wave_id)
     peers = await db.reservations.find(
-        {"event_id": event["event_id"], "user_id": user_id, "status": "pending"},
+        {"event_id": event["event_id"], "user_id": user_id, "wave_id": wave_id, "status": "pending"},
         {"_id": 0, "reservation_id": 1, "quantity": 1, "created_at": 1},
     ).to_list(200)
 

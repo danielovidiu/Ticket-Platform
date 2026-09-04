@@ -32,7 +32,8 @@ const draw = (overrides = {}, props = {}) =>
                    onField={props.onField || (() => {})}
                    onFields={props.onFields || (() => {})}
                    onTouchEndsAt={props.onTouchEndsAt || (() => {})}
-                   onDelete={props.onDelete || (() => {})} />);
+                   onDelete={props.onDelete || (() => {})}
+                   eventMaxPerUser={props.eventMaxPerUser} />);
 
 describe("deleting a tier", () => {
   test("a tier that has sold nothing offers Delete", () => {
@@ -167,5 +168,55 @@ describe("group tickets", () => {
     const sizes = onField.mock.calls.filter(([k]) => k === "pack_size").map(([, v]) => v);
     expect(sizes.length).toBeGreaterThan(0);
     expect(Math.min(...sizes)).toBe(1);
+  });
+});
+
+/**
+ * The two selling rules that moved down from the event.
+ *
+ * A cap and a sold-out message used to be the night's, one answer each. They are the
+ * tier's now, because a night selling four-packs alongside general admission needs to say
+ * "one per person" about one and "six" about the other.
+ *
+ * Blank is the load-bearing state here. It is not zero and it is not four — it is "this
+ * tier has no rule of its own", which is what every tier written before the field existed
+ * says, and what keeps the event's number reaching them.
+ */
+describe("per-tier selling rules", () => {
+  test("a tier with no cap of its own shows the event's as the placeholder", () => {
+    draw({ max_tickets_per_user: null }, { eventMaxPerUser: 6 });
+    const cap = screen.getByTestId("wave-max-per-user-0");
+    expect(cap).toHaveValue(null);
+    expect(cap).toHaveAttribute("placeholder", "6");
+  });
+
+  test("a tier that sets its own cap shows that, not the event's", () => {
+    draw({ max_tickets_per_user: 1 }, { eventMaxPerUser: 6 });
+    expect(screen.getByTestId("wave-max-per-user-0")).toHaveValue(1);
+  });
+
+  test("clearing the cap reports null, not zero", async () => {
+    // Zero would be a tier nobody may buy from. Null is "no opinion" — the event's
+    // number stands — and the two must never be confused on the way to the server.
+    const onField = vi.fn();
+    draw({ max_tickets_per_user: 2 }, { onField });
+    await userEvent.clear(screen.getByTestId("wave-max-per-user-0"));
+    const caps = onField.mock.calls.filter(([k]) => k === "max_tickets_per_user");
+    expect(caps.at(-1)[1]).toBeNull();
+  });
+
+  test("a typed cap is reported as a number", async () => {
+    const onField = vi.fn();
+    draw({ max_tickets_per_user: null }, { onField });
+    await userEvent.type(screen.getByTestId("wave-max-per-user-0"), "3");
+    const caps = onField.mock.calls.filter(([k]) => k === "max_tickets_per_user");
+    expect(caps.at(-1)[1]).toBe(3);
+  });
+
+  test("the sold-out message is the tier's own words", async () => {
+    const onField = vi.fn();
+    draw({ sold_out_message: "" }, { onField });
+    await userEvent.type(screen.getByTestId("wave-sold-out-message-0"), "A");
+    expect(onField).toHaveBeenCalledWith("sold_out_message", "A");
   });
 });

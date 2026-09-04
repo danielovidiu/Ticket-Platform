@@ -296,7 +296,10 @@ export default function EventDetail() {
                             {w.status === "paused"
                               ? <span data-testid={`wave-paused-${w.wave_id}`}>Not on sale</span>
                               : w.available <= 0
-                                ? "SOLD OUT"
+                                /* The tier's own words when it has them. A night can sell
+                                   out one tier and not another, and "Table service — call
+                                   the venue" is about THAT tier, not about the event. */
+                                ? (w.sold_out_message || "SOLD OUT")
                                 : w.available < LOW_STOCK_AT
                                   ? <span className="text-brand" data-testid={`wave-low-stock-${w.wave_id}`}>Only a few left</span>
                                   : "Available"}

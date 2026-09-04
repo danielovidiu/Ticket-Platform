@@ -137,6 +137,128 @@ def test_single_request_over_cap_rejected(admin_headers):
     requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
 
 
+def test_tier_cap_overrides_event_cap(admin_headers):
+    """A tier's own max_tickets_per_user wins over the event's.
+
+    The event says 6; the pack tier says 1. One reservation is allowed and the second
+    is refused, which the event's number alone would have let through.
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "title": "TEST_TIER_CAP",
+        "slug": f"tiercap-{uuid.uuid4().hex[:6]}",
+        "description": "d", "venue": "V",
+        "starts_at": (now + timedelta(days=5)).isoformat(),
+        "ends_at": (now + timedelta(days=5, hours=3)).isoformat(),
+        "doors_open_at": (now + timedelta(days=5) - timedelta(hours=1)).isoformat(),
+        "image_url": "", "artist_ids": [],
+        "max_tickets_per_user": 6, "is_published": True,
+        "waves": [{"name": "VIP", "price_ron": 10.0, "capacity": 20,
+                   "starts_at": now.isoformat(),
+                   "ends_at": (now + timedelta(days=4)).isoformat(),
+                   "tier": "general", "max_tickets_per_user": 1}],
+    }
+    r = requests.post(f"{API}/admin/events", json=payload, headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    ev = r.json()
+    assert ev["waves"][0]["max_tickets_per_user"] == 1
+    wid = ev["waves"][0]["wave_id"]
+
+    user_h = _bearer(_mint_user())
+    r1 = patient.post(f"{API}/reservations",
+                      json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 1},
+                      headers=user_h, timeout=15)
+    assert r1.status_code == 200, r1.text
+    r2 = patient.post(f"{API}/reservations",
+                      json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 1},
+                      headers=user_h, timeout=15)
+    assert r2.status_code == 400, r2.text
+    assert "Ticket limit reached (1 per user)" in r2.text
+
+    requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
+
+
+def test_tier_caps_are_counted_separately(admin_headers):
+    """Two tiers, cap 1 each: the same buyer may hold one of each.
+
+    This is the whole point of moving the cap onto the tier. Under the old event-wide
+    count the second reservation was the buyer's second ticket and was refused.
+    """
+    now = datetime.now(timezone.utc)
+    wave = lambda name: {
+        "name": name, "price_ron": 10.0, "capacity": 20,
+        "starts_at": now.isoformat(),
+        "ends_at": (now + timedelta(days=4)).isoformat(),
+        "tier": "general", "max_tickets_per_user": 1,
+    }
+    payload = {
+        "title": "TEST_TIER_CAP_SPLIT",
+        "slug": f"tiersplit-{uuid.uuid4().hex[:6]}",
+        "description": "d", "venue": "V",
+        "starts_at": (now + timedelta(days=5)).isoformat(),
+        "ends_at": (now + timedelta(days=5, hours=3)).isoformat(),
+        "doors_open_at": (now + timedelta(days=5) - timedelta(hours=1)).isoformat(),
+        "image_url": "", "artist_ids": [],
+        "max_tickets_per_user": 6, "is_published": True,
+        "waves": [wave("GA"), wave("VIP")],
+    }
+    r = requests.post(f"{API}/admin/events", json=payload, headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    ev = r.json()
+    ga, vip = ev["waves"][0]["wave_id"], ev["waves"][1]["wave_id"]
+
+    user_h = _bearer(_mint_user())
+    for wid in (ga, vip):
+        rr = patient.post(f"{API}/reservations",
+                          json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 1},
+                          headers=user_h, timeout=15)
+        assert rr.status_code == 200, rr.text
+    # ...but a second one on a tier already at its cap is still refused.
+    again = patient.post(f"{API}/reservations",
+                         json={"event_id": ev["event_id"], "wave_id": ga, "quantity": 1},
+                         headers=user_h, timeout=15)
+    assert again.status_code == 400, again.text
+
+    requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
+
+
+def test_tier_without_cap_inherits_event_cap(admin_headers):
+    """A wave that names no cap is governed by the event's, as it always was."""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "title": "TEST_TIER_CAP_INHERIT",
+        "slug": f"tierinherit-{uuid.uuid4().hex[:6]}",
+        "description": "d", "venue": "V",
+        "starts_at": (now + timedelta(days=5)).isoformat(),
+        "ends_at": (now + timedelta(days=5, hours=3)).isoformat(),
+        "doors_open_at": (now + timedelta(days=5) - timedelta(hours=1)).isoformat(),
+        "image_url": "", "artist_ids": [],
+        "max_tickets_per_user": 2, "is_published": True,
+        "waves": [{"name": "GA", "price_ron": 10.0, "capacity": 20,
+                   "starts_at": now.isoformat(),
+                   "ends_at": (now + timedelta(days=4)).isoformat(),
+                   "tier": "general"}],
+    }
+    r = requests.post(f"{API}/admin/events", json=payload, headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    ev = r.json()
+    assert ev["waves"][0]["max_tickets_per_user"] is None
+    wid = ev["waves"][0]["wave_id"]
+
+    user_h = _bearer(_mint_user())
+    r1 = patient.post(f"{API}/reservations",
+                      json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 2},
+                      headers=user_h, timeout=15)
+    assert r1.status_code == 200, r1.text
+    r2 = patient.post(f"{API}/reservations",
+                      json={"event_id": ev["event_id"], "wave_id": wid, "quantity": 1},
+                      headers=user_h, timeout=15)
+    assert r2.status_code == 400, r2.text
+    assert "Ticket limit reached (2 per user)" in r2.text
+
+    requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
+
+
 # ---------- Wave not active (window) ----------
 
 def test_wave_not_active_before_window(admin_headers):
