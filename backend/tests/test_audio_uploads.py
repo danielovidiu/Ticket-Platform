@@ -298,3 +298,46 @@ class TestTheBrowserSideAgreesToo:
         # …and both spellings of a container must store the same extension.
         assert AUDIO_CONTENT_TYPES["audio/mp4"] == AUDIO_CONTENT_TYPES["audio/x-m4a"]
         assert AUDIO_CONTENT_TYPES["audio/wav"] == AUDIO_CONTENT_TYPES["audio/x-wav"]
+
+
+class TestTheStoredFileIsServedAsItself:
+    """What `/uploads` says a file IS, which is not the same question as what it holds.
+
+    On local disk the files are served by StaticFiles, which types them from Python's
+    `mimetypes` table rather than from anything we recorded at upload time. That table
+    answers `audio/mp4a-latm` for `.m4a` — MPEG-4 LATM streaming audio, not an M4A
+    container — so a clip went out under a type no browser should trust, and Safari is
+    strict enough about media types to refuse it. Every other extension we accept is
+    already right, which is why this went unnoticed.
+
+    Found by uploading a real macOS-encoded M4A and reading the response header back.
+
+    Blob storage is unaffected: the content type travels with the object (see
+    storage.save), so the CDN already serves what was declared.
+    """
+
+    def test_m4a_is_not_typed_as_latm_streaming_audio(self):
+        # Importing server applies the correction; assert the outcome, not the call.
+        import mimetypes
+        import server  # noqa: F401  (import registers the type)
+        assert mimetypes.guess_type("clip.m4a")[0] == "audio/mp4"
+
+    @pytest.mark.parametrize("ext, expected", [
+        (".mp3", "audio/mpeg"),
+        (".ogg", "audio/ogg"),
+        (".mp4", "video/mp4"),
+        (".webm", "video/webm"),
+    ])
+    def test_the_rest_were_already_right_and_stay_that_way(self, ext, expected):
+        import mimetypes
+        import server  # noqa: F401
+        assert mimetypes.guess_type(f"clip{ext}")[0] == expected
+
+    def test_every_stored_extension_types_as_its_own_medium(self):
+        """The general rule the case above is one instance of: a file stored from an audio
+        upload must not be served as something other than audio."""
+        import mimetypes
+        import server  # noqa: F401
+        for content_type, ext in AUDIO_CONTENT_TYPES.items():
+            served = mimetypes.guess_type(f"clip{ext}")[0] or ""
+            assert served.startswith("audio/"), f"{ext} (from {content_type}) serves as {served}"
