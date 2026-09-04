@@ -613,12 +613,21 @@ export function TierCard({ wave: w, index: i, onField, onFields, onTouchEndsAt, 
         </label>
         <label className="shrink-0">
           <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">State</div>
-          <select value={status} onChange={(e) => onField("status", e.target.value)}
-                  data-testid={`wave-status-${i}`}
-                  title={TIER_STATES.find((s) => s.value === status)?.hint}
-                  className="input-x w-36 font-mono-x uppercase tracking-[0.15em]">
-            {TIER_STATES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
+          {/* appearance-none, then our own chevron. A native select sizes itself from the
+              platform widget rather than from the padding it is given, so with identical
+              classes it still came out a few pixels taller than the inputs either side —
+              the kind of difference nobody can name and everybody can see. Stripped of the
+              native appearance it is a box with padding, exactly like its neighbours. */}
+          <div className="relative">
+            <select value={status} onChange={(e) => onField("status", e.target.value)}
+                    data-testid={`wave-status-${i}`}
+                    title={TIER_STATES.find((s) => s.value === status)?.hint}
+                    className="input-x w-36 pr-8 appearance-none font-mono-x uppercase tracking-[0.15em]">
+              {TIER_STATES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+            <span aria-hidden="true"
+                  className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-4 font-mono-x text-[10px]">▼</span>
+          </div>
         </label>
         <label className="flex-1 min-w-[8rem]">
           <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier name</div>
@@ -668,10 +677,16 @@ export function TierCard({ wave: w, index: i, onField, onFields, onTouchEndsAt, 
             they are the tier's now, because "one four-pack per person" and "six general
             admissions per person" are the same rule with different numbers, and a night
             selling both has to be able to say both. */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {/* items-end, because one of these labels is not a label. Access carries its
+            until/from toggle up on the label line, which makes that line taller than the
+            four beside it — bottom-aligned, the CONTROLS still sit on one baseline and the
+            taller label grows upward, where there is room for it.
+
+            Access sits last for the same reason: the field that is a different shape
+            belongs at the end of the row rather than splitting the four plain ones. */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-3 items-end">
           <Field label="Sale starts"><DateTimePicker value={w.starts_at} onChange={(v) => onField("starts_at", v)} /></Field>
           <Field label="Sale ends"><DateTimePicker value={w.ends_at} onChange={(v) => { onTouchEndsAt(); onField("ends_at", v); }} /></Field>
-          <AccessWindow wave={w} onChange={onFields} index={i} />
           {/* Blank is not zero, it is "no answer of its own": the tier falls back to the
               event's cap, which is what every tier written before this field existed
               does. The placeholder shows the number that fallback lands on, so an empty
@@ -688,6 +703,7 @@ export function TierCard({ wave: w, index: i, onField, onFields, onTouchEndsAt, 
                    onChange={(e) => onField("sold_out_message", e.target.value)}
                    data-testid={`wave-sold-out-message-${i}`} className="input-x w-full" />
           </Field>
+          <AccessWindow wave={w} onChange={onFields} index={i} />
         </div>
       </div>
     </div>
@@ -756,8 +772,13 @@ export function AccessWindow({ wave, onChange, index }) {
   );
 }
 
-function EventForm({ form, setForm, onSave, onClose }) {
-  const setF = (k, v) => setForm({ ...form, [k]: v });
+export function EventForm({ form, setForm, onSave, onClose }) {
+  /* Functional, because one action can set two fields. Adding the first poster writes the
+     collection AND names it the main artwork, and off a captured `form` the second write
+     is computed from a copy taken before the first — so `images` was rebuilt without the
+     picture that had just been uploaded, and the upload looked like it had failed. The
+     same trap `setStartsAt` and `setWaveFields` below already work around. */
+  const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setWave = (i, k, v) => { const w = [...form.waves]; w[i] = { ...w[i], [k]: v }; setForm({...form, waves: w}); };
   /* Several keys at once. The access toggle has to clear one end as it sets the other,
      and two setWave calls off the same `form` would leave only the second. */
@@ -865,10 +886,16 @@ function EventForm({ form, setForm, onSave, onClose }) {
                 cannot be 4:3 on its own page and square in a grid. It was hardcoded to
                 4:3 on the event page and set per-block everywhere else. */}
             <Field label="Image format">
-              <select value={form.image_aspect || "4:3"} onChange={(e) => setF("image_aspect", e.target.value)}
-                      className="input-x w-full" data-testid="event-image-aspect">
-                {EVENT_IMAGE_ASPECTS.map((a) => <option key={a} value={a}>{a}</option>)}
-              </select>
+              {/* Same reason as the tier's State select: stripped of the native widget's
+                  own sizing so it stands level with the date triggers beside it. */}
+              <div className="relative">
+                <select value={form.image_aspect || "4:3"} onChange={(e) => setF("image_aspect", e.target.value)}
+                        className="input-x w-full pr-8 appearance-none" data-testid="event-image-aspect">
+                  {EVENT_IMAGE_ASPECTS.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+                <span aria-hidden="true"
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-4 font-mono-x text-[10px]">▼</span>
+              </div>
             </Field>
           </div>
           {/* The artwork that sells the night, and which piece of it stands for the event
