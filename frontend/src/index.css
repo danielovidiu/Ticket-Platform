@@ -389,3 +389,22 @@ body {
     grid-template-columns: minmax(0, var(--column-ratio-a, 1fr)) minmax(0, var(--column-ratio-b, 1fr));
   }
 }
+
+/* Holding the join between two columns on the centre line.
+ *
+ * The ratio alone cannot do it: giving the photograph 70% of the width puts the join at
+ * 70%, which is the one place it is not centred. So each side takes half the block, and
+ * the ratio decides how much of its own half it fills — the smaller side hands its spare
+ * width back to the OUTER edge, where it reads as margin, rather than to the middle,
+ * where it would read as a hole.
+ *
+ * Below `md` there are no columns to join, so the share is dropped and each element is
+ * full width again. Same reason `.column-ratio` is written this way: an inline width
+ * would apply at every size and leave a phone showing a 43%-wide photograph. */
+.seam-share { width: 100%; }
+@media (min-width: 768px) {
+  .seam-share { width: var(--seam-share, 100%); }
+  /* The element in the LEFT half, pushed across to sit against the join. The one in the
+   * right half already starts there. */
+  .seam-share-end { margin-left: auto; }
+}

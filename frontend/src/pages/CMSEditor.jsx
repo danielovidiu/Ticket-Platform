@@ -1418,6 +1418,11 @@ const FIELDS = {
     // the middle of the block, which is where "image central" lands.
     { k: "ratio", label: "Image width (share of the block)", type: "range",
       min: SPLIT_RATIO_LIMITS.min, max: SPLIT_RATIO_LIMITS.max, fallback: SPLIT_RATIO_LIMITS.fallback },
+    { k: "center_seam", label: "Photo and text meet in the middle", type: "checkbox" },
+    { k: "_seam_note", label: "", type: "note",
+      text: "On, the join between the two stays on the centre line whatever the ratio is — "
+          + "the narrower side gives its spare width to the outside edge. Off, the ratio "
+          + "sizes the columns themselves and the join moves with it." },
     { k: "image_url", label: "Image", type: "image" },
     // No aspect control on purpose: the photograph keeps its own proportions here and
     // this is the only thing that limits it.

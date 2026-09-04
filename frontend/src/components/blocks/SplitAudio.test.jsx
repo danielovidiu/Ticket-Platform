@@ -150,6 +150,96 @@ describe("split + audio: proportions", () => {
   });
 });
 
+describe("split + audio: the join between the two", () => {
+  const block = (over) => draw("split_audio", { image_url: "/p.jpg", heading: "Hi", center_seam: true, ...over });
+  const grid = (over) => block(over).querySelector('[data-testid="split-audio"]');
+  const media = (over) => block(over).querySelector('[data-testid="split-audio-media"]');
+  const column = (over) => block(over).querySelector('[data-testid="split-audio-column"]');
+  const shareOf = (el) => el.style.getPropertyValue("--seam-share");
+
+  test("centred, the two tracks are equal halves whatever the ratio says", () => {
+    // This is the whole mechanism: the ratio stops sizing the tracks, so the join cannot
+    // move off the middle, and starts sizing what each side fills within its half.
+    const el = grid({ ratio: 70 });
+    expect(el.style.getPropertyValue("--column-ratio-a")).toBe("50fr");
+    expect(el.style.getPropertyValue("--column-ratio-b")).toBe("50fr");
+  });
+
+  test("the larger side fills its half and the smaller gives width to the outer edge", () => {
+    expect(shareOf(media({ ratio: 70 }))).toBe("100%");
+    // 30/70 of a half, not 30% of the block — the shortfall is margin beyond the text.
+    expect(shareOf(column({ ratio: 70 }))).toBe(`${(30 / 70) * 100}%`);
+  });
+
+  test("it works the other way round too", () => {
+    expect(shareOf(column({ ratio: 30 }))).toBe("100%");
+    expect(shareOf(media({ ratio: 30 }))).toBe(`${(30 / 70) * 100}%`);
+  });
+
+  test("at fifty both sides fill their halves, which is edge to edge", () => {
+    expect(shareOf(media({ ratio: 50 }))).toBe("100%");
+    expect(shareOf(column({ ratio: 50 }))).toBe("100%");
+  });
+
+  test("the element in the left half is pushed across to meet the join", () => {
+    // The one in the right half already starts there, so only the left gets the margin.
+    expect(media({ ratio: 70 }).className).toContain("seam-share-end");
+    expect(column({ ratio: 70 }).className).not.toContain("seam-share-end");
+  });
+
+  test("reversing moves the margin to whichever element is now on the left", () => {
+    expect(media({ ratio: 70, direction: "image-right" }).className).not.toContain("seam-share-end");
+    expect(column({ ratio: 70, direction: "image-right" }).className).toContain("seam-share-end");
+  });
+
+  test("the share is a variable, so a phone gets a full-width element and not 43% of one", () => {
+    // `.seam-share` only applies the variable from `md` up. An inline width would leave a
+    // stacked phone layout showing a photograph two fifths of the way across the screen.
+    const el = media({ ratio: 70 });
+    expect(el.style.width).toBe("");
+    expect(el.className).toContain("seam-share");
+  });
+
+  test("off, the ratio sizes the tracks and nothing is shared", () => {
+    const el = grid({ center_seam: false, ratio: 70 });
+    expect(el.style.getPropertyValue("--column-ratio-a")).toBe("70fr");
+    expect(media({ center_seam: false, ratio: 70 }).className).not.toContain("seam-share");
+  });
+
+  test("a block saved before the control existed keeps the layout it had", () => {
+    const el = grid({ center_seam: undefined, ratio: 70 });
+    expect(el.getAttribute("data-centred")).toBe("false");
+    expect(el.style.getPropertyValue("--column-ratio-a")).toBe("70fr");
+  });
+
+  test("the text keeps its indentation from the join and from the screen edge", () => {
+    // The gap is what the words are indented BY; the inset is what keeps them off the
+    // glass at full width. Neither survives on its own if the column wrapper swallows it.
+    const c = draw("split_audio", { image_url: "/p.jpg", heading: "Hi", center_seam: true, full_width: true });
+    expect(c.querySelector('[data-testid="split-audio"]').className).toContain("gap-10");
+    expect(c.querySelector("h2").closest(".edge-inset")).toBeTruthy();
+  });
+
+  test("the column still has a height to place its text within", () => {
+    // The share wrapper became the grid child, so the inset below it needs h-full handed
+    // down — without it the inner column collapses to the height of its own words and
+    // top/middle/bottom stop meaning anything.
+    const c = block({ ratio: 70 });
+    expect(c.querySelector(".edge-inset, [class*='h-full']")).toBeTruthy();
+    expect(c.querySelector('[data-testid="split-audio-text"]').parentElement.className).toContain("h-full");
+  });
+});
+
+describe("split + audio: ratio bounds", () => {
+  const grid = (over) => draw("split_audio", { image_url: "/p.jpg", ...over }).querySelector('[data-testid="split-audio"]');
+
+  test("a ratio outside the slider's range is pulled back into it", () => {
+    expect(grid({ ratio: 500 }).getAttribute("data-ratio")).toBe("80");
+    expect(grid({ ratio: 0 }).getAttribute("data-ratio")).toBe("20");
+    expect(grid({ ratio: "nonsense" }).getAttribute("data-ratio")).toBe("50");
+  });
+});
+
 describe("split + audio: the photograph", () => {
   const image = (over) => draw("split_audio", { image_url: "/p.jpg", ...over }).querySelector('[data-testid="split-audio-image"]');
 

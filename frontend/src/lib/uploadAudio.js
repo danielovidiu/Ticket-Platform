@@ -18,8 +18,32 @@ import { uploadConfig } from "./uploadVideo";
  * ceiling and usually goes straight through the API. The direct route is still honoured
  * for the case that does not fit — an uncompressed WAV, which is 10MB a minute.
  */
+/**
+ * The formats both ends accept: `AUDIO_CONTENT_TYPES` in backend/server.py, and the
+ * allowlist the direct-upload token is minted against in blob-upload/index.js.
+ *
+ * Checked HERE as well as there because of how a refusal on the direct route arrives. The
+ * token request is refused before any bytes move, and the client sees an error carrying no
+ * HTTP response — which the pipeline reads as a dropped connection, retries three times,
+ * and finally reports as "Connection lost". True of nothing that happened, and it points
+ * whoever reads it at their network instead of at their file. A type this list does not
+ * hold is refused up front instead, by name, with nothing sent.
+ */
+const ACCEPTED = new Set([
+  "audio/mpeg", "audio/wav", "audio/x-wav", "audio/ogg", "audio/mp4", "audio/aac",
+]);
+
 export async function uploadAudio(file, { onProgress } = {}) {
   const config = await uploadConfig();
+
+  if (file.type && !ACCEPTED.has(file.type)) {
+    const error = new Error(
+      `${file.type || "That file"} is not a format the player can use — export it as MP3, WAV, OGG or M4A.`);
+    // Same marker the size refusal uses: decided here, nothing sent, and retrying it
+    // would only arrive at the same answer more slowly.
+    error.refusedLocally = true;
+    throw error;
+  }
 
   if (file.size > config.max_bytes) {
     const mb = Math.round(config.max_bytes / (1024 * 1024));

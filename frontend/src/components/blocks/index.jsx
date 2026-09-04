@@ -1057,6 +1057,19 @@ const bounded = (value, limits) => {
 };
 
 /**
+ * How much of its own half an element fills, when the join between the two is pinned to
+ * the centre of the block.
+ *
+ * The larger side fills its half; the smaller one takes the same fraction of a half that
+ * it has of the pair. At 50/50 both fill their halves and the block is edge to edge, which
+ * is exactly what it does without this. Off 50 the shortfall lands at the outer edge.
+ *
+ * 70/30, in a 1000px block: the photograph fills its 500, and the text takes 30/70 of the
+ * other 500 — 214px against the join, with 286px of margin beyond it.
+ */
+export const shareOfHalf = (mine, other) => (mine >= other ? 100 : (mine / other) * 100);
+
+/**
  * Split's layout with the far column cut in two: words above, short clips below.
  *
  * Three things separate it from Split, and all three were asked for by name.
@@ -1082,22 +1095,51 @@ function SplitAudio({ props }) {
   const maxHeight = bounded(props.max_height, SPLIT_MAX_HEIGHT_LIMITS);
   const ratio = bounded(props.ratio, SPLIT_RATIO_LIMITS);
 
-  /* Fractions rather than percentages, and set as CSS variables rather than inline
-     `grid-template-columns`. Percentages would not leave room for the gap; an inline
-     value would beat the `md:` breakpoint and split a phone screen into two thin columns.
-     See `.column-ratio` in index.css — the same trick `.hero-heading` uses, for the same
-     reason: a media query cannot be written inline. Reversing swaps the tracks as well as
-     the order, or the photograph would move into the column sized for the text. */
-  const columns = reverse ? [100 - ratio, ratio] : [ratio, 100 - ratio];
+  /* Where the join between the two sits.
+   *
+   * OFF, the ratio sizes the tracks themselves, so the join lands wherever the ratio put
+   * it — 70/30 joins at 70% across.
+   *
+   * ON, the tracks are equal halves and the ratio decides how much of its half each side
+   * fills, so the join stays on the centre line at every ratio and the shortfall becomes
+   * margin at the outer edge. Absent means off, so nothing published moves; new blocks
+   * are created with it on.
+   *
+   * Fractions rather than percentages either way, and set as CSS variables rather than
+   * inline `grid-template-columns`. Percentages would not leave room for the gap; an
+   * inline value would beat the `md:` breakpoint and split a phone screen into two thin
+   * columns. See `.column-ratio` and `.seam-share` in index.css — the same trick
+   * `.hero-heading` uses, and for the same reason: a media query cannot be written
+   * inline. Reversing swaps the tracks as well as the order, or the photograph would move
+   * into the column sized for the text. */
+  const centred = !!props.center_seam;
+  const columns = centred ? [50, 50] : reverse ? [100 - ratio, ratio] : [ratio, 100 - ratio];
+
+  /* The gap is the text's indentation from the join, and it is why the two sides are
+     given their share rather than being butted together: the photograph stops at the
+     centre line, and the words start 40px the other side of it. */
+  const shares = centred
+    ? { image: shareOfHalf(ratio, 100 - ratio), text: shareOfHalf(100 - ratio, ratio) }
+    : { image: 100, text: 100 };
+
+  /** The element sitting in the LEFT half has to be pushed across to meet the join; the
+   *  one in the right half already starts there. Which is which follows `direction`. */
+  const share = (part, inLeftHalf) => ({
+    className: centred ? `seam-share ${inLeftHalf ? "seam-share-end" : ""}` : "",
+    style: centred ? { "--seam-share": `${shares[part]}%` } : undefined,
+  });
+  const image = share("image", !reverse);
+  const text = share("text", reverse);
 
   return (
     <section><Frame full={props.full_width}>
       <div className={`grid gap-10 items-stretch column-ratio ${reverse ? "md:[&>*:first-child]:order-2" : ""}`}
            style={{ "--column-ratio-a": `${columns[0]}fr`, "--column-ratio-b": `${columns[1]}fr` }}
-           data-testid="split-audio" data-ratio={ratio}>
+           data-testid="split-audio" data-ratio={ratio} data-centred={centred ? "true" : "false"}>
         {/* No border and not inset: the photograph reaches the edge of its column, and of
             the screen when the block is full width. */}
-        <div className="overflow-hidden" data-testid="split-audio-media">
+        <div className={`overflow-hidden ${image.className}`} style={image.style}
+             data-testid="split-audio-media">
           {props.image_url ? (
             <img src={mediaUrl(props.image_url)} alt=""
                  className="w-full h-auto object-cover block"
@@ -1107,7 +1149,11 @@ function SplitAudio({ props }) {
             <div className="w-full h-full min-h-[12rem] flex items-center justify-center text-ink-5 font-mono-x text-xs uppercase tracking-[0.3em]">Set image URL</div>
           )}
         </div>
-        <EdgeInset full={props.full_width}>
+        {/* The share wrapper is the grid child, so `h-full` has to be handed down to the
+            inset as well — a percentage height resolves against the box above it, and
+            without this the column inside would collapse to the height of its words. */}
+        <div className={text.className} style={text.style} data-testid="split-audio-column">
+        <EdgeInset full={props.full_width} className="h-full">
           {/* The column is as tall as the photograph beside it. The words take whatever is
               left above the player and are placed within it — which is what top, middle
               and bottom mean here — and the player sits at the bottom of the column. */}
@@ -1139,6 +1185,7 @@ function SplitAudio({ props }) {
             <AudioPlaylist tracks={props.tracks} />
           </div>
         </EdgeInset>
+        </div>
       </div>
     </Frame></section>
   );
