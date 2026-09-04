@@ -9,6 +9,7 @@ import sys
 import csv
 import json
 import uuid
+import mimetypes
 import base64
 import secrets
 import hashlib
@@ -540,6 +541,15 @@ api = APIRouter(prefix="/api")
 # mounting a directory inside a read-only function bundle would abort the cold start.
 if storage.is_local():
     UPLOAD_DIR = storage.ensure_local_dir()
+    # `.m4a` is the one extension Python's own table gets wrong: it answers
+    # `audio/mp4a-latm`, which is MPEG-4 LATM streaming audio and NOT an M4A container.
+    # StaticFiles serves whatever that table says, so an uploaded clip went out under a
+    # type no browser should trust — Safari is strict about this and can refuse to play
+    # it. Every other type we accept (.mp3, .wav, .ogg, .mp4, .webm) is already right.
+    #
+    # This is the local-disk path only. Under Blob the content type travels with the
+    # object — see storage.save — so the CDN already serves it correctly.
+    mimetypes.add_type("audio/mp4", ".m4a")
     app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 IMAGE_CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
