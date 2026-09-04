@@ -4,7 +4,7 @@ import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { mediaUrl } from "../lib/media";
 import { uploadAudio } from "../lib/uploadAudio";
 import { useSingleUpload } from "../lib/useUpload";
-import { AUDIO_TRACK_MAX_SECONDS } from "./blocks";
+import { AUDIO_TRACK_MAX_SECONDS, fmtClock } from "./blocks";
 
 const ACCEPT = { prefix: "audio/", message: "Choose an audio file — MP3, WAV, OGG or M4A" };
 
@@ -20,7 +20,10 @@ function TrackRow({ track, index, count, onPatch, onRemove, onMove, testId }) {
 
   const send = useCallback((file, opts) => uploadAudio(file, opts), []);
   const onDone = useCallback(({ url }) => {
-    onPatch({ url });
+    // The length goes with the file. Left in place, the row would print the previous
+    // clip's number for the moment between the upload landing and the new metadata
+    // arriving — and indefinitely, if the new file has no readable length.
+    onPatch({ url, duration: 0 });
     toast.success("Clip uploaded");
   }, [onPatch]);
 
@@ -53,12 +56,30 @@ function TrackRow({ track, index, count, onPatch, onRemove, onMove, testId }) {
                 className="shrink-0 p-1 text-ink-4 hover:text-brand"><Trash2 size={13} /></button>
       </div>
 
+      {/* What was measured, and what the block will actually play of it. Shown because it
+          is otherwise invisible state: it is read from the file rather than typed, it is
+          what the public list prints, and a clip over the cap is worth seeing here rather
+          than discovering by listening to it stop. */}
+      {track.duration > 0 && (
+        <div className="flex items-center gap-2 pl-7 font-mono-x text-[10px] tracking-[0.2em] text-ink-5"
+             data-testid={`${testId}-duration`}>
+          <span className="tabular-nums">{fmtClock(track.duration)}</span>
+          {track.duration > AUDIO_TRACK_MAX_SECONDS && (
+            <span className="text-brand uppercase" data-testid={`${testId}-over-cap`}>
+              over {AUDIO_TRACK_MAX_SECONDS}s — plays the first {fmtClock(AUDIO_TRACK_MAX_SECONDS)}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-2">
         <input
           value={track.url || ""}
           placeholder="Paste an audio URL, or upload →"
           aria-label={`Track ${index + 1} file`}
-          onChange={(e) => onPatch({ url: e.target.value })}
+          // Same reason as the upload: a different URL is a different clip, so the length
+          // measured from the last one has to go with it.
+          onChange={(e) => onPatch({ url: e.target.value, duration: 0 })}
           autoCapitalize="off" autoCorrect="off" autoComplete="off"
           className="input-x flex-1 min-w-[10rem] !py-1.5 !text-xs"
           data-testid={`${testId}-url`}
@@ -93,8 +114,25 @@ function TrackRow({ track, index, count, onPatch, onRemove, onMove, testId }) {
 
       {/* The browser's own player, not the block's. This is for checking that the right
           file landed in the right row; what a visitor gets is the block's player. */}
+      {/* `preload="metadata"` HERE and nowhere else, which is the whole point of reading
+          the length at this end.
+
+          The block shows every track's length in its list, the way a record shop's player
+          does. Asking the browser for that on the public page would mean a request per
+          track on every visit, for a number that cannot change once the file is uploaded —
+          and this file already argues the opposite case for the video block's two cuts.
+
+          So it is measured once, by whoever is choosing the clip, and stored beside the
+          URL. The same trade the video poster makes: captured in the browser at authoring
+          time because there is no transcoder on the server to ask. */}
       {track.url && (
-        <audio src={mediaUrl(track.url)} controls preload="none"
+        <audio src={mediaUrl(track.url)} controls preload="metadata"
+               onLoadedMetadata={(e) => {
+                 const seconds = e.currentTarget.duration;
+                 if (!Number.isFinite(seconds)) return;          // a stream has no length
+                 const known = Math.round(seconds);
+                 if (known !== track.duration) onPatch({ duration: known });
+               }}
                className="w-full h-8" data-testid={`${testId}-preview`} />
       )}
     </li>

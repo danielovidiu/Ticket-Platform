@@ -536,6 +536,49 @@ describe("the clip player", () => {
     }
   });
 
+  test("every row prints its length, from the block's own data", () => {
+    // The reference player lists them the same way. Read from what the CMS measured, so a
+    // list of six costs six requests to nobody — `preload="none"` is still the rule.
+    const c = draw("split_audio", { heading: "Hi", tracks: [
+      { title: "One", url: "/a.mp3", duration: 62 },
+      { title: "Two", url: "/b.mp3", duration: 9 },
+    ] });
+    expect(c.querySelector('[data-testid="audio-length-0"]').textContent).toBe("1:02");
+    expect(c.querySelector('[data-testid="audio-length-1"]').textContent).toBe("0:09");
+  });
+
+  test("a row prints what will play, not what the file holds", () => {
+    // The transport reads 1:30 for anything over the cap; a row claiming 5:29 beside it
+    // would be the one that is wrong.
+    const c = draw("split_audio", { heading: "Hi", tracks: [{ title: "Long", url: "/a.mp3", duration: 329 }] });
+    expect(c.querySelector('[data-testid="audio-length-0"]').textContent).toBe("1:30");
+  });
+
+  test("a track nobody measured shows nothing rather than a dash", () => {
+    // Pasted rather than uploaded, or saved before the field existed. An honest blank
+    // beats "--:--" against every row.
+    const c = draw("split_audio", { heading: "Hi", tracks: [{ title: "One", url: "/a.mp3" }] });
+    expect(c.querySelector('[data-testid="audio-length-0"]').textContent).toBe("");
+  });
+
+  test("what the element reports beats what was stored", () => {
+    // A file replaced at the same URL would otherwise print the old length until someone
+    // re-opened the block in the CMS.
+    const c = draw("split_audio", { heading: "Hi", tracks: [{ title: "One", url: "/a.mp3", duration: 60 }] });
+    const el = c.querySelector('[data-testid="audio-element"]');
+    fireEvent.click(c.querySelector('[data-testid="audio-track-0"]'));
+    Object.defineProperty(el, "duration", { value: 25, configurable: true });
+    fireEvent.loadedMetadata(el);
+    expect(c.querySelector('[data-testid="audio-length-0"]').textContent).toBe("0:25");
+  });
+
+  test("the length is not counted as a row", () => {
+    // It sits inside the row button and the rows are found by a testid PREFIX match, so a
+    // child named `audio-track-N-length` doubled the count. Caught by an existing test.
+    const c = withTracks({});
+    expect(c.querySelectorAll("[data-testid^='audio-track-']").length).toBe(2);
+  });
+
   test("a row with no name of its own still has one", () => {
     const c = withTracks({ tracks: [{ url: "/a.mp3" }] });
     expect(c.querySelector('[data-testid="audio-track-0"]').textContent).toContain("Track 1");

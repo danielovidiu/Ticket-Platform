@@ -74,9 +74,11 @@ describe("uploading a clip", () => {
   test("the returned URL lands in that row and nowhere else", async () => {
     const f = field([{ title: "One", url: "" }, { title: "Two", url: "" }]);
     await userEvent.upload(screen.getByTestId("audio-tracks-1-file"), clip());
+    // `duration: 0` alongside: the length belongs to the file, so a new one clears the
+    // number measured from the last, rather than printing it until fresh metadata lands.
     await waitFor(() => expect(f.latest()).toEqual([
       { title: "One", url: "" },
-      { title: "Two", url: "/uploads/abc.mp3" },
+      { title: "Two", url: "/uploads/abc.mp3", duration: 0 },
     ]));
   });
 
@@ -104,6 +106,64 @@ describe("uploading a clip", () => {
     await userEvent.upload(screen.getByTestId("audio-tracks-0-file"), clip());
     expect(await screen.findByTestId("audio-tracks-0-error")).toHaveTextContent(/not audio/i);
     expect(screen.getByTestId("audio-tracks-0-retry")).toBeInTheDocument();
+  });
+});
+
+describe("measuring the length once, here", () => {
+  /* The block lists every track's length. Asking the browser for that on the public page
+     would be a request per track on every visit, for a number that cannot change — so it
+     is read at authoring time and stored, the way the video block's poster is. */
+  const loadMetadata = (seconds) => {
+    const el = document.querySelector('[data-testid="audio-tracks-0-preview"]');
+    Object.defineProperty(el, "duration", { value: seconds, configurable: true });
+    fireEvent.loadedMetadata(el);
+  };
+
+  test("the preview asks for metadata — that is what it is for", () => {
+    field([{ title: "One", url: "/a.mp3" }]);
+    expect(screen.getByTestId("audio-tracks-0-preview")).toHaveAttribute("preload", "metadata");
+  });
+
+  test("the measured length is written back onto the track", () => {
+    const f = field([{ title: "One", url: "/a.mp3" }]);
+    loadMetadata(62.4);
+    expect(f.latest()).toEqual([{ title: "One", url: "/a.mp3", duration: 62 }]);
+  });
+
+  test("a length that cannot be read is not written", () => {
+    // A live stream reports Infinity. Storing that would print nonsense on the page.
+    const f = field([{ title: "One", url: "/a.mp3" }]);
+    loadMetadata(Infinity);
+    expect(f.onChange).not.toHaveBeenCalled();
+  });
+
+  test("it is not rewritten when it has not changed", () => {
+    // The event fires on every load; patching each time would mark the page dirty and
+    // push an undo entry for a number nobody touched.
+    const f = field([{ title: "One", url: "/a.mp3", duration: 62 }]);
+    loadMetadata(62.2);
+    expect(f.onChange).not.toHaveBeenCalled();
+  });
+
+  test("the editor is shown what was measured", () => {
+    field([{ title: "One", url: "/a.mp3", duration: 62 }]);
+    expect(screen.getByTestId("audio-tracks-0-duration")).toHaveTextContent("1:02");
+  });
+
+  test("a clip over the cap is flagged where it is chosen", () => {
+    field([{ title: "One", url: "/a.mp3", duration: 200 }]);
+    expect(screen.getByTestId("audio-tracks-0-over-cap")).toBeInTheDocument();
+  });
+
+  test("one inside the cap is not", () => {
+    field([{ title: "One", url: "/a.mp3", duration: 45 }]);
+    expect(screen.queryByTestId("audio-tracks-0-over-cap")).toBeNull();
+  });
+
+  test("changing the URL drops the length that came with the old file", () => {
+    const f = field([{ title: "One", url: "/a.mp3", duration: 62 }]);
+    fireEvent.change(screen.getByTestId("audio-tracks-0-url"), { target: { value: "/b.mp3" } });
+    expect(f.latest()).toEqual([{ title: "One", url: "/b.mp3", duration: 0 }]);
   });
 });
 

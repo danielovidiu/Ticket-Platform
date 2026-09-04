@@ -942,11 +942,30 @@ export const AUDIO_TRACK_MAX_SECONDS = 90;
  *  silence it before it starts. Reset by whoever takes over; see `stopOthers`. */
 let nowPlaying = null;
 
-const fmtClock = (seconds) => {
+/** m:ss, or "--:--" for a length nothing has measured yet. Exported because the CMS field
+ *  prints the same numbers this player does, and two spellings of a clock would drift. */
+export const fmtClock = (seconds) => {
   if (!Number.isFinite(seconds) || seconds < 0) return "--:--";
   const whole = Math.floor(seconds);
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 };
+
+/**
+ * What a row prints for its length: the stored figure, or what the element has just told
+ * us about the track it is actually playing.
+ *
+ * `measured` wins when there is one, because a clip that has loaded knows more than the
+ * number saved beside it — a file replaced at the same URL would otherwise print the old
+ * length for as long as the block goes un-edited.
+ *
+ * Capped, for the same reason the transport's readout is: the player stops at ninety
+ * seconds, so ninety seconds is what a row promising a length should promise.
+ */
+function rowLength(track, measured) {
+  const known = Number.isFinite(measured) ? measured : Number(track?.duration);
+  if (!Number.isFinite(known) || known <= 0) return "";
+  return fmtClock(Math.min(known, AUDIO_TRACK_MAX_SECONDS));
+}
 
 /**
  * A list of short clips with a transport, one playing at a time.
@@ -1144,6 +1163,23 @@ export function AudioPlaylist({ tracks }) {
                             style={{ width: `${Math.min(100, (elapsed / span) * 100)}%` }} />
                     </span>
                   )}
+                </span>
+                {/* Every row's length, the way a record shop's player lists them — and
+                    read from the block's own data, not from the network. The number was
+                    measured once in the CMS when the clip was chosen (see
+                    AudioTracksField), so a list of six costs six requests to nobody.
+
+                    What is printed is what will PLAY, which for anything over the cap is
+                    the cap rather than the file's own length: the transport says 1:30 and
+                    a row claiming 5:29 beside it would be the one that is wrong. A track
+                    whose length was never captured — pasted rather than uploaded, or
+                    saved before this existed — simply shows nothing until it is played. */}
+                {/* NOT `audio-track-N-something`: the rows are counted with a
+                    `[data-testid^="audio-track-"]` prefix match, and a child sharing that
+                    prefix is counted as a row of its own. */}
+                <span className="shrink-0 font-mono-x text-[10px] tracking-[0.2em] text-ink-5 tabular-nums"
+                      data-testid={`audio-length-${i}`}>
+                  {rowLength(track, i === current ? duration : null)}
                 </span>
               </button>
             </li>
