@@ -10,9 +10,14 @@
  * It is all form state on purpose: an editor fills this in while inventing the event, and
  * the album manager could not be used because an album needs a saved event first.
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import PosterField from "./PosterField";
+
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const post = vi.hoisted(() => vi.fn());
+vi.mock("../api", () => ({ http: { post } }));
 
 const draw = (props = {}) => {
   const onChange = props.onChange || vi.fn();
@@ -112,5 +117,100 @@ describe("an empty collection", () => {
   test("shows no strip to reorder", () => {
     draw();
     expect(screen.queryByTestId("event-posters-strip")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The upload path, which had no test at all — the cases above only ever added posters by
+ * URL, so the button, the pipeline and the POST were unexercised. The reported symptom
+ * was "the posters upload does nothing", and the gesture that did nothing was a DROP:
+ * the album manager takes one, this did not, and a drop onto a page with no handler is
+ * swallowed by the browser — indistinguishable, from the outside, from a broken control.
+ */
+describe("uploading posters", () => {
+  const png = (name = "poster.png") =>
+    new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, { type: "image/png" });
+
+  const drawWithMocks = (props = {}) => {
+    const onChange = props.onChange || vi.fn();
+    const onMainChange = props.onMainChange || vi.fn();
+    render(<PosterField value={props.value ?? []} main={props.main ?? ""}
+                        onChange={onChange} onMainChange={onMainChange} />);
+    return { onChange, onMainChange };
+  };
+
+  beforeEach(() => {
+    post.mockReset();
+    post.mockResolvedValue({ data: { url: "/uploads/p1.png" } });
+  });
+
+  test("choosing a file uploads it and adds it to the collection", async () => {
+    const { onChange, onMainChange } = drawWithMocks();
+    await userEvent.upload(screen.getByTestId("event-posters-file"), png());
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(["/uploads/p1.png"]));
+    // …and the first one stands for the event without being asked.
+    expect(onMainChange).toHaveBeenCalledWith("/uploads/p1.png");
+  });
+
+  test("dropping a file uploads it too — the gesture that used to do nothing", async () => {
+    const { onChange } = drawWithMocks();
+    fireEvent.drop(screen.getByTestId("event-posters-dropzone"), {
+      dataTransfer: { files: [png("dropped.png")] },
+    });
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(["/uploads/p1.png"]));
+  });
+
+  test("the dropzone says it is a target while a file is over it", async () => {
+    drawWithMocks();
+    const zone = screen.getByTestId("event-posters-dropzone");
+    expect(zone.className).not.toContain("border-brand");
+    fireEvent.dragOver(zone);
+    expect(zone.className).toContain("border-brand");
+    fireEvent.dragLeave(zone);
+    expect(zone.className).not.toContain("border-brand");
+  });
+
+  test("clicking the zone opens the picker, so the drop is not the only way in", async () => {
+    drawWithMocks();
+    const input = screen.getByTestId("event-posters-file");
+    const click = vi.spyOn(input, "click");
+    await userEvent.click(screen.getByTestId("event-posters-dropzone"));
+    expect(click).toHaveBeenCalled();
+  });
+
+  test("several posters arrive in the order they were given", async () => {
+    post.mockReset();
+    post.mockResolvedValueOnce({ data: { url: "/uploads/a.png" } })
+        .mockResolvedValueOnce({ data: { url: "/uploads/b.png" } });
+    const { onChange } = drawWithMocks();
+    await userEvent.upload(screen.getByTestId("event-posters-file"), [png("a.png"), png("b.png")]);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(["/uploads/a.png", "/uploads/b.png"]));
+  });
+
+  test("a video is refused rather than uploaded as artwork", async () => {
+    drawWithMocks();
+    const mp4 = new File([new Uint8Array(4)], "clip.mp4", { type: "video/mp4" });
+    fireEvent.drop(screen.getByTestId("event-posters-dropzone"), { dataTransfer: { files: [mp4] } });
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  test("a failure leaves its row on screen with the reason", async () => {
+    // The old control showed a count and nothing else, so a slow file, a retry and a
+    // failure were the same thing from outside.
+    post.mockReset();
+    post.mockRejectedValue({ response: { status: 400, data: { detail: "That file is not a readable image" } } });
+    drawWithMocks();
+    await userEvent.upload(screen.getByTestId("event-posters-file"), png("bad.png"));
+    const queue = await screen.findByTestId("event-posters-queue");
+    await waitFor(() => expect(queue).toHaveTextContent(/not a readable image/i));
+    expect(queue).toHaveTextContent(/bad\.png/i);
+  });
+
+  test("a clean run clears its rows — the posters are the confirmation", async () => {
+    drawWithMocks();
+    await userEvent.upload(screen.getByTestId("event-posters-file"), png());
+    await waitFor(() => expect(screen.queryByTestId("event-posters-queue")).toBeNull());
   });
 });

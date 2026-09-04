@@ -2,7 +2,19 @@ import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
-import { runPipeline } from "../lib/uploadPipeline";
+import { runPipeline, STAGE } from "../lib/uploadPipeline";
+
+/** What a file in flight is doing, in the album manager's words — the two lists sit in
+ *  the same admin and should not describe the same pipeline differently. */
+function stageLabel(q) {
+  if (q.stage === STAGE.DONE) return "✓";
+  if (q.stage === STAGE.FAILED) return q.error || "failed";
+  const suffix = q.attempt > 1 ? ` ${q.attempt}/3` : "";
+  if (q.stage === STAGE.PROCESSING) return `resizing${suffix}`;
+  if (q.stage === STAGE.WAITING) return `retrying${suffix}`;
+  if (q.stage === STAGE.UPLOADING) return `uploading${suffix}`;
+  return "queued";
+}
 
 /**
  * An event's poster collection, and which piece of it is the main artwork.
@@ -25,6 +37,8 @@ export default function PosterField({
   const inputRef = useRef(null);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(0);   // how many files are still in flight
+  const [over, setOver] = useState(false);
+  const [queue, setQueue] = useState([]);
   const posters = Array.isArray(value) ? value : [];
 
   const send = useCallback(async (file) => {
@@ -47,14 +61,49 @@ export default function PosterField({
     const picked = [...files].filter((f) => f.type.startsWith("image/"));
     if (picked.length !== files.length) toast.error("Posters are images — video belongs in an album");
     if (!picked.length) return;
+
     setBusy(picked.length);
-    const results = await runPipeline(picked, { send });
+    /* A row per file, updated as the pipeline moves it along. The button used to say
+       "Uploading 3…" and nothing else, so a slow file, a retry and a failure all looked
+       identical from outside — and a poster that never arrived looked like a control that
+       had done nothing. The album manager has answered this since it was written; this is
+       the same answer. */
+    setQueue(picked.map((file, i) => ({
+      key: `${Date.now()}-${i}`, name: file.name, stage: STAGE.QUEUED, attempt: 1,
+    })));
+    const mark = (i, patch) =>
+      setQueue((q) => q.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
+
+    const results = await runPipeline(picked, {
+      send,
+      onUpdate: (i, stage, meta) => mark(i, {
+        stage,
+        attempt: meta?.attempt ?? 1,
+        error: stage === STAGE.FAILED ? meta?.message : undefined,
+      }),
+    });
     setBusy(0);
+
     const ok = results.filter((r) => r?.ok).map((r) => r.data.url);
     const failed = results.length - ok.length;
     append(ok);
     if (ok.length) toast.success(`${ok.length} poster${ok.length === 1 ? "" : "s"} added`);
     if (failed) toast.error(`${failed} failed to upload`);
+    // The rows stay while anything failed, so the reason can be read. A clean run clears
+    // itself — the posters themselves are the confirmation.
+    if (!failed) setQueue([]);
+  };
+
+  /* Dropping files on it, which is the half that was missing.
+   *
+   * The album manager takes a drop, so an editor who has added photographs once expects
+   * this to as well — and a drop onto a page with no handler is swallowed by the browser,
+   * which is indistinguishable from a control that does not work. */
+  const onDrop = (e) => {
+    e.preventDefault();
+    setOver(false);
+    const files = [...(e.dataTransfer?.files || [])];
+    if (files.length) upload(files);
   };
 
   const addByUrl = () => {
@@ -86,26 +135,66 @@ export default function PosterField({
     <div data-testid={testId}>
       <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">{label}</div>
 
-      <div className="flex flex-wrap gap-2">
-        <input placeholder="Paste an image URL, or upload →"
-               value={url}
-               onChange={(e) => setUrl(e.target.value)}
-               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addByUrl(); } }}
-               className="input-x flex-1 min-w-[12rem]" data-testid={`${testId}-url`} />
-        {url.trim() && (
-          <button type="button" onClick={addByUrl}
-                  className="btn-primary shrink-0" data-testid={`${testId}-add-url`}>Add</button>
-        )}
-        <button type="button" onClick={() => inputRef.current?.click()} disabled={busy > 0}
-                className="btn-primary shrink-0 disabled:opacity-40" data-testid={`${testId}-upload`}>
-          {busy > 0 ? `Uploading ${busy}…` : "Upload"}
-        </button>
+      {/* The album manager's dropzone, in the event dialog. Same shape, same words, same
+          pipeline — an editor who has filled a gallery already knows how this works, and
+          the previous control (a lone "Upload" button beside a URL box) took no drop at
+          all, so the gesture they had learned did nothing here. */}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+        onDragLeave={() => setOver(false)}
+        onDrop={onDrop}
+        onClick={() => inputRef.current?.click()}
+        data-testid={`${testId}-dropzone`}
+        className={`border border-dashed p-6 text-center cursor-pointer transition-colors ${
+          over ? "border-brand bg-ink/[0.04]" : "border-ink/25 hover:border-ink/50"
+        }`}
+      >
+        <div className="font-mono-x text-xs uppercase tracking-[0.2em] text-ink-2">
+          {busy > 0 ? `Uploading ${busy}…` : "Drop posters here, or click to choose"}
+        </div>
+        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-1">
+          JPEG, PNG, WebP, GIF · resized here before sending · first one becomes the main artwork
+        </div>
         {/* Several at once: artwork arrives as a set — a poster, a square crop for the
             socials, the flyer back — and one-at-a-time is the same job done four times. */}
         <input ref={inputRef} type="file" accept="image/*" multiple className="hidden"
                data-testid={`${testId}-file`}
                onChange={(e) => { const f = e.target.files; e.target.value = ""; if (f?.length) upload(f); }} />
       </div>
+
+      {/* Outside the dropzone, or clicking the field would open the file picker — the
+          same reason the album manager keeps its URL box below rather than inside. */}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <input placeholder="…or paste an image URL"
+               value={url}
+               onChange={(e) => setUrl(e.target.value)}
+               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addByUrl(); } }}
+               className="input-x flex-1 min-w-[12rem] !text-xs" data-testid={`${testId}-url`} />
+        {url.trim() && (
+          <button type="button" onClick={addByUrl}
+                  className="btn-primary shrink-0" data-testid={`${testId}-add-url`}>Add</button>
+        )}
+      </div>
+
+      {queue.length > 0 && (
+        <div className="mt-3 border border-ink/10" data-testid={`${testId}-queue`}>
+          <div className="divide-y divide-ink/10">
+            {queue.map((q) => (
+              <div key={q.key}
+                   className="flex items-center justify-between gap-3 px-3 py-1.5 font-mono-x text-[10px] uppercase tracking-[0.15em]">
+                <span className="truncate text-ink-3">{q.name}</span>
+                <span className={
+                  q.stage === STAGE.DONE ? "text-ok shrink-0"
+                  : q.stage === STAGE.FAILED ? "text-brand shrink-0"
+                  : "text-ink-4 shrink-0"
+                } data-testid={`${testId}-stage-${q.key}`}>
+                  {stageLabel(q)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {posters.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-3" data-testid={`${testId}-strip`}>
