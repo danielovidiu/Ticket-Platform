@@ -162,13 +162,14 @@ export default function EventDetail() {
   const paused = !special && state === "paused";
   const unitPrice = special ? special.price_ron : (selectedWave?.price_ron || 0);
   const total = useMemo(() => unitPrice * qty, [unitPrice, qty]);
-  /* Built from the SELECTED TIER's cap, not the event's. The two parted company when the
-     limit moved onto the tier, and a dropdown still counting to the event's number would
-     offer six on a tier the server caps at one — an offer that survives exactly as far as
-     the checkout that refuses it. */
+  /* The SELECTED TIER's cap, not the event's. The two parted company when the limit moved
+     onto the tier, and a dropdown still counting to the event's number would offer six on
+     a tier the server caps at one — an offer that survives exactly as far as the checkout
+     that refuses it. The number is the server's own, so the two cannot disagree. */
+  const ticketCap = useMemo(() => tierTicketCap(selectedWave), [selectedWave]);
   const qtyOptions = useMemo(
-    () => packOptions(tierTicketCap(event, selectedWave), packSize),
-    [event, selectedWave, packSize]
+    () => packOptions(ticketCap, packSize),
+    [ticketCap, packSize]
   );
 
   /* The count resets whenever the pack size under it changes: three of one tier is not
@@ -365,8 +366,9 @@ export default function EventDetail() {
                   Tickets are held for 10 minutes while you pay via Stripe. All sales final unless the event is cancelled.
                   {/* The selected tier's limit, for the same reason the dropdown counts to
                       it: this sentence is read as a promise, and a promise made in the
-                      event's number is broken by a tier that sets its own. */}
-                  Max {tierTicketCap(event, selectedWave)} tickets per person.
+                      event's number is broken by a tier that sets its own. Dropped rather
+                      than guessed when there is no tier to state a limit for. */}
+                  {ticketCap ? ` Max ${ticketCap} tickets per person.` : ""}
                 </p>
               </>
             )}

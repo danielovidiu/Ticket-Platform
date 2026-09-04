@@ -2499,6 +2499,15 @@ async def get_event(slug: str):
         # tier on the page and out of the checkout at the same time.
         w["is_active"] = status == "active" and w["starts_at"] <= now_iso <= w["ends_at"]
         w["available"] = max(0, w.get("available", w.get("capacity", 0)))
+        # The ANSWER to the inheritance, not the override that asks the question. The
+        # buyer's quantity dropdown is built from this and the checkout is refused against
+        # wave_ticket_cap, so the two have to be the same number; sending it resolved is
+        # what stops the browser from owning a second copy of the rule that decides it.
+        #
+        # `max_tickets_per_user` stays untouched beside it, still null where a tier
+        # inherits. The admin form reads that one, and a resolved value there would freeze
+        # today's event cap onto every tier that was happily following it.
+        w["ticket_cap"] = wave_ticket_cap(e, w)
         active_waves.append(w)
     e["waves"] = active_waves
     # Albums the event carries, in album order, each with its own title and items —

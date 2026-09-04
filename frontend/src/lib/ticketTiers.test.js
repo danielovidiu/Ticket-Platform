@@ -10,25 +10,30 @@ import {
 } from "./ticketTiers";
 
 describe("tierTicketCap", () => {
-  test("a tier's own cap wins over the event's", () => {
-    expect(tierTicketCap({ max_tickets_per_user: 6 }, { max_tickets_per_user: 1 })).toBe(1);
+  // A read of what the server resolved, not a second copy of the inheritance rule —
+  // wave_ticket_cap in server.py owns that, and /events/{slug} sends the answer.
+  test("reads the cap the server resolved for the tier", () => {
+    expect(tierTicketCap({ ticket_cap: 1 })).toBe(1);
+    expect(tierTicketCap({ ticket_cap: 6 })).toBe(6);
   });
 
-  test("a tier with no cap of its own inherits the event's", () => {
-    expect(tierTicketCap({ max_tickets_per_user: 6 }, { max_tickets_per_user: null })).toBe(6);
+  test("the tier's raw override is not consulted", () => {
+    // Deliberately contradictory: if this returned 6 the browser would be re-deriving the
+    // rule instead of reading the answer, which is the drift this shape exists to prevent.
+    expect(tierTicketCap({ ticket_cap: 1, max_tickets_per_user: 6 })).toBe(1);
   });
 
-  test("so does a tier written before the field existed", () => {
-    expect(tierTicketCap({ max_tickets_per_user: 6 }, {})).toBe(6);
-    expect(tierTicketCap({ max_tickets_per_user: 6 }, null)).toBe(6);
+  test("no tier, or a payload without the field, yields no answer", () => {
+    expect(tierTicketCap(null)).toBeUndefined();
+    expect(tierTicketCap({})).toBeUndefined();
+    expect(tierTicketCap({ ticket_cap: 0 })).toBeUndefined();
   });
 
-  test("the quantity dropdown follows the tier, not the event", () => {
+  test("the quantity dropdown counts to the tier's cap", () => {
     // The bug this exists to prevent: six offered on a tier the server caps at one, which
     // the buyer discovers only when the checkout refuses them.
-    const event = { max_tickets_per_user: 6 };
-    expect(packOptions(tierTicketCap(event, { max_tickets_per_user: 1 }), 1)).toEqual([1]);
-    expect(packOptions(tierTicketCap(event, { max_tickets_per_user: null }), 1)).toEqual([1, 2, 3, 4]);
+    expect(packOptions(tierTicketCap({ ticket_cap: 1 }), 1)).toEqual([1]);
+    expect(packOptions(tierTicketCap({ ticket_cap: 6 }), 1)).toEqual([1, 2, 3, 4]);
   });
 });
 

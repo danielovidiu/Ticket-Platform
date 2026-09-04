@@ -32,18 +32,20 @@ export function perTicketPrice(wave) {
  * event, and the honest place to say so is the server's refusal, not an empty dropdown
  * the buyer cannot act on.
  */
-/** How many tickets one person may hold FROM THIS TIER.
+/** How many tickets one person may hold FROM THIS TIER — as resolved by the server.
  *
- * Mirrors wave_ticket_cap in server.py, and has to: this is the number the quantity
- * dropdown is built from, and a dropdown offering six on a tier the server caps at one
- * is an offer the buyer can only discover is false at checkout.
+ * A read, not a rule. wave_ticket_cap in server.py owns the tier-then-event inheritance
+ * and /events/{slug} ships the answer as `ticket_cap`, so nothing here re-derives it and
+ * there is no second copy to drift from the number the checkout is refused against.
  *
- * The tier's own number when it sets one, the event's otherwise. Null is "no opinion",
- * not zero, which is what every tier written before the field existed carries.
+ * Undefined when there is no tier in hand — an event carrying none, or a payload from
+ * before the field was sent. Callers decide what that means rather than being handed a
+ * guess dressed up as an answer; packOptions falls back to its own documented default,
+ * and the copy that states the limit omits the sentence instead of inventing a number.
  */
-export function tierTicketCap(event, wave) {
-  const own = wave?.max_tickets_per_user;
-  return own == null ? event?.max_tickets_per_user : own;
+export function tierTicketCap(wave) {
+  const cap = Number(wave?.ticket_cap);
+  return Number.isFinite(cap) && cap > 0 ? cap : undefined;
 }
 
 /** The words shown when the WHOLE event is sold out.

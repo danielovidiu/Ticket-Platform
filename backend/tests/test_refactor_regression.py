@@ -222,6 +222,51 @@ def test_tier_caps_are_counted_separately(admin_headers):
     requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
 
 
+def test_public_event_ships_the_resolved_tier_cap(admin_headers):
+    """/events/{slug} sends the ANSWER as ticket_cap, and the override untouched beside it.
+
+    The buyer's quantity dropdown is built from ticket_cap and the checkout is refused
+    against wave_ticket_cap, so if this stops being the resolved number the UI starts
+    making offers the server rejects. The raw max_tickets_per_user has to survive
+    alongside it because the admin form reads that one to tell "inherits" from "1".
+    """
+    now = datetime.now(timezone.utc)
+    wave = lambda name, cap: {
+        "name": name, "price_ron": 10.0, "capacity": 20,
+        "starts_at": now.isoformat(),
+        "ends_at": (now + timedelta(days=4)).isoformat(),
+        "tier": "general", "max_tickets_per_user": cap,
+    }
+    slug = f"tiercapwire-{uuid.uuid4().hex[:6]}"
+    payload = {
+        "title": "TEST_TIER_CAP_WIRE", "slug": slug,
+        "description": "d", "venue": "V",
+        "starts_at": (now + timedelta(days=5)).isoformat(),
+        "ends_at": (now + timedelta(days=5, hours=3)).isoformat(),
+        "doors_open_at": (now + timedelta(days=5) - timedelta(hours=1)).isoformat(),
+        "image_url": "", "artist_ids": [],
+        "max_tickets_per_user": 6, "is_published": True,
+        "waves": [wave("OWN", 1), wave("INHERITS", None)],
+    }
+    r = requests.post(f"{API}/admin/events", json=payload, headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    ev = r.json()
+
+    pub = requests.get(f"{API}/events/{slug}", timeout=15)
+    assert pub.status_code == 200, pub.text
+    own, inherits = pub.json()["waves"]
+
+    # The tier that names a cap is sent its own; the one that does not is sent the
+    # event's, already resolved, so the browser never has to know there was a rule.
+    assert own["ticket_cap"] == 1
+    assert inherits["ticket_cap"] == 6
+    # ...and the override is still the override.
+    assert own["max_tickets_per_user"] == 1
+    assert inherits["max_tickets_per_user"] is None
+
+    requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
+
+
 def test_tier_without_cap_inherits_event_cap(admin_headers):
     """A wave that names no cap is governed by the event's, as it always was."""
     now = datetime.now(timezone.utc)
