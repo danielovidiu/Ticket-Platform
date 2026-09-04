@@ -13,8 +13,9 @@ depends on the visitor's window.
 - [The width system](#the-width-system) — the one thing that explains most blocks
 - [Hero](#hero) · [Background (page)](#background-page) · [Image band](#image-band)
 - [Text panel](#text-panel-scrolling) · [Rich text](#rich-text) · [Image](#image) · [Split](#split-image--text)
+- [Split (image, text & audio)](#split-image-text--audio) — the one with the clip player
 - [Events grid](#events-grid) · [Artists grid](#artists-grid) · [Gallery grid](#gallery-grid)
-- [Video / audio](#video--audio-embed) · [Marquee](#marquee) · [CTA banner](#cta-banner)
+- [Video / audio](#video--audio-embed) · [Marquee](#marquee)
 - [Contact form](#contact-form) · [Newsletter](#newsletter) · [Custom HTML](#custom-html) · [Spacer](#spacer)
 - [Pages, slugs, roles](#pages-slugs-and-roles) · [Theme and fonts](#theme-and-fonts)
 - [Upload limits](#upload-limits) — how large a file may be, and why it varies
@@ -96,6 +97,7 @@ the words look too narrow, the control you want is the heading size, not full fr
 | Heading | multi-line text | — | — |
 | Body | multi-line text | markdown-ish | — |
 | Background image | upload | — | — |
+| Mobile view | select | `left` · `center` · `right` | `center` |
 | Full frame (edge to edge) | toggle | — | **on** |
 | Overlay | select | `gradient` · `solid` · `none` | `gradient` |
 | Overlay colour | colour | — | `#050505` |
@@ -117,6 +119,9 @@ anything published before the slider sits exactly where it did.
 **Overlay** has three modes. `gradient` is the original treatment (a theme-wide image
 fade plus a bottom gradient) and is what a hero with no overlay setting uses. `solid`
 gives you the colour and opacity controls. `none` shows the photograph untouched.
+
+**Mobile view** picks which part of the photograph survives the crop on a phone — see
+[Framing a photo for phones](#framing-a-photo-for-phones).
 
 ---
 
@@ -173,11 +178,28 @@ CSS fixed background, so it works on phones and — importantly — it is **neve
 it drifts only as far as its own spare height allows, and a photo with no spare height
 sits still rather than being enlarged to create some.
 
+**Mobile view** is hidden while Fixed background is on — that photo is drawn at the band's
+full width with its height left free, so there is no side crop for it to choose from.
+
+### Framing a photo for phones
+
+A background photo fills its block and the overflow is thrown away. On a wide screen that
+costs the top and bottom, which is usually nothing. On a 375 px phone it costs most of the
+**width** — a landscape photo can lose two thirds of itself — and by default the kept
+third is the middle. A subject standing at the edge of the frame is simply cropped out.
+
+**Mobile view** says which part to keep: `left`, `center` or `right`.
+
+It applies **only below 768 px**. Nothing about the desktop rendering changes, whatever
+the setting says, so it is safe to set on a page that is already published. Available on
+**Hero** and **Image band**.
+
 ### Controls
 
 | Control | Type | Options | Default |
 |---|---|---|---|
 | Background image | upload | — | — |
+| Mobile view | select | `left` · `center` · `right` | `center` |
 | Fixed background | toggle | — | off |
 | Overlay colour / opacity | colour, slider 0–100 | — | `#050505`, 50 % |
 | Eyebrow · Heading · Body | text, multi-line, multi-line | — | — |
@@ -248,10 +270,116 @@ Two columns at 768 px and above; stacked below it.
 |---|---|---|---|
 | Direction | select | `image-left` · `image-right` | `image-left` |
 | Image | upload | — | — |
-| Image aspect | select | `1:1` · `4:3` · `3:4` · `16:9` · `16:10` · `3:2` | `1:1` |
-| Eyebrow · Heading · Body | text, text, multi-line | — | — |
+| Image aspect | select | **`natural`** · `1:1` · `4:3` · `3:4` · `16:9` · `16:10` · `3:2` | `natural` |
+| Gap between the columns | slider | **0 – 80 px** | 40 px |
+| Hairline around the photo | toggle | — | **on** |
+| Eyebrow · Heading · Body | text, multi-line, multi-line | — | — |
+| Heading size — desktop | slider | 16 – 240 px | **48 px** |
+| Heading size — mobile | slider | 16 – 120 px | **30 px** |
+| Text case | select | `as-typed` · `uppercase` | `uppercase` |
+| Text align (horizontal) | select | `left` · `center` · `right` | `left` |
+| Text position (vertical) | select | `top` · `middle` · `bottom` | `middle` |
 | CTA label / link | text | — | — |
 | Full width | toggle | — | off |
+
+**`natural` aspect** lets the photograph keep its own proportions and makes the block as
+tall as the picture, instead of cropping every image to one shape. The text column
+stretches to match. Named ratios still crop, and a block published before this carries its
+own saved ratio, so nothing on a live page moved.
+
+**Heading size** defaults to 48/30 px — the size these headings have always rendered at.
+It is deliberately *not* the hero's 72/48, so adding the control changed nothing.
+
+**Text position** needs the column to have height to work within, which `natural` gives
+it. Top-aligned text takes a small gutter so it does not sit level with the very top of
+the photograph.
+
+### Making a chessboard
+
+Two of these stacked with **opposite directions** tile like a chessboard — but only if the
+photographs actually reach the column boundary. Two things are in the way by default, and
+both are now controls:
+
+1. **Gap** → `0`. At 40 px there is a permanent band down the middle.
+2. **Hairline** → off. A 1 px border on each photo leaves a 2 px seam where tiles meet.
+
+With both set, the corners meet exactly. Blocks are flush vertically already, so no Spacer
+between them.
+
+Closing the gap does **not** push the words onto the picture: the text column takes back
+as padding whatever the gap gives up, on the side facing the photograph only. Tiles touch,
+words keep their distance.
+
+---
+
+## Split (image, text & audio)
+
+Split's layout with the far column cut in two: **words above, a clip player below**. For a
+release page — a sleeve on one side, the track snippets on the other.
+
+| Control | Type | Options | Default |
+|---|---|---|---|
+| Direction | select | `image-left` · `image-right` | `image-left` |
+| Image width (share of the block) | slider | **20 – 80 %** | 50 % |
+| Photo and text meet in the middle | toggle | — | **on** |
+| Image | upload | — | — |
+| Max height | slider | 200 – 1400 px | 640 px |
+| Gap between the columns | slider | 0 – 80 px | 40 px |
+| Eyebrow · Heading · Body | text, multi-line, multi-line | — | — |
+| Heading size — desktop / mobile | slider | 16 – 240 / 16 – 120 px | 48 / 32 px |
+| Text case | select | `as-typed` · `uppercase` | `as-typed` |
+| Text align (horizontal) | select | `left` · `center` · `right` | `left` |
+| Text position (vertical) | select | `top` · `middle` · `bottom` | `middle` |
+| Primary CTA label / link / style | text, text, select (`outline` · `accent`) | — | `outline` |
+| Secondary CTA label / link | text | — | — |
+| Audio tracks | list | name + file per row | — |
+| Full width | toggle | — | off |
+
+### Dimensions
+
+The block is **as tall as the photograph**, which keeps its own proportions up to **Max
+height**. Past that it crops rather than squashes. The text-and-player column stretches to
+match, the words taking whatever space is left above the player.
+
+**Image width** and **meet in the middle** work together:
+
+- **Toggle on** (default) — each side takes half the block and the ratio decides how much
+  of its own half the photo fills. The join between picture and words stays on the centre
+  line at *every* ratio; the narrower side gives its spare width to the outer edge.
+- **Toggle off** — the ratio sizes the columns themselves, so at 70 % the join sits 70 %
+  of the way across.
+
+At 50 % the two are identical: an even split, joined in the middle.
+
+The photograph carries **no hairline** in this block.
+
+### The player
+
+One player, one clip at a time. Two of these blocks on a page will not sound over each
+other — starting one stops the other.
+
+**Transport:** previous · play/pause · next · elapsed · seek rail · duration · mute ·
+volume. The rail can be dragged, clicked anywhere along its length, or driven from the
+keyboard.
+
+**Track list:** numbered rows, each with its name and length. Press a row to play it;
+press it again to pause. When a clip ends the next one starts, and the list stops at the
+end rather than looping.
+
+> **Ninety seconds is the ceiling.** These are snippets. A longer file uploads and plays,
+> but stops at 1:30 and hands to the next track — and the rail will not seek past that
+> point, because that is where playback ends. A row shows what will *play*, so a
+> five-minute file lists as `1:30`.
+
+**Lengths are measured once, in the CMS**, when you choose the clip — not fetched from the
+visitor's browser. A list of six tracks costs a visitor no extra requests, and only a clip
+someone actually presses is ever downloaded. A track added by pasting a URL rather than
+uploading shows no length until it is played.
+
+The panel shows each clip's measured length and flags anything over the cap, so you see it
+where the clip is chosen rather than by listening to it stop.
+
+**Audio formats:** MP3, WAV, OGG, M4A. See [Upload limits](#upload-limits).
 
 ---
 
@@ -363,15 +491,14 @@ content. Bleeds edge to edge by default; switch full width off to cap it at 1400
 
 ---
 
-## CTA banner
+## CTA banner — removed
 
-| Control | Type | Options | Default |
-|---|---|---|---|
-| Image | upload | — | — |
-| Eyebrow · Title · Description | text, multi-line, multi-line | — | — |
-| Button label / link / style | text, text, select (`outline` · `accent`) | — | `outline` |
-| Text case | select | `as-typed` · `uppercase` | `uppercase` |
-| Full width | toggle | — | off |
+It is no longer in the palette. **Split** and **Image band** both do what it did and carry
+controls it never had: alignment, heading size, a photograph that keeps its own shape.
+
+A page still holding one shows a visitor **nothing** — the block is skipped rather than
+printing an error into the page. Open that page in the editor and you will see a dashed
+placeholder naming the retired block, which is your cue to delete it.
 
 ---
 
@@ -522,6 +649,25 @@ to the third row automatically and tells you the smaller number before you pick 
 Images are unaffected in practice — the editor compresses them before upload, and a
 processed image lands well under any of these ceilings.
 
+### What may be uploaded
+
+| Kind | Accepted | Where |
+|---|---|---|
+| Image | JPEG · PNG · WebP · GIF | any image field |
+| Video | MP4 · WebM · MOV | Video block |
+| Audio | **MP3 · WAV · OGG · M4A** | Split (image, text & audio) |
+
+A file is checked against what it *claims* to be, not against its name: markup renamed
+`.mp3` is refused, and so is a WAV announced as an MP3. A format outside the list is
+refused **before anything is sent**, with the accepted ones named — so a `.flac` fails
+instantly rather than after a long upload.
+
+An audio clip is stored exactly as uploaded. Images are re-encoded (which is what strips
+their EXIF); audio and video are not, because there is no transcoder on the server.
+
+For clip length, the ninety-second rule belongs to the player, not the upload — see
+[Split (image, text & audio)](#split-image-text--audio).
+
 ### If an upload is refused
 
 The message names both numbers: the size of your file and the limit. That check happens in
@@ -600,13 +746,12 @@ unfinished, which is why there is one control rather than one per block.
 0 is allowed, and puts text back against the glass. The cap of 64 px exists because past
 it a phone has no column left to read in.
 
-### The three exceptions, and why
+### The exceptions, and why
 
 | Block | What moves in |
 |---|---|
 | **Gallery**, **Events** | The heading only. The photographs and posters keep the corner — they are the block. |
-| **Split** | The text column only. The image keeps its own edge. |
-| **CTA banner** | Everything, image included. On a phone its two columns stack, so the text lands under the image; insetting only the text would leave the picture hanging past it and make the stack look like a mistake. |
+| **Split**, **Split (image, text & audio)** | The text column only — and, in the audio one, the player with it, so the two share an edge. The image keeps its own edge in both. |
 
 **Custom HTML** is left alone entirely, so you can still build something deliberately
 edge-to-edge there.
