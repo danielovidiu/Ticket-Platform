@@ -1436,8 +1436,13 @@ function Artists() {
 
 function ArtistForm({ form, setForm, onSave, onClose, disciplines, albums }) {
   const bioRef = useRef(null);
-  const setF = (k, v) => setForm({ ...form, [k]: v });
-  const setLink = (k, v) => setForm({ ...form, links: { ...(form.links || {}), [k]: v } });
+  /* Functional, like setList below and like the event form's setF. Neither of these is
+     called twice in one handler today, so nothing here is visibly broken — but that is a
+     fact about the current callers rather than about the helper, and the version that
+     reads a captured `form` is the one that silently dropped a just-uploaded poster on the
+     event side. Cheaper to not leave the trap set. */
+  const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const setLink = (k, v) => setForm((f) => ({ ...f, links: { ...(f.links || {}), [k]: v } }));
   // MultiSelect hands `onChange` a functional updater (see its comment about two ticks
   // in one render) — except "Clear selection", which passes a bare []. Accept both, or
   // clearing stores a function as the value.
