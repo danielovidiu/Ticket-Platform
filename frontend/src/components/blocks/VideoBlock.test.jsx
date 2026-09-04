@@ -98,7 +98,7 @@ describe("the container's shape", () => {
 
 describe("the mobile cut", () => {
   test("is used below the breakpoint when there is one", () => {
-    const c = draw({ file_url: "/wide.mp4", file_url_mobile: "/tall.mp4" });
+    draw({ file_url: "/wide.mp4", file_url_mobile: "/tall.mp4" });
     expect(screen.getByTestId("video-file").getAttribute("src")).toContain("/wide.mp4");
     setMobile(true);
     expect(screen.getByTestId("video-file").getAttribute("src")).toContain("/tall.mp4");

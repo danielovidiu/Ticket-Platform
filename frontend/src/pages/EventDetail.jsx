@@ -13,8 +13,8 @@ import BackLink from "../components/BackLink";
 import { ASPECTS } from "../components/blocks";
 import { Lightbox } from "../components/ui/lightbox";
 import { getConsent } from "../components/CookieConsent";
+import { longDate as fmtDate } from "../lib/dates";
 
-const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" }).toUpperCase();
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
 /**
@@ -189,11 +189,11 @@ export default function EventDetail() {
 
   const reserve = async () => {
     if (!user) {
-      // NON-SENSITIVE: this stores the current URL path (not an auth token or PII)
-      // so we can return the user to the same event page after Google OAuth.
-      // Auth tokens themselves live in an httpOnly cookie set by the backend.
-      localStorage.setItem("auth_return_to", window.location.pathname + window.location.search);
-      startLogin(window.location.pathname);
+      // The return path travels in the query string that startLogin builds, and Login
+      // reads it back through safeReturn(). This used to ALSO write it to
+      // localStorage under "auth_return_to" — a key nothing in the app, the backend or
+      // the OAuth callback has ever read.
+      startLogin(window.location.pathname + window.location.search);
       return;
     }
     if (!waveId) { toast.error("Pick a wave"); return; }

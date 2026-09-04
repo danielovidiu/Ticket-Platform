@@ -3,11 +3,7 @@ import { Link } from "react-router-dom";
 import { http } from "../api";
 import { useCorePageHeader } from "../lib/corePageHeader";
 import PageHeader from "../components/PageHeader";
-
-const fmtDate = (iso) => {
-  if (!iso) return "";
-  return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
-};
+import { shortDate as fmtDate } from "../lib/dates";
 
 const TAB_LABELS = { all: "All", upcoming: "Upcoming", past: "Past" };
 

@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
-import { QRCodeCanvas } from "qrcode.react";
 import DOMPurify from "dompurify";
 import { resolveEmbed, withPlayback, AUDIO_PROVIDERS } from "../../lib/embeds";
 import { http } from "../../api";
 import { toast } from "sonner";
 import { renderRich } from "../../lib/richText";
 import { mediaUrl } from "../../lib/media";
+import { shortDate as fmtDate } from "../../lib/dates";
 import { Lightbox } from "../ui/lightbox";
 import { Camera, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 
-const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 
 /** Tailwind-safe aspect utility from a friendly ratio label. Exported because an event
  * carries its own format now, and the event page needs the same map the blocks use — two
@@ -1690,5 +1689,3 @@ export function BlockRenderer({ block, preview = false }) {
   return <R props={block.props || {}} preview={preview} />;
 }
 
-// Silence linter about unused imports on QR (kept for future custom blocks).
-export const _QR = QRCodeCanvas;
