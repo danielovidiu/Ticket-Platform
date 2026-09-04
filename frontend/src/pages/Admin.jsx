@@ -10,6 +10,7 @@ import { FormatToolbar } from "../lib/richText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 import AlbumManager from "../components/AlbumManager";
 import ImageField from "../components/ImageField";
+import PosterField from "../components/PosterField";
 import { ShopProducts, ShopOrders, ShopSettings } from "../components/ShopAdmin";
 import { eventStatus, STATUS_CLASS, TICKET_FILTERS, TICKET_STATUS_CLASS } from "../lib/ticketStatus";
 
@@ -250,6 +251,22 @@ function Stats() {
 // the map renders as no aspect class at all, which collapses the image to nothing.
 const EVENT_IMAGE_ASPECTS = ["1:1", "4:3", "3:4", "16:9", "21:9", "3:2", "16:10"];
 
+/** An event as the form wants it, which is very nearly as the server sends it.
+ *
+ * The one difference is the poster collection. Every event saved before `images` existed
+ * carries a lone `image_url`, and opening one of those in the editor has to show that
+ * picture in the strip — otherwise its artwork looks unset, and the first save from a form
+ * that never displayed it would write an empty collection over a real one.
+ *
+ * Reading it forward here rather than migrating the database keeps the rule in one place
+ * and leaves stored events alone until someone actually edits them.
+ */
+function editableEvent(e) {
+  const images = Array.isArray(e.images) ? e.images : [];
+  const main = (e.image_url || "").trim();
+  return { ...e, images: images.length || !main ? images : [main] };
+}
+
 // Small labelled wrapper so every field in the tier card says what it is.
 function Field({ label, className = "", children }) {
   return (
@@ -266,7 +283,7 @@ function Events() {
   const [notice, setNotice] = useState(null);   // { event, kind } while composing
   const load = () => http.get("/admin/events").then((r) => setEvents(r.data));
   useEffect(() => { load(); }, []);
-  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", image_aspect: "4:3", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ tier_id: 1, name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: "", access_until: "", access_from: "", status: "active", pack_size: 1, max_tickets_per_user: null, sold_out_message: "" }] });
+  const emptyForm = () => ({ title: "", slug: "", description: "", venue: "", city: "", starts_at: "", ends_at: "", doors_open_at: "", image_url: "", images: [], image_aspect: "4:3", artist_ids: [], max_tickets_per_user: 4, is_published: true, sold_out_message: "", waves: [{ tier_id: 1, name: "GENERAL", price_ron: 100, capacity: 100, starts_at: new Date().toISOString(), ends_at: "", access_until: "", access_from: "", status: "active", pack_size: 1, max_tickets_per_user: null, sold_out_message: "" }] });
   const save = async () => {
     try {
       if (form.event_id) {
@@ -312,7 +329,7 @@ function Events() {
                 {e.event_code && <span className="text-ink-3" title="Code used in ticket serials">{e.event_code}</span>}
               </div>
               <div className="flex flex-wrap gap-2 mt-3">
-                <button onClick={() => setForm(e)} className="btn-primary text-xs">Edit</button>
+                <button onClick={() => setForm(editableEvent(e))} className="btn-primary text-xs">Edit</button>
                 <button onClick={() => setNotice({ event: e, kind: "venue" })} data-testid={`notify-btn-${e.event_id}`} className="btn-primary text-xs">Notify</button>
                 <button onClick={() => cancel(e)} className="btn-primary text-xs">Cancel</button>
                 <button onClick={() => del(e.event_id)} className="btn-primary text-xs">Del</button>
@@ -577,21 +594,29 @@ export function TierCard({ wave: w, index: i, onField, onFields, onTouchEndsAt, 
           thing editors actually wanted to change.
 
           Widths are set per field rather than by an even split: a tier id is two digits
-          and a tier name is a name. Wraps rather than crushes on a narrow dialog. */}
+          and a tier name is a name. Wraps rather than crushes on a narrow dialog.
+
+          Every control here carries the same padding AND the same text size, which is what
+          makes them one height. The state select used to be text-xs against the inputs'
+          full size, and that alone stood it a few pixels short of its neighbours — the
+          kind of difference nobody can name and everybody can see. */}
       <div className="flex flex-wrap items-end gap-3">
         <label className="shrink-0">
           <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Tier id</div>
+          {/* Sized to a running-order number — two or three digits — rather than to the
+              width a text field happens to default to. Centred, because a number in a box
+              four times its width reads as a field somebody forgot to fill in. */}
           <input type="number" min="1" step="1" value={w.tier_id ?? ""}
                  onChange={(e) => onField("tier_id", e.target.value === "" ? null : Number(e.target.value))}
                  data-testid={`wave-tier-id-${i}`}
-                 className="input-x w-16 font-mono-x" />
+                 className="input-x w-16 px-2 text-center font-mono-x" />
         </label>
         <label className="shrink-0">
           <div className="text-[10px] text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">State</div>
           <select value={status} onChange={(e) => onField("status", e.target.value)}
                   data-testid={`wave-status-${i}`}
                   title={TIER_STATES.find((s) => s.value === status)?.hint}
-                  className="input-x font-mono-x uppercase text-xs tracking-[0.15em]">
+                  className="input-x w-36 font-mono-x uppercase tracking-[0.15em]">
             {TIER_STATES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
         </label>
@@ -791,7 +816,7 @@ function EventForm({ form, setForm, onSave, onClose }) {
     <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4">
       {/* Column layout: the action bar stays pinned while only the body scrolls,
           so Save/Close are reachable from anywhere in a long event form. */}
-      <div className="border border-ink/20 bg-surface w-full max-w-3xl max-h-[90vh] flex flex-col">
+      <div className="border border-ink/20 bg-surface w-full max-w-[1080px] max-h-[90vh] flex flex-col">
         <div className="shrink-0 flex flex-wrap gap-3 justify-between items-center hairline-b px-6 py-4">
           <div className="font-display text-2xl uppercase font-bold">{form.event_id ? "Edit" : "New"} Event</div>
           <div className="flex gap-2">
@@ -805,37 +830,53 @@ function EventForm({ form, setForm, onSave, onClose }) {
             width is set by how much it needs, not by which cell of a rigid grid it
             happened to land in. Every row collapses to a single column on a phone. */}
         <div className="space-y-3">
-          {/* Who and where. Title and Venue get the room; a slug and a city are short. */}
+          {/* Who and where. Title and Venue get the room; a slug and a city are short.
+
+              Labelled, like every other field in this dialog. These four were the only
+              ones relying on a placeholder to say what they were, which is a label that
+              disappears exactly when the form stops being empty — so a half-filled event
+              showed four boxes of text and no way to tell a venue from a city. */}
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-            <input placeholder="Title" value={form.title} onChange={(e) => setF("title", e.target.value)} className="input-x sm:col-span-4" />
-            <input placeholder="Slug" value={form.slug} onChange={(e) => setF("slug", e.target.value)} className="input-x sm:col-span-2" />
-            <input placeholder="Venue" value={form.venue} onChange={(e) => setF("venue", e.target.value)} className="input-x sm:col-span-4" />
-            <input placeholder="City" value={form.city || ""} onChange={(e) => setF("city", e.target.value)} className="input-x sm:col-span-2" />
+            <Field label="Title" className="sm:col-span-4">
+              <input placeholder="Night of the Long Knives" value={form.title}
+                     onChange={(e) => setF("title", e.target.value)} className="input-x w-full" />
+            </Field>
+            <Field label="Slug" className="sm:col-span-2">
+              <input placeholder="long-knives" value={form.slug}
+                     onChange={(e) => setF("slug", e.target.value)} className="input-x w-full" />
+            </Field>
+            <Field label="Venue" className="sm:col-span-4">
+              <input placeholder="Control Club" value={form.venue}
+                     onChange={(e) => setF("venue", e.target.value)} className="input-x w-full" />
+            </Field>
+            <Field label="City" className="sm:col-span-2">
+              <input placeholder="Bucharest" value={form.city || ""}
+                     onChange={(e) => setF("city", e.target.value)} className="input-x w-full" />
+            </Field>
           </div>
           {/* The three times the event runs on, read together — doors relative to start,
               start relative to end. Image format rides the same line: it is one small
               choice, and giving it a row of its own said it mattered more than it does. */}
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Starts</div><DateTimePicker value={form.starts_at} onChange={setStartsAt} /></label>
-            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Ends</div><DateTimePicker value={form.ends_at} onChange={(v) => { touch("ends_at"); setF("ends_at", v); }} /></label>
-            <label className="min-w-0"><div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Doors</div><DateTimePicker value={form.doors_open_at} onChange={(v) => { touch("doors_open_at"); setF("doors_open_at", v); }} /></label>
+            <Field label="Starts"><DateTimePicker value={form.starts_at} onChange={setStartsAt} /></Field>
+            <Field label="Ends"><DateTimePicker value={form.ends_at} onChange={(v) => { touch("ends_at"); setF("ends_at", v); }} /></Field>
+            <Field label="Doors"><DateTimePicker value={form.doors_open_at} onChange={(v) => { touch("doors_open_at"); setF("doors_open_at", v); }} /></Field>
             {/* Chosen with the image rather than by each page that shows it, so one event
                 cannot be 4:3 on its own page and square in a grid. It was hardcoded to
                 4:3 on the event page and set per-block everywhere else. */}
-            <label className="min-w-0">
-              <div className="text-xs text-ink-4 mb-1 font-mono-x uppercase tracking-[0.2em]">Image format</div>
+            <Field label="Image format">
               <select value={form.image_aspect || "4:3"} onChange={(e) => setF("image_aspect", e.target.value)}
                       className="input-x w-full" data-testid="event-image-aspect">
                 {EVENT_IMAGE_ASPECTS.map((a) => <option key={a} value={a}>{a}</option>)}
               </select>
-            </label>
+            </Field>
           </div>
-          {/* Capped rather than stretched. A URL field and an Upload button do not get
-              wider in any useful way, and a full-bleed dropzone promised a drop target
-              the size of the dialog. */}
-          <div className="max-w-sm">
-            <ImageField label="Cover image" value={form.image_url} onChange={(v) => setF("image_url", v)} testId="event-image" />
-          </div>
+          {/* The artwork that sells the night, and which piece of it stands for the event
+              elsewhere. Not the albums at the bottom of this dialog: those are a record of
+              a night that happened, these are for one that has not. */}
+          <PosterField value={form.images} onChange={(v) => setF("images", v)}
+                       main={form.image_url} onMainChange={(v) => setF("image_url", v)}
+                       label="Posters" testId="event-posters" />
           {/* Said out loud as soon as the date is set, not held back until save — an
               editor who meant to type 2027 should find out while they are still looking
               at the field they mistyped. */}
@@ -845,10 +886,17 @@ function EventForm({ form, setForm, onSave, onClose }) {
               This event starts in the past — it will show as already finished.
             </div>
           )}
-          <div>
+          {/* Eight rows, and draggable from the corner. At three it was a slot to write a
+              paragraph into through a letterbox — and worse, a box that scrolls swallows
+              the wheel: a reader who put the cursor over the description and scrolled got
+              the description's own overflow, not the dialog they meant to move, which
+              reads as the page having seized. Copy that fits does not do that. */}
+          <Field label="Description">
             <FormatToolbar textareaRef={descRef} value={form.description} onChange={(v) => setF("description", v)} />
-            <textarea ref={descRef} placeholder="Description" value={form.description} onChange={(e) => setF("description", e.target.value)} className="input-x w-full" rows={3} />
-          </div>
+            <textarea ref={descRef} placeholder="Who is playing, what the night is, anything a buyer should know."
+                      value={form.description} onChange={(e) => setF("description", e.target.value)}
+                      className="input-x w-full resize-y" rows={8} />
+          </Field>
           <label className="flex gap-2 items-center"><input type="checkbox" checked={form.is_published} onChange={(e) => setF("is_published", e.target.checked)} /> <span className="text-sm">Published</span></label>
         </div>
         <div className="mt-8 hairline-b pb-3 flex items-baseline gap-3">

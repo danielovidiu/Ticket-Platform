@@ -74,21 +74,22 @@ export function DateTimePicker({ value, onChange, placeholder, mode = "datetime"
       <PopoverTrigger asChild>
         <button type="button" data-testid="datetime-trigger"
                 className="input-x w-full flex items-center justify-between gap-2 text-left min-w-0">
-          {/* Two lines rather than one truncated one: in a narrow column the single line
-              cut the time off, which is the half most often being checked.
-              Both lines are always rendered, even with nothing chosen. An empty field
-              used to draw one line and a filled one two, so Starts, Ends and Doors sat
-              side by side at different heights whenever one of them was blank — which
-              Doors usually is. */}
-          <span className={`min-w-0 ${date ? "" : "text-ink-4"}`}>
-            <span className="block truncate">{date ? format(date, "d MMM yyyy") : hint}</span>
-            {/* Only where there is a time to show. The second line exists to keep Starts,
-                Ends and Doors level with each other; a lone date field has nothing to
-                stay level with, and an empty "--:--" under it would promise a control
-                the popover does not offer. */}
-            {!dateOnly && (
-              <span className="block font-mono-x text-[10px] tracking-[0.2em] text-ink-3">
-                {date ? format(date, "HH:mm") : "--:--"}
+          {/* One line, date then time. It was two — the time set under the date — because
+              in a narrow column a single line truncated the time off the end, which is the
+              half most often being checked. The dialog is wide enough now that the pair
+              fits, and one line is what lets this sit level with every other control on
+              its row instead of standing a head taller than the plain inputs beside it.
+
+              Something is always rendered, empty or not, so an empty Doors is exactly as
+              tall as a filled Starts — that is the part the two-line version was really
+              defending, and it survives the change. */}
+          <span className={`min-w-0 truncate ${date ? "" : "text-ink-4"}`}>
+            {date ? format(date, "d MMM yyyy") : hint}
+            {/* Only where there is a time to show. A date-only field has no time to state,
+                and a "--:--" beside it would promise a control the popover does not offer. */}
+            {!dateOnly && date && (
+              <span className="font-mono-x text-[11px] tracking-[0.15em] text-ink-3 ml-2">
+                {format(date, "HH:mm")}
               </span>
             )}
           </span>

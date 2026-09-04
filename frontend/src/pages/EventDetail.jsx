@@ -5,9 +5,10 @@ import { ron } from "../lib/money";
 import { packSizeOf, packOptions, saleState, tierTicketCap, soldOutMessage } from "../lib/ticketTiers";
 import { useAuth, startLogin } from "../auth";
 import { toast } from "sonner";
-import { Play } from "lucide-react";
+import { Play, ChevronLeft, ChevronRight } from "lucide-react";
 import { renderRich } from "../lib/richText";
 import { mediaUrl } from "../lib/media";
+import { eventPosters } from "../lib/eventPosters";
 import BackLink from "../components/BackLink";
 import { ASPECTS } from "../components/blocks";
 import { Lightbox } from "../components/ui/lightbox";
@@ -130,6 +131,8 @@ export default function EventDetail() {
   // Which album is open in the lightbox and at which item — an event can carry several
   // albums now, so an index on its own no longer says what it is an index into.
   const [lb, setLb] = useState(null); // { album, index }
+  // Which poster the frame is showing. 0 is the main artwork.
+  const [posterIndex, setPosterIndex] = useState(0);
 
   const specialToken = search.get("invite") || null;
 
@@ -157,6 +160,14 @@ export default function EventDetail() {
     () => (special ? 1 : packSizeOf(selectedWave)),
     [special, selectedWave]
   );
+  /* The event's artwork, main piece first. An event saved before the collection existed
+     has one poster — its cover — so this is never empty where a picture used to show. */
+  const posters = useMemo(() => eventPosters(event), [event]);
+  /* Wraps in both directions: with three posters, Previous from the first should reach the
+     last rather than dead-end on a button that looks live. */
+  const stepPoster = (by) =>
+    setPosterIndex((n) => (posters.length ? (n + by + posters.length) % posters.length : 0));
+
   const state = useMemo(() => saleState(event?.waves), [event]);
   const soldOut = !special && state === "sold_out";
   const paused = !special && state === "paused";
@@ -238,8 +249,33 @@ export default function EventDetail() {
         <div className="md:col-span-7">
           {/* The shape the event itself carries. Hardcoded 4:3 until the format became an
               event's own property; absent still means 4:3, so nothing published moves. */}
-          <div className={`${ASPECTS[event.image_aspect] || "aspect-[4/3]"} overflow-hidden border border-ink/10`}>
-            <img src={mediaUrl(event.image_url)} alt={event.title} className="w-full h-full object-cover" />
+          <div className={`${ASPECTS[event.image_aspect] || "aspect-[4/3]"} overflow-hidden border border-ink/10 relative group`}
+               data-testid="event-poster-frame">
+            <img src={mediaUrl(posters[posterIndex] || event.image_url)} alt={event.title}
+                 className="w-full h-full object-cover" />
+            {/* Only where there is somewhere to go. One poster is a picture, and arrows on
+                a picture promise more of something there is no more of.
+
+                The main artwork leads (see eventPosters), so the frame opens on the image
+                the visitor already saw on the card that sent them here. */}
+            {posters.length > 1 && (
+              <>
+                <button type="button" onClick={() => stepPoster(-1)} aria-label="Previous poster"
+                        data-testid="poster-prev"
+                        className="absolute left-0 inset-y-0 w-14 flex items-center justify-center bg-scrim/40 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity">
+                  <ChevronLeft size={20} />
+                </button>
+                <button type="button" onClick={() => stepPoster(1)} aria-label="Next poster"
+                        data-testid="poster-next"
+                        className="absolute right-0 inset-y-0 w-14 flex items-center justify-center bg-scrim/40 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity">
+                  <ChevronRight size={20} />
+                </button>
+                <div data-testid="poster-count"
+                     className="absolute bottom-0 right-0 bg-scrim/60 px-2 py-1 font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-2">
+                  {posterIndex + 1} / {posters.length}
+                </div>
+              </>
+            )}
           </div>
           <div className="mt-8 font-mono-x text-xs uppercase tracking-[0.25em] text-ink-3">
             {fmtDate(event.starts_at)} · Doors {fmtTime(event.doors_open_at || event.starts_at)} · {[event.venue, event.city].filter(Boolean).join(", ")}

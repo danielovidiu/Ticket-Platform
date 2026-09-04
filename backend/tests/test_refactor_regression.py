@@ -527,3 +527,84 @@ def test_special_link_bypasses_wave_window(admin_headers):
     # cleanup
     requests.delete(f"{API}/admin/special-links/{sl['link_id']}", headers=admin_headers, timeout=15)
     requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
+
+
+# ---------- Event poster collection ----------
+
+def _poster_event(now, **over):
+    body = {
+        "title": "TEST_POSTERS", "slug": f"posters-{uuid.uuid4().hex[:6]}",
+        "description": "d", "venue": "V",
+        "starts_at": (now + timedelta(days=5)).isoformat(),
+        "ends_at": (now + timedelta(days=5, hours=3)).isoformat(),
+        "doors_open_at": (now + timedelta(days=5) - timedelta(hours=1)).isoformat(),
+        "image_url": "", "artist_ids": [], "max_tickets_per_user": 4,
+        "is_published": True, "waves": [],
+    }
+    body.update(over)
+    return body
+
+
+def test_an_event_carries_a_poster_collection(admin_headers):
+    """`images` is stored and returned, with `image_url` naming the main artwork.
+
+    The two are separate fields on purpose: every card, notice email and event page reads
+    `image_url` and knows nothing about the collection, so the main artwork keeps working
+    exactly as it did before there was one.
+    """
+    now = datetime.now(timezone.utc)
+    payload = _poster_event(now, image_url="/uploads/main.jpg",
+                            images=["/uploads/main.jpg", "https://example.com/b.jpg"])
+    r = requests.post(f"{API}/admin/events", json=payload, headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    ev = r.json()
+    assert ev["images"] == ["/uploads/main.jpg", "https://example.com/b.jpg"]
+    assert ev["image_url"] == "/uploads/main.jpg"
+
+    requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
+
+
+@pytest.mark.parametrize("bad", ["javascript:alert(1)", "data:text/html,<script>", "//evil.example.com/x.jpg"])
+def test_a_poster_that_is_not_a_media_address_is_refused(admin_headers, bad):
+    """The same bargain the gallery strikes on its items: these end up in a src."""
+    now = datetime.now(timezone.utc)
+    r = requests.post(f"{API}/admin/events", json=_poster_event(now, images=[bad]),
+                      headers=admin_headers, timeout=15)
+    assert r.status_code == 400, f"{bad!r} was accepted"
+
+
+def test_posters_can_be_patched_without_naming_the_rest_of_the_event(admin_headers):
+    """And an absent `images` leaves the collection alone rather than clearing it."""
+    now = datetime.now(timezone.utc)
+    r = requests.post(f"{API}/admin/events", json=_poster_event(now, images=["/uploads/a.jpg"]),
+                      headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    ev = r.json()
+    try:
+        r2 = requests.patch(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers,
+                            json={"images": ["/uploads/a.jpg", "/uploads/b.jpg"]}, timeout=15)
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["images"] == ["/uploads/a.jpg", "/uploads/b.jpg"]
+
+        # A PATCH about something else does not blank the collection.
+        r3 = requests.patch(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers,
+                            json={"title": "TEST_POSTERS_RENAMED"}, timeout=15)
+        assert r3.status_code == 200, r3.text
+        assert r3.json()["images"] == ["/uploads/a.jpg", "/uploads/b.jpg"]
+    finally:
+        requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)
+
+
+def test_an_event_saved_before_posters_existed_still_loads(admin_headers):
+    """No migration: an event with a cover and no collection is a one-poster event, and
+    the reading-forward happens in the editor (editableEvent) rather than in the store."""
+    now = datetime.now(timezone.utc)
+    r = requests.post(f"{API}/admin/events", json=_poster_event(now, image_url="/uploads/only.jpg"),
+                      headers=admin_headers, timeout=15)
+    assert r.status_code == 200, r.text
+    ev = r.json()
+    try:
+        assert ev["images"] == []
+        assert ev["image_url"] == "/uploads/only.jpg"
+    finally:
+        requests.delete(f"{API}/admin/events/{ev['event_id']}", headers=admin_headers, timeout=15)

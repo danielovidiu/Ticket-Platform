@@ -1,12 +1,15 @@
 /**
- * The date/time trigger, and why it always draws two lines.
+ * The date/time trigger, and why it draws exactly one line.
  *
- * Starts, Ends and Doors sit side by side in a three-column grid, as do a tier's Sale
- * starts, Sale ends and Access until. The trigger used to render one line when the
- * field was empty and two when it held a value, so a row with any blank field — Doors
- * usually is — came out visibly ragged. Height is the thing being asserted here, and
- * jsdom does not do layout, so what these check is the invariant that produces it: the
- * same number of lines either way.
+ * Starts, Ends and Doors sit side by side, as do a tier's Sale starts, Sale ends and
+ * Access until — and those rows also carry plain inputs and a select. A trigger that
+ * stacked the time under the date stood a head taller than everything beside it, so the
+ * date and time now share a line.
+ *
+ * The invariant that survives from the stacked version is the one that mattered: an empty
+ * field and a filled one are the same height, or a row with a blank Doors — Doors usually
+ * is — comes out visibly ragged. Height is the real subject and jsdom does no layout, so
+ * what these assert is the structure that produces it: nothing ever stacks.
  */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -20,28 +23,35 @@ const trigger = (value) => {
 };
 
 describe("the trigger", () => {
-  test("draws two lines when a date is set", () => {
-    const lines = trigger(OCT).querySelectorAll("span.block");
-    expect(lines).toHaveLength(2);
-    expect(lines[0].textContent).toBe("18 Oct 2025");
-    expect(lines[1].textContent).toBe("20:00");
+  test("states the date and the time on one line", () => {
+    const el = trigger(OCT);
+    expect(el.textContent).toContain("18 Oct 2025");
+    expect(el.textContent).toContain("20:00");
+    // Nothing stacks: a block child is what made this taller than the inputs beside it.
+    expect(el.querySelectorAll("span.block")).toHaveLength(0);
   });
 
-  test("draws two lines when the field is empty, so the row stays level", () => {
-    const lines = trigger("").querySelectorAll("span.block");
-    expect(lines).toHaveLength(2);
-    expect(lines[0].textContent).toBe("Pick date & time");
-    expect(lines[1].textContent).toBe("--:--"); // a placeholder, not a blank
+  test("an empty field says so, and stays one line", () => {
+    const el = trigger("");
+    expect(el.textContent).toContain("Pick date & time");
+    expect(el.querySelectorAll("span.block")).toHaveLength(0);
   });
 
-  test("an empty field has the same line count as a filled one", () => {
-    const count = (v) => {
+  test("an empty field stacks no more than a filled one, so the row stays level", () => {
+    const stacked = (v) => {
       const { container, unmount } = render(<DateTimePicker value={v} onChange={() => {}} />);
       const n = within(container).getByTestId("datetime-trigger").querySelectorAll("span.block").length;
       unmount();
       return n;
     };
-    expect(count("")).toBe(count(OCT));
+    expect(stacked("")).toBe(stacked(OCT));
+  });
+
+  test("an empty field promises no time it cannot show", () => {
+    // The stacked version printed "--:--" under the hint purely to keep the two heights
+    // equal. On one line there is nothing to balance, and a dash pair beside "Pick date &
+    // time" would read as a time control that is not there.
+    expect(trigger("").textContent).not.toContain("--:--");
   });
 });
 
@@ -81,11 +91,9 @@ describe("the popover", () => {
  * inventing a precision the field does not have.
  */
 describe("date-only mode", () => {
-  test("draws one line, with no time under it", () => {
+  test("states the day, and no time beside it", () => {
     render(<DateTimePicker mode="date" value="2026-08-15" onChange={() => {}} />);
-    const lines = screen.getByTestId("datetime-trigger").querySelectorAll("span.block");
-    expect(lines).toHaveLength(1);
-    expect(lines[0].textContent).toBe("15 Aug 2026");
+    expect(screen.getByTestId("datetime-trigger").textContent).toBe("15 Aug 2026");
   });
 
   test("reads a bare day in local time, so it does not render as the day before", () => {
@@ -120,10 +128,12 @@ describe("date-only mode", () => {
     expect(screen.getByTestId("datetime-trigger").textContent).toBe("No date");
   });
 
-  test("the full mode still carries its time row", () => {
+  test("the full mode still states a time where the date mode does not", () => {
     // The two modes have to stay distinguishable; this is the half that would rot first.
+    const { unmount } = render(<DateTimePicker mode="date" value="2026-08-15" onChange={() => {}} />);
+    expect(screen.getByTestId("datetime-trigger").textContent).not.toMatch(/\d\d:\d\d/);
+    unmount();
     render(<DateTimePicker value={OCT} onChange={() => {}} />);
-    const lines = screen.getByTestId("datetime-trigger").querySelectorAll("span.block");
-    expect(lines).toHaveLength(2);
+    expect(screen.getByTestId("datetime-trigger").textContent).toMatch(/\d\d:\d\d/);
   });
 });

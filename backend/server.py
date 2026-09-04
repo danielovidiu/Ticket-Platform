@@ -1470,6 +1470,9 @@ class ResendVerifyIn(ApiModel):
 # without telling an editor how to do their job.
 MAX_DISCIPLINES = 24
 MAX_ARTIST_ALBUMS = 60
+# Posters on one event. A sanity bound, not a rule about promotion: a handful of pieces of
+# artwork is the case, and a four-figure list is a paste that went wrong.
+MAX_EVENT_POSTERS = 24
 
 
 class ArtistIn(ApiModel):
@@ -1554,11 +1557,19 @@ class EventIn(ApiModel):
     starts_at: str
     ends_at: Optional[str] = None
     doors_open_at: Optional[str] = None
+    # The MAIN ARTWORK: the one poster that stands for the event everywhere it is named
+    # from somewhere else — a card, a notice email, the top of its own page. It is one of
+    # `images`, and stays its own field rather than an index into that list so that every
+    # reader of it keeps working without knowing the collection exists.
     image_url: str = ""
     # The shape the cover is cropped to, everywhere the event appears. Chosen with the
     # image rather than by each page that shows it, so one event cannot be 4:3 on its own
     # page and 1:1 in a grid.
     image_aspect: str = "4:3"
+    # The poster collection: artwork for THIS event, ordered, `image_url` among it. Kept
+    # apart from the event's albums on purpose — an album is a record of a night that
+    # happened, and these are the pictures that sell it beforehand.
+    images: List[str] = Field(default_factory=list, max_length=MAX_EVENT_POSTERS)
     artist_ids: List[str] = []
     max_tickets_per_user: int = 4
     is_published: bool = False
@@ -1596,6 +1607,7 @@ class EventPatchIn(ApiModel):
     doors_open_at: Optional[str] = None
     image_url: Optional[str] = None
     image_aspect: Optional[str] = None
+    images: Optional[List[str]] = Field(default=None, max_length=MAX_EVENT_POSTERS)
     artist_ids: Optional[List[str]] = None
     max_tickets_per_user: Optional[int] = None
     is_published: Optional[bool] = None
@@ -3969,6 +3981,7 @@ async def admin_list_events(user=Depends(require_admin)):
 async def admin_create_event(body: EventIn, user=Depends(require_admin)):
     e = body.model_dump()
     _check_image_aspect(e)
+    _check_event_images(e)
     e["event_id"] = new_id("evt")
     waves = []
     for w in e.get("waves", []):
@@ -4060,6 +4073,7 @@ async def admin_update_event(event_id: str, body: EventPatchIn, user=Depends(req
     """
     patch = body.model_dump(exclude_unset=True)
     _check_image_aspect(patch)
+    _check_event_images(patch)
 
     # An explicit `"waves": null` means "leave the lineup alone", not "delete every wave" —
     # the destructive reading of a field a client may well send as empty.
@@ -4687,6 +4701,27 @@ def _check_image_aspect(payload: dict) -> None:
         return
     if payload["image_aspect"] not in IMAGE_ASPECTS:
         raise HTTPException(400, f"Image format must be one of: {', '.join(IMAGE_ASPECTS)}")
+
+
+def _check_event_images(payload: dict) -> None:
+    """Every poster has to be something an <img> may be pointed at.
+
+    The same bargain the gallery strikes on its items, for the same reason: these end up in
+    a src attribute, so `javascript:`, `data:` and a protocol-relative `//host` are refused
+    rather than rendered. Absent means "leave the collection alone" on a PATCH, which is
+    why a missing key returns rather than clearing it.
+
+    `image_url` is deliberately NOT required to be a member here. A PATCH may carry either
+    field without the other, so the pair can only be checked against a stored event, and
+    the page does not need them to agree: eventPosters() puts the main artwork first and
+    de-duplicates, so a mismatch renders sensibly instead of 400-ing an editor.
+    """
+    images = payload.get("images")
+    if images is None:
+        return
+    for url in images:
+        if not _valid_media_url(url):
+            raise HTTPException(400, f"Not a usable image address: {url!r}")
 
 
 def _check_artist_payload(patch: dict) -> None:
