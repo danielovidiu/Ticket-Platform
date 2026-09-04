@@ -30,7 +30,8 @@ import { uploadConfig } from "./uploadVideo";
  * hold is refused up front instead, by name, with nothing sent.
  */
 const ACCEPTED = new Set([
-  "audio/mpeg", "audio/wav", "audio/x-wav", "audio/ogg", "audio/mp4", "audio/aac",
+  "audio/mpeg", "audio/wav", "audio/x-wav", "audio/ogg", "audio/mp4", "audio/x-m4a",
+  "audio/aac",
 ]);
 
 export async function uploadAudio(file, { onProgress } = {}) {

@@ -90,7 +90,10 @@ function TrackRow({ track, index, count, onPatch, onRemove, onMove, testId }) {
           {upload.busy ? upload.label : "Upload"}
         </button>
         <input ref={inputRef} type="file" className="hidden"
-               accept="audio/mpeg,audio/wav,audio/ogg,audio/mp4,audio/aac"
+               // Every type the server takes, including the `x-` spellings some browsers
+               // report — this attribute filters the picker, so a name missing here is a
+               // file the editor cannot even select.
+               accept="audio/mpeg,audio/wav,audio/x-wav,audio/ogg,audio/mp4,audio/x-m4a,audio/aac"
                data-testid={`${testId}-file`}
                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; upload.start(f); }} />
       </div>

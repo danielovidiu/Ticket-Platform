@@ -232,3 +232,69 @@ class TestTheRoundTrip:
     def test_an_anonymous_caller_cannot_upload(self):
         r = _upload({}, _real_wav(), "clip.wav", "audio/wav")
         assert r.status_code in (401, 403), f"{r.status_code}: {r.text[:200]}"
+
+
+class TestTheBrowserSideAgreesToo:
+    """The other two lists, which no test reached until an `x-m4a` went missing from them.
+
+    Four places have to name the same audio types, in two languages:
+
+      1. `AUDIO_CONTENT_TYPES` here — what the API stores;
+      2. `ALLOWED_CONTENT_TYPES` in blob-upload — what gets a direct-upload token;
+      3. `ACCEPTED` in lib/uploadAudio.js — what the browser sends at all;
+      4. the `accept` attribute on the file input — what the picker will even offer.
+
+    Each is a gate, so the narrowest one wins, and a type missing from any of them is a
+    file the editor cannot upload however many of the others allow it. 3 and 4 fail the
+    most quietly of the four: the picker simply greys the file out, or the upload is
+    refused before a request exists to inspect.
+
+    Read as text for the same reason as the class above: no JavaScript runtime here.
+    """
+
+    ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+    UPLOAD_AUDIO_JS = ROOT / "frontend" / "src" / "lib" / "uploadAudio.js"
+    TRACKS_FIELD_JSX = ROOT / "frontend" / "src" / "components" / "AudioTracksField.jsx"
+
+    def _client_accepted(self) -> set:
+        src = self.UPLOAD_AUDIO_JS.read_text()
+        m = re.search(r"const ACCEPTED = new Set\(\[(.*?)\]\)", src, re.S)
+        assert m, "ACCEPTED not found in uploadAudio.js"
+        return set(re.findall(r'"([^"]+)"', m.group(1)))
+
+    def _picker_accepted(self) -> set:
+        src = self.TRACKS_FIELD_JSX.read_text()
+        m = re.search(r'accept="(audio/[^"]+)"', src)
+        assert m, "audio accept attribute not found in AudioTracksField.jsx"
+        return {t.strip() for t in m.group(1).split(",") if t.strip()}
+
+    def test_the_browser_sends_every_type_the_api_stores(self):
+        missing = set(AUDIO_CONTENT_TYPES) - self._client_accepted()
+        assert not missing, (
+            f"{sorted(missing)} are stored fine by the API but refused in the browser "
+            "before anything is sent")
+
+    def test_the_picker_offers_every_type_the_api_stores(self):
+        missing = set(AUDIO_CONTENT_TYPES) - self._picker_accepted()
+        assert not missing, (
+            f"{sorted(missing)} would be greyed out in the file picker — the editor cannot "
+            "choose a file the server would have taken")
+
+    def test_neither_offers_something_the_api_would_refuse(self):
+        for name, listed in (("uploadAudio.js", self._client_accepted()),
+                             ("the file picker", self._picker_accepted())):
+            extra = listed - set(AUDIO_CONTENT_TYPES)
+            assert not extra, f"{sorted(extra)} is offered by {name} and refused by the API"
+
+    def test_the_spellings_browsers_actually_use_are_covered(self):
+        # The `x-` forms are the same containers under the names some browsers and encoders
+        # report. Safari calls an M4A `audio/x-m4a`; leaving it out refused a file the
+        # player handles perfectly well, which is the bug this class was added for.
+        for pair in (("audio/mp4", "audio/x-m4a"), ("audio/wav", "audio/x-wav")):
+            for spelling in pair:
+                assert spelling in AUDIO_CONTENT_TYPES, spelling
+                assert spelling in self._client_accepted(), spelling
+                assert spelling in self._picker_accepted(), spelling
+        # …and both spellings of a container must store the same extension.
+        assert AUDIO_CONTENT_TYPES["audio/mp4"] == AUDIO_CONTENT_TYPES["audio/x-m4a"]
+        assert AUDIO_CONTENT_TYPES["audio/wav"] == AUDIO_CONTENT_TYPES["audio/x-wav"]
