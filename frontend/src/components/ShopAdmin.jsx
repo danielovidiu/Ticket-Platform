@@ -36,18 +36,23 @@ function Field({ label, className = "", children }) {
 // ---------------- Products ----------------
 
 function ProductForm({ form, setForm, onSave, onClose }) {
-  const setF = (k, v) => setForm({ ...form, [k]: v });
-  const setVariant = (i, k, v) => {
-    const rows = [...form.variants];
+  /* Every one of these reads the form it is handed rather than one captured when the
+     handler was built. Nothing here writes twice in a single action today, so none of them
+     was visibly broken — but the event form's setters looked exactly this safe right up
+     until one action wrote two fields, and then a just-uploaded image vanished with no
+     error to explain it. The functional form costs nothing and cannot lose an update. */
+  const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const setVariant = (i, k, v) => setForm((f) => {
+    const rows = [...f.variants];
     rows[i] = { ...rows[i], [k]: v };
-    setForm({ ...form, variants: rows });
-  };
-  const addVariant = () => setForm({
-    ...form,
-    // A blank SKU is rejected server-side; prefill a sensible guess from the name.
-    variants: [...form.variants, { size: "M", sku: `${(form.name || "SKU").slice(0, 3).toUpperCase()}-${form.variants.length + 1}`, stock: 0 }],
+    return { ...f, variants: rows };
   });
-  const removeVariant = (i) => setForm({ ...form, variants: form.variants.filter((_, k) => k !== i) });
+  const addVariant = () => setForm((f) => ({
+    ...f,
+    // A blank SKU is rejected server-side; prefill a sensible guess from the name.
+    variants: [...f.variants, { size: "M", sku: `${(f.name || "SKU").slice(0, 3).toUpperCase()}-${f.variants.length + 1}`, stock: 0 }],
+  }));
+  const removeVariant = (i) => setForm((f) => ({ ...f, variants: f.variants.filter((_, k) => k !== i) }));
 
   return (
     <div className="fixed inset-0 z-50 bg-[rgba(5,5,5,0.9)] flex items-center justify-center p-4">

@@ -779,12 +779,21 @@ export function EventForm({ form, setForm, onSave, onClose }) {
      picture that had just been uploaded, and the upload looked like it had failed. The
      same trap `setStartsAt` and `setWaveFields` below already work around. */
   const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const setWave = (i, k, v) => { const w = [...form.waves]; w[i] = { ...w[i], [k]: v }; setForm({...form, waves: w}); };
-  /* Several keys at once. The access toggle has to clear one end as it sets the other,
-     and two setWave calls off the same `form` would leave only the second. */
-  const setWaveFields = (i, patch) => {
-    const w = [...form.waves]; w[i] = { ...w[i], ...patch }; setForm({ ...form, waves: w });
-  };
+  const setWave = (i, k, v) => setForm((f) => {
+    const w = [...f.waves]; w[i] = { ...w[i], [k]: v }; return { ...f, waves: w };
+  });
+  /* Several keys at once, for the callers that mean one edit: the access toggle has to
+     clear one end as it sets the other, and "set until, then clear from" is a single
+     decision that should reach the form as a single patch.
+   *
+   * It no longer exists to dodge the lost-update bug — every setter here reads the form it
+   * is handed rather than one captured when the handler was built, so two setWave calls in
+   * a row now both land. It stays because expressing one intention as one call is worth
+   * having on its own, and because a caller that wants the pair applied atomically should
+   * not have to know that consecutive calls happen to compose. */
+  const setWaveFields = (i, patch) => setForm((f) => {
+    const w = [...f.waves]; w[i] = { ...w[i], ...patch }; return { ...f, waves: w };
+  });
 
   /* Deleting a tier is a local edit that lands on Save, like every other change in this
      form. Only offered on a tier nothing points at — the server refuses the rest with a
@@ -793,7 +802,7 @@ export function EventForm({ form, setForm, onSave, onClose }) {
     const w = form.waves[i];
     if ((Number(w.sold) || 0) > 0 || (Number(w.held) || 0) > 0) return;
     if (!confirm(`Delete "${w.name || "this tier"}"? It has sold nothing, so nothing is lost. Takes effect when you save.`)) return;
-    setForm({ ...form, waves: form.waves.filter((_, j) => j !== i) });
+    setForm((f) => ({ ...f, waves: f.waves.filter((_, j) => j !== i) }));
   };
 
   /* Ends, Doors and each tier's sale end are guesses made from Starts, and they follow
@@ -943,19 +952,19 @@ export function EventForm({ form, setForm, onSave, onClose }) {
               bottom of the running order instead of tying with an existing one. Sale
               ends the day before the event; with no date set yet it stays blank and
               fills itself in when Starts is. */}
-          <button data-testid="add-tier" onClick={() => setForm({...form, waves: [...form.waves, {
+          <button data-testid="add-tier" onClick={() => setForm((f) => ({...f, waves: [...f.waves, {
                     _key: `k-${Date.now()}-${Math.random()}`,
-                    tier_id: Math.max(0, ...form.waves.map((w) => Number(w.tier_id) || 0)) + 1,
+                    tier_id: Math.max(0, ...f.waves.map((w) => Number(w.tier_id) || 0)) + 1,
                     name: "NEW", price_ron: 100, capacity: 50,
                     starts_at: new Date().toISOString(),
-                    ends_at: dayBefore(form.starts_at),
+                    ends_at: dayBefore(f.starts_at),
                     access_until: "", access_from: "",
                     status: "active", pack_size: 1,
                     // Null rather than a copy of the event's number: a new tier inherits
                     // until someone gives it a rule of its own, so changing the event's
                     // cap still moves every tier that never disagreed with it.
                     max_tickets_per_user: null, sold_out_message: "",
-                  }]})} className="btn-primary">+ Add tier</button>
+                  }]}))} className="btn-primary">+ Add tier</button>
         </div>
         <div className="mt-6 hairline-b pb-3 font-mono-x uppercase tracking-[0.2em] text-xs text-ink-4">Albums</div>
         <div className="mt-3">
