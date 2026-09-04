@@ -581,9 +581,36 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 # bytes. Rendering SMALL images from big ones is a separate problem, solved by the
 # thumbnails this endpoint already generates rather than by cutting this number.
 STORED_IMAGE_MAX_EDGE = 2560
-# 82 matches QUALITY in lib/imagePipeline.js, for the same reason the edge does: an image
-# that took the client path and one that did not should not be stored at two qualities.
-STORED_IMAGE_QUALITY = 82
+# Two qualities, because there are two different situations and one number for both is
+# wrong for one of them.
+#
+# 90 is what this endpoint has always re-encoded at, and it stays for a JPEG stored as a
+# JPEG or a WebP stored as a WebP. Those bytes have already been through a lossy encoder
+# once, so a second pass is generational loss — visible on gradients and edges, and paid
+# by an image-led site on every photograph. Measured across the deployed library, dropping
+# these to 82 bought about 15% and spent quality on 60-odd photographs to get it; that is
+# a trade for a person to make deliberately, not a side effect of a performance change.
+STORED_IMAGE_QUALITY = 90
+# 82 is for PNG -> WebP, where it is the FIRST lossy encode rather than the second: PNG is
+# lossless, so nothing has been discarded yet and this is the same single compression the
+# client applies at QUALITY = 0.82 in lib/imagePipeline.js. It is also where the size wins
+# actually are — 85-98% on the deployed library, against 15% for the re-encodes above.
+PNG_TO_WEBP_QUALITY = 82
+
+# Formats that can genuinely hold an animation, and are therefore passed through whole.
+#
+# The test is NOT `is_animated` on its own, which was the bug this list exists to prevent.
+# Pillow reports MPO — what an iPhone writes, a primary image plus a gain or depth map —
+# as a two-frame animated file. So every photo taken on a phone matched the animation
+# branch and was passed straight through: not downscaled, and not re-encoded either, which
+# quietly took the polyglot defence and the EXIF strip with it for exactly the files most
+# likely to be carrying GPS. Twelve of them were sitting in the deployed library at
+# 3024x4032 and 4284x5712, each over a megabyte, each reported by the reprocessing script
+# as saving 0.0%.
+#
+# The extra frames are auxiliary data no browser on this site renders, so an MPO is
+# treated as the still photograph it looks like.
+ANIMATED_FORMATS = {"GIF", "WEBP"}
 
 
 def _fit_to_max_edge(img, max_edge: int = STORED_IMAGE_MAX_EDGE):
@@ -708,16 +735,16 @@ def _reencode_image(data: bytes, declared: str) -> tuple:
                  f"declared type {declared}")
 
     out = io.BytesIO()
-    if getattr(img, "is_animated", False):
-        # An animation is left alone: Pillow can resize a single frame, and rebuilding a
-        # multi-frame GIF at a new size is a different job from the one this does.
+    if fmt in ANIMATED_FORMATS and getattr(img, "is_animated", False):
+        # A real animation is left alone: Pillow can resize a single frame, and rebuilding
+        # a multi-frame GIF at a new size is a different job from the one this does.
         img.save(out, format=fmt, save_all=True)
         return out.getvalue(), declared, IMAGE_CONTENT_TYPES[declared]
 
     img = _fit_to_max_edge(img)
 
     if fmt == "WEBP":
-        img.convert("RGBA").save(out, format="WEBP", quality=STORED_IMAGE_QUALITY, method=6)
+        img.convert("RGBA").save(out, format="WEBP", quality=STORED_IMAGE_QUALITY)
         return out.getvalue(), "image/webp", ".webp"
     if fmt == "PNG":
         # PNG IN, WEBP OUT — this is the single biggest transfer saving in the app, and it
@@ -735,7 +762,7 @@ def _reencode_image(data: bytes, declared: str) -> tuple:
         # photograph like JPEG does. lib/imagePipeline.js already makes precisely this
         # mapping client-side for files over its threshold — this makes it true for every
         # file, including the ones under it, which is where the 2.25 MB one slipped in.
-        img.convert("RGBA").save(out, format="WEBP", quality=STORED_IMAGE_QUALITY, method=6)
+        img.convert("RGBA").save(out, format="WEBP", quality=PNG_TO_WEBP_QUALITY)
         return out.getvalue(), "image/webp", ".webp"
     img.convert("RGB").save(out, format="JPEG", quality=STORED_IMAGE_QUALITY, optimize=True)
     return out.getvalue(), "image/jpeg", ".jpg"

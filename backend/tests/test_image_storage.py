@@ -216,3 +216,87 @@ class TestTheEndpointStoresWhatTheEncoderProduces:
             for key in ("url", "thumbnail_url"):
                 if body.get(key):
                     db.gallery.delete_many({"image_url": body[key]})
+
+
+class TestAPhoneOffAPhoneIsAStillPhotograph:
+    """The bug that `ANIMATED_FORMATS` exists to prevent.
+
+    Pillow reports MPO — what an iPhone writes, a primary image plus a gain or depth map —
+    as a two-frame file with `is_animated` True. The animation passthrough was guarded on
+    that flag alone, so every photo taken on a phone matched it and was returned untouched:
+    never downscaled, and never re-encoded either, which silently took the polyglot defence
+    and the EXIF strip with it for exactly the files most likely to carry GPS.
+
+    It was not theoretical. Twelve such files were sitting in the deployed library at
+    3024x4032 and 4284x5712, each over a megabyte, each reported by the reprocessing script
+    as saving 0.0%. The real 4284x5712 one is 55.5% smaller once it takes the right path.
+    """
+
+    def _mpo(self, size=(3000, 4000)):
+        """Two frames in one file, the way a phone camera writes it.
+
+        Saved as "MPO" rather than "JPEG": Pillow has no SAVE_ALL handler registered for
+        JPEG, so asking for multiple frames under that name raises KeyError.
+
+        The second frame is deliberately small — a gain map is not full resolution, and
+        building one at 3000x4000 would make this slow for no extra coverage.
+        """
+        buf = io.BytesIO()
+        _photo(size).save(buf, "MPO", save_all=True,
+                          append_images=[_photo((64, 48), seed=2)])
+        return buf.getvalue()
+
+    def test_the_fixture_really_is_an_mpo(self):
+        """Guards the test itself: if Pillow stopped producing MPO here, everything below
+        would pass by testing an ordinary JPEG."""
+        img = Image.open(io.BytesIO(self._mpo((300, 400))))
+        assert img.format == "MPO"
+        assert getattr(img, "is_animated", False) is True
+
+    def test_it_is_downscaled_like_any_other_photograph(self):
+        raw = self._mpo((3000, 4000))
+        out, _, _ = server._reencode_image(raw, "image/jpeg")
+        assert max(_dims(out)) == server.STORED_IMAGE_MAX_EDGE
+
+    def test_it_is_stored_as_a_single_frame_jpeg(self):
+        raw = self._mpo((300, 400))
+        out, content_type, ext = server._reencode_image(raw, "image/jpeg")
+        assert (content_type, ext) == ("image/jpeg", ".jpg")
+        after = Image.open(io.BytesIO(out))
+        assert getattr(after, "n_frames", 1) == 1, "the auxiliary frame was kept"
+
+    def test_a_real_animation_still_takes_the_passthrough(self):
+        """The guard narrows the branch; it must not close it."""
+        frames = [_photo((80, 60), seed=s) for s in (1, 2, 3)]
+        buf = io.BytesIO()
+        frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=100)
+        out, _, _ = server._reencode_image(buf.getvalue(), "image/gif")
+        assert Image.open(io.BytesIO(out)).n_frames == 3
+
+
+class TestTheTwoQualitiesAreNotOneNumber:
+    """A same-format re-encode is a SECOND lossy pass and a PNG conversion is the first,
+    so they are not the same decision.
+
+    Measured across the deployed library, re-encoding the existing JPEGs and WebPs at 82
+    bought about 15% and spent quality on sixty-odd photographs to get it. The PNG
+    conversions bought 85-98%. Only one of those is worth paying for."""
+
+    def test_a_same_format_reencode_keeps_the_long_standing_quality(self):
+        assert server.STORED_IMAGE_QUALITY == 90
+
+    def test_png_conversion_uses_the_client_side_quality(self):
+        """Matches QUALITY = 0.82 in lib/imagePipeline.js — an image that took the client
+        path and one that did not should not be stored at two qualities."""
+        assert server.PNG_TO_WEBP_QUALITY == 82
+
+    def test_a_jpeg_that_needs_no_resize_is_barely_touched(self):
+        """The point of keeping 90: an in-spec photograph should not shrink much, because
+        shrinking it means throwing away detail it was uploaded with."""
+        raw = _encoded(_photo((1200, 800)), "JPEG", quality=90)
+        out, _, _ = server._reencode_image(raw, "image/jpeg")
+        assert _dims(out) == (1200, 800)
+        assert len(out) > len(raw) * 0.6, (
+            f"{len(raw):,} -> {len(out):,}: a re-encode at the same quality should not "
+            "be taking a third of the file off"
+        )
