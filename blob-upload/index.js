@@ -84,7 +84,8 @@ async function getHandleUpload() {
  */
 const ALLOWED_CONTENT_TYPES = [
   "video/mp4", "video/webm", "video/quicktime",
-  "audio/mpeg", "audio/wav", "audio/x-wav", "audio/ogg", "audio/mp4", "audio/aac",
+  "audio/mpeg", "audio/wav", "audio/x-wav", "audio/ogg", "audio/mp4", "audio/x-m4a",
+  "audio/aac",
 ];
 
 /** The same ceiling the Python side enforces, so the two cannot drift into disagreeing

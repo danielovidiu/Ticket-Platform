@@ -548,7 +548,8 @@ VIDEO_CONTENT_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/quickt
 # the two are stored the same way but they are not the same thing to the editor, and the
 # response says which one arrived so a field that asked for a clip cannot be handed a film.
 AUDIO_CONTENT_TYPES = {"audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav",
-                       "audio/ogg": ".ogg", "audio/mp4": ".m4a", "audio/aac": ".m4a"}
+                       "audio/ogg": ".ogg", "audio/mp4": ".m4a", "audio/x-m4a": ".m4a",
+                       "audio/aac": ".m4a"}
 # 100 MB, which is what a short video actually weighs. Reachable on a VPS, where nginx
 # is the only thing in front; NOT reachable on Vercel, whose platform refuses any request
 # body over about 4.5 MB before this process is reached at all — measured, not assumed:
@@ -604,8 +605,12 @@ VIDEO_SNIFF = {"video/mp4": [(4, b"ftyp")], "video/quicktime": [(4, b"ftyp")],
 # container header is the check that is available.
 #   WAV: a RIFF chunk whose form type is WAVE.   OGG: the page magic.   M4A: ISO-BMFF.
 # MP3 is deliberately absent — it has no single signature (see _sniff_audio).
+# `audio/x-m4a` alongside `audio/mp4`, and `audio/x-wav` alongside `audio/wav`: the same
+# container under the name some browsers and encoders give it. Safari reports an M4A as
+# x-m4a, so leaving it out refused a file the player handles perfectly well.
 AUDIO_SNIFF = {"audio/wav": [(0, b"RIFF"), (8, b"WAVE")], "audio/x-wav": [(0, b"RIFF"), (8, b"WAVE")],
-               "audio/ogg": [(0, b"OggS")], "audio/mp4": [(4, b"ftyp")], "audio/aac": [(4, b"ftyp")]}
+               "audio/ogg": [(0, b"OggS")], "audio/mp4": [(4, b"ftyp")],
+               "audio/x-m4a": [(4, b"ftyp")], "audio/aac": [(4, b"ftyp")]}
 
 
 async def _read_capped(upload: UploadFile, limit: int = MAX_UPLOAD_BYTES) -> bytes:
