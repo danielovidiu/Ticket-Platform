@@ -4965,7 +4965,11 @@ async def admin_audit(limit: int = 100, skip: int = 0, user=Depends(require_admi
 class AlbumIn(ApiModel):
     title: str
     slug: Optional[str] = None
-    description: str = ""
+    # LONG_TEXT rather than the model default, the same as EventIn.description: this is
+    # prose an editor writes, and it is now edited in a textarea rather than the one-line
+    # "Intro" it started as. The album page shows the first ALBUM_INTRO_LIMIT characters
+    # (frontend/src/lib/albums.js) and puts the rest behind "see more".
+    description: str = Field(default="", max_length=LONG_TEXT)
     event_id: Optional[str] = None
     # A day, not an instant. An album documents something that happened on a date; the
     # hour it happened at is the event's business, not the gallery's.
@@ -4975,7 +4979,7 @@ class AlbumIn(ApiModel):
 class AlbumPatchIn(ApiModel):
     title: Optional[str] = None
     slug: Optional[str] = None
-    description: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=LONG_TEXT)
     event_id: Optional[str] = None
     date: Optional[str] = None
 

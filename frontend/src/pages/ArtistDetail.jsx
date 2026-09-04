@@ -3,34 +3,31 @@ import { useParams, Link } from "react-router-dom";
 import { http } from "../api";
 import { mediaUrl } from "../lib/media";
 import BackLink from "../components/BackLink";
-import { renderRich, excerpt } from "../lib/richText";
+import { renderRich } from "../lib/richText";
+import ExpandableText from "../components/ExpandableText";
 import { SOCIAL_PLATFORMS } from "../lib/social";
 
 const BIO_LIMIT = 200;
+const BIO_PARA = "text-ink-2 text-lg leading-relaxed max-w-xl";
 
 /**
  * The bio, short by default.
  *
- * Collapsed it shows a plain-text excerpt rather than truncated markdown — see
- * `excerpt`. Expanded it hands over to the full rich renderer, so headings, lists and
- * links come back. The control only appears when there is genuinely more to read.
+ * The collapse/expand behaviour is shared with the album description (see
+ * components/ExpandableText); what is particular to a bio is the 200-character limit and
+ * that the expanded form goes through the RICH renderer, so headings, lists and links
+ * come back rather than being read as literal asterisks.
  */
 export function Bio({ text }) {
-  const [open, setOpen] = useState(false);
-  const { text: short, truncated } = excerpt(text, BIO_LIMIT);
-  if (!truncated) {
-    return <div className="mt-8">{renderRich(text, { paraClassName: "text-ink-2 text-lg leading-relaxed max-w-xl mt-4 first:mt-0" })}</div>;
-  }
   return (
-    <div className="mt-8" data-testid="artist-bio">
-      {open
-        ? renderRich(text, { paraClassName: "text-ink-2 text-lg leading-relaxed max-w-xl mt-4 first:mt-0" })
-        : <p className="text-ink-2 text-lg leading-relaxed max-w-xl">{short}…</p>}
-      <button type="button" onClick={() => setOpen(!open)} data-testid="artist-bio-toggle"
-              className="mt-3 font-mono-x text-xs uppercase tracking-[0.3em] text-ink-3 hover:text-ink underline underline-offset-4">
-        {open ? "See less" : "See more"}
-      </button>
-    </div>
+    <ExpandableText
+      text={text}
+      limit={BIO_LIMIT}
+      className="mt-8"
+      paraClassName={BIO_PARA}
+      testId="artist-bio"
+      renderExpanded={(value) => renderRich(value, { paraClassName: `${BIO_PARA} mt-4 first:mt-0` })}
+    />
   );
 }
 
