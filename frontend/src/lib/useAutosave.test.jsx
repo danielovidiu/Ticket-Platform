@@ -271,3 +271,74 @@ describe("the interval is an interval, not a debounce", () => {
     expect(save.mock.calls[save.mock.calls.length - 1][0]).toBe(value);
   });
 });
+
+describe("nothing pending means nothing is written", () => {
+  /* THE BUG THIS SUITE EXISTS FOR.
+   *
+   * "Save now" calls flushAllSavers(), which flushes EVERY registered surface — there is
+   * no dirty filter, and there should not be: a surface that failed its last save is not
+   * dirty by its own reckoning and still needs writing.
+   *
+   * So a surface nobody has touched gets flushed too, and it answers `getPending()` with
+   * whatever its ref was initialised to. CMSEditor's page-metadata saver initialises that
+   * ref to `null`, and the guard here only tested for `undefined` — so an untouched
+   * metadata pane PATCHed the page with a body of `null`. axios sends no body at all for
+   * that, and FastAPI answers 422 with `loc: ["body"], msg: "Field required"`, which the
+   * editor showed as:
+   *
+   *     Save failed — body: Field required
+   *
+   * after editing a BLOCK and pressing Save now, which is not a sentence about anything
+   * the person had touched.
+   */
+
+  test("a pending value of undefined is not written", async () => {
+    const save = vi.fn().mockResolvedValue();
+    const { result } = renderHook(() => useAutosave({ getPending: () => undefined, save }));
+    await act(async () => { await result.current.flush(); });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  test("a pending value of NULL is not written either", async () => {
+    // The regression. `null` is what "this surface has nothing yet" looks like when the
+    // caller initialised its ref with useRef(null) rather than useRef(undefined).
+    const save = vi.fn().mockResolvedValue();
+    const { result } = renderHook(() => useAutosave({ getPending: () => null, save }));
+    await act(async () => { await result.current.flush(); });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  test("an untouched surface stays idle rather than reporting an error", async () => {
+    // The visible half: before the fix this went to "error" with the server's 422 in it.
+    const save = vi.fn().mockResolvedValue();
+    const { result } = renderHook(() => useAutosave({ getPending: () => null, save }));
+    await act(async () => { await result.current.flush(); });
+    expect(result.current.state).toBe("idle");
+    expect(result.current.error).toBeNull();
+  });
+
+  test("but a real value is still written after an untouched flush", async () => {
+    // The guard must not latch: skipping an empty flush cannot leave the surface unable
+    // to save once it does have something.
+    const save = vi.fn().mockResolvedValue();
+    let pending = null;
+    const { result } = renderHook(() => useAutosave({ getPending: () => pending, save }));
+    await act(async () => { await result.current.flush(); });
+    expect(save).not.toHaveBeenCalled();
+
+    pending = { title: "Mission" };
+    await act(async () => { await result.current.flush(); });
+    expect(save).toHaveBeenCalledWith({ title: "Mission" });
+  });
+
+  test("falsy values that are NOT empty still write", async () => {
+    // `0` and `""` are real settings — the nav size can be 0, a nav label can be cleared.
+    // The guard has to mean "nothing pending", not "falsy".
+    for (const value of [0, "", false]) {
+      const save = vi.fn().mockResolvedValue();
+      const { result } = renderHook(() => useAutosave({ getPending: () => value, save }));
+      await act(async () => { await result.current.flush(); });
+      expect(save, `${JSON.stringify(value)} should still be written`).toHaveBeenCalledWith(value);
+    }
+  });
+});

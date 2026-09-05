@@ -38,6 +38,17 @@ describe("errorText", () => {
     expect(errorText(err)).toBe("nav_size: Input should be a valid integer");
   });
 
+  test("a missing body reads as 'body: Field required'", () => {
+    // The exact string a CMS save produced when it PATCHed with no body at all — the
+    // `loc` is just ["body"], so the field name IS "body". Pinned because that message
+    // is what made the bug findable: it named a field nobody had edited, which is what
+    // said the request, not the content, was wrong. See the guard in lib/useAutosave.js.
+    const err = failure(422, {
+      detail: [{ type: "missing", loc: ["body"], msg: "Field required" }],
+    });
+    expect(errorText(err, "Save failed")).toBe("body: Field required");
+  });
+
   it("names the status when the server sent no detail", () => {
     expect(errorText(failure(401, {}))).toBe("Your session expired");
     expect(errorText(failure(403, {}))).toBe("You do not have permission to do that");
