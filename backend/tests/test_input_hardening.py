@@ -54,22 +54,29 @@ class TestEmailsRejectControlCharacters:
         assert server._valid_email("someone@example.com") is True
         assert server._valid_email("  someone@example.com  ") is True
 
-    # Overrides this module's own group. This is the only test outside
-    # test_security_hardening.py that POSTs to /newsletter, and the limiter there is 10
-    # per minute PER IP — which every xdist worker shares, because they are all the same
-    # client as far as the server is concerned. Run on another worker, this one request
-    # spent a slot out of the window TestRateLimitNewsletter was about to count, and that
-    # test saw nine successes where it asserted ten. Same worker means same sequence.
-    @pytest.mark.xdist_group("newsletter_budget")
     def test_the_endpoint_actually_calls_it(self):
-        """The wiring, once. A validator nothing calls is a comment."""
-        # Waits for a slot rather than skipping: this needs ONE request to get through,
-        # the window is a minute, and reporting a critical test as "didn't run" because a
-        # neighbour spent the budget is worse than sitting out the window.
-        r = support.past_rate_limit(lambda: requests.post(
-            f"{API}/newsletter",
-            json={"email": "a@b.com\r\nBcc: attacker@evil.example"},
-            timeout=TIMEOUT))
+        """The wiring, once. A validator nothing calls is a comment.
+
+        SKIPS rather than waits when the budget is gone, and that is a deliberate trade.
+        /newsletter is limited to 10 a minute PER IP, and every xdist worker is the same
+        IP, so this request competes with TestRateLimitNewsletter — which drives the
+        limiter to 429 on purpose and leaves the bucket full behind it.
+
+        Waiting the window out instead was tried and reverted: it made this test take 61
+        seconds and, because the two files are on different workers, put that wait on the
+        suite's critical path rather than overlapping it with the three other minute-long
+        waits already there. An xdist_group cannot fix it either — a mark on a method
+        composes with the module's own rather than replacing it, so the two end up in
+        groups of one and race anyway.
+
+        A skip here is visible: the suite prints it under "CRITICAL TESTS THAT DID NOT
+        RUN", and re-running this file alone gives a real result in about a second.
+        """
+        r = skip_if_rate_limited(
+            requests.post(f"{API}/newsletter",
+                          json={"email": "a@b.com\r\nBcc: attacker@evil.example"},
+                          timeout=TIMEOUT),
+            "newsletter")
         assert r.status_code == 400, f"{r.status_code}: {r.text[:120]}"
         assert db.newsletter_subscriptions.find_one(
             {"email": {"$regex": "evil.example"}}) is None, "stored despite the refusal"

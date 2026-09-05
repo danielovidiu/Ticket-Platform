@@ -14,6 +14,8 @@ It also claimed to rate-limit /api/auth/session — an endpoint deleted in the a
 rewrite.
 """
 import os
+import pathlib
+import re
 import time
 import uuid
 import subprocess
@@ -313,70 +315,87 @@ class TestSeedAdminGating:
 # note on it in test_input_hardening.py. The limiter is per IP, and every xdist worker is
 # the same IP, so a bucket cannot be reserved by grouping alone; what grouping buys is
 # that the two are not in flight at the same moment.
+NEWSLETTER_LIMIT = 10
 NEWSLETTER_WINDOW_SECONDS = 60
 
 
 @pytest.mark.xdist_group("newsletter_budget")
 class TestRateLimitNewsletter:
-    """Limit is 10/min. 11th must return 429.
+    """The newsletter endpoint is rate limited, and the limit is the one we think it is.
 
-    This was flaky, and the two obvious fixes both failed to fix it, which is worth
-    recording. The observed failure was always `[200 x9, 429]`: a real limiter, doing its
-    job, counted from nine because something else had spent a slot in the same sixty
-    seconds. That something was one request in test_input_hardening.py — the limiter keys
-    on client IP, and every xdist worker is the same IP.
+    TWO ASSERTIONS, DELIBERATELY SPLIT, because one of them cannot be made cheaply over
+    HTTP. The limiter keys on client IP and every xdist worker is the same IP, so the
+    bucket is one budget shared by the whole suite — `test_input_hardening.py` posts here
+    too. Counting an EXACT capacity therefore needs exclusive access to a sliding window,
+    and the only way to get that is to drain the bucket and sleep a whole window out. That
+    version worked and cost the suite about 70 seconds on essentially every run, because
+    the collision is the normal case rather than the rare one.
 
-      * Putting both in one xdist_group was not enough. Grouping stops them running at the
-        same moment; it does not stop them running forty seconds apart, and forty seconds
-        apart is still inside the window.
-      * Probing for a "clean window" first, the way TestRateLimitContact does, was not
-        enough either. The window is a sliding deque (server._rate_check), so a probe that
-        returns 200 proves the bucket is not FULL — it cannot tell an empty bucket from
-        one with a single slot spent nine seconds ago, which is exactly the case here.
+    So:
 
-    So it counts optimistically, and only when the count comes out short does it wait a
-    whole window for every timestamp to age out and count again. Doing that wait
-    unconditionally also worked and cost ~97s on every suite run; this pays it only when
-    a neighbour actually collided.
+      * BEHAVIOUR, over HTTP and from whatever state the bucket is in — the endpoint
+        accepts a subscription, then refuses within eleven requests, and says when to come
+        back. None of that depends on how many slots a neighbour already spent.
+      * THE NUMBER, read off the route declaration in server.py. This is what the exact
+        count used to protect and what dropping it would otherwise lose: a limit quietly
+        tightened to 3/min still refuses within eleven, so the behavioural half alone
+        would not notice. Read as text rather than imported, the way the deploy and embed
+        allowlist tests read their config — the value lives in a decorator argument and
+        there is nothing to import.
+
+    What is genuinely given up: proof that the DECLARED number is the number the running
+    server enforces. The two are one `Depends(rate_limit(...))` apart, and no other test
+    in the suite has to buy that connection at a minute a run.
     """
+
+    SERVER_PY = pathlib.Path(__file__).resolve().parent.parent / "server.py"
 
     def _post(self, tag):
         return requests.post(f"{BASE_URL}/api/newsletter",
                              json={"email": f"TEST_rl_nl_{tag}@t.dev", "source": "rl-test"},
                              timeout=15)
 
-    def _count_to_the_limit(self):
-        """Fire up to eleven and report what came back. Leaves the bucket AT its ceiling,
-        which is what makes the retry below cost only the sleep."""
-        codes, retry_after, stamp = [], None, int(time.time() * 1000)
-        for i in range(11):
+    def test_the_endpoint_refuses_once_the_limit_is_reached(self):
+        # One accepted request first, so a server that refused EVERYTHING could not pass
+        # this by going straight to 429. past_rate_limit waits only if the bucket happens
+        # to be full right now, which is the one case where that is unavoidable.
+        first = support.past_rate_limit(lambda: self._post(f"probe_{int(time.time() * 1000)}"))
+        assert first.status_code == 200, (
+            f"the endpoint would not accept anything: {first.status_code} {first.text[:120]}")
+
+        codes, retry_after = [first.status_code], None
+        stamp = int(time.time() * 1000)
+        for i in range(NEWSLETTER_LIMIT):
             r = self._post(f"{stamp}_{i}")
             codes.append(r.status_code)
             if r.status_code == 429:
                 retry_after = r.headers.get("Retry-After")
                 break
-        return codes, retry_after
 
-    def test_newsletter_11th_returns_429(self):
-        # Optimistically first: when nothing else has touched the bucket this is exact and
-        # costs nothing. Emptying the window unconditionally also worked and added ~97s to
-        # the whole suite, which is a lot to pay on every run for a collision that only
-        # happens when a neighbour's single request lands in the same minute.
-        codes, retry_after = self._count_to_the_limit()
+        try:
+            assert 429 in codes, (
+                f"no refusal within {len(codes)} requests — is the limiter still wired "
+                f"to this endpoint? {codes}")
+            assert codes.count(200) <= NEWSLETTER_LIMIT, (
+                f"more than {NEWSLETTER_LIMIT} accepted in one window: {codes}")
+            assert retry_after is not None, "Retry-After header missing on 429"
+        finally:
+            # Cleanup inserted rows (and the confirmation mails they queued). In a finally
+            # so a failure does not leave them behind for the next run to trip over.
+            db.newsletter_subscriptions.delete_many({"email": {"$regex": "^TEST_rl_nl_"}})
+            db.outbox.delete_many({"to": {"$regex": "^TEST_rl_nl_"}})
 
-        if codes[:10].count(200) != 10:
-            # Contaminated: somebody spent a slot inside the window. The run above drove
-            # the limiter to 429, so the bucket is full and one window of sleep empties it
-            # completely — then the count is exact by construction.
-            time.sleep(NEWSLETTER_WINDOW_SECONDS + 1)
-            codes, retry_after = self._count_to_the_limit()
-
-        assert codes[:10].count(200) == 10, f"expected first 10 to be 200, got {codes}"
-        assert codes[-1] == 429, f"expected 11th to be 429, got {codes}"
-        assert retry_after is not None, "Retry-After header missing on 429"
-        # Cleanup inserted rows (and the confirmation mails they queued).
-        db.newsletter_subscriptions.delete_many({"email": {"$regex": "^TEST_rl_nl_"}})
-        db.outbox.delete_many({"to": {"$regex": "^TEST_rl_nl_"}})
+    def test_the_declared_limit_is_still_ten_a_minute(self):
+        """The half the behavioural test cannot see. Tightening this to 3/min would keep
+        every assertion above passing, and would silently start refusing real people."""
+        src = self.SERVER_PY.read_text()
+        m = re.search(r'@api\.post\("/newsletter",[^)]*rate_limit\(\s*"newsletter",\s*'
+                      r'(\d+),\s*(\d+)\s*\)', src)
+        assert m, "the /newsletter route no longer declares a rate_limit dependency"
+        assert (int(m.group(1)), int(m.group(2))) == (NEWSLETTER_LIMIT, NEWSLETTER_WINDOW_SECONDS), (
+            f"/newsletter is now {m.group(1)} per {m.group(2)}s, not "
+            f"{NEWSLETTER_LIMIT} per {NEWSLETTER_WINDOW_SECONDS}s"
+        )
 
 
 class TestRateLimitContact:
@@ -425,8 +444,21 @@ class TestRateLimitAuthLogin:
         assert codes[-1] == 429, f"11th auth/login should be 429: {codes}"
 
 
-# Overrides this module's own group: it must share a worker with the oversell races,
-# which need a clean /reservations bucket that this class deliberately empties.
+# INTENDED to override this module's own group so this shares a worker with the oversell
+# races, which need a clean /reservations bucket that this class deliberately empties.
+#
+# IT DOES NOT. A mark here COMPOSES with the module's `pytestmark` rather than replacing
+# it, so these tests land in a group of their own — `reservations_budget_
+# test_security_hardening` — and not in `reservations_budget` with test_oversell_races.py
+# and test_refactor_regression.py, which declare that name at module level. Confirmed by
+# the group suffix xdist prints beside each test id in `-q --durations` output.
+#
+# Found while cutting the newsletter test's cost, where the identical mistake was made
+# and measured: the two tests it was meant to co-locate raced anyway. Left as-is here
+# rather than fixed in passing, because the only way to actually join the group is at
+# module level, and this module cannot take `reservations_budget` wholesale — the class
+# would have to move to a file that can. The docstring below describes the intent, which
+# is still the right intent.
 @pytest.mark.xdist_group("reservations_budget")
 class TestRateLimitReservations:
     """Limit is 20/min per IP. 21st must return 429 even with a valid user.
