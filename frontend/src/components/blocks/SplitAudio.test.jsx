@@ -404,6 +404,73 @@ describe("split + audio: the words", () => {
   });
 });
 
+describe("split + audio: the words and the player are one element", () => {
+  const TRACK = [{ title: "One", url: "/a.mp3" }];
+
+  const parts = (over) => {
+    const c = draw("split_audio", { heading: "Hi", body: "Words.", tracks: TRACK, ...over });
+    return {
+      words: c.querySelector('[data-testid="split-audio-text"]'),
+      player: c.querySelector('[data-testid="audio-playlist"]'),
+      column: c.querySelector('[data-testid="split-audio-column-inner"]'),
+    };
+  };
+
+  test.each(["top", "middle", "bottom"])(
+    "content_y=%s: the player is inside the text box, not a sibling of it",
+    (content_y) => {
+      // The bug this pins. The player used to sit beside the words in the column, so the
+      // words moved with content_y and the player stayed pinned to the bottom of the
+      // photograph. Measured on a 1440px page before the fix: 159px of dead space between
+      // the last line and the transport when top-aligned, 108px when centred, 32px only
+      // when bottom-aligned — three settings, three different relationships between two
+      // things that are meant to read as one.
+      const { words, player } = parts({ content_y });
+      expect(words.contains(player)).toBe(true);
+    },
+  );
+
+  test("the player is the last thing in the text box", () => {
+    // Under the words, not before them or between the heading and the body.
+    const { words, player } = parts({});
+    expect(words.lastElementChild).toBe(player);
+  });
+
+  test("nothing else is left in the column beside the pair", () => {
+    // The column holds exactly one child now — the group. A second child here would mean
+    // something had been pulled back out to be positioned on its own again.
+    const { column, words } = parts({});
+    expect(column.children).toHaveLength(1);
+    expect(column.firstElementChild).toBe(words);
+  });
+
+  test.each(["left", "center", "right"])(
+    "align=%s applies to the player as well as the words",
+    (align) => {
+      const { words, player } = parts({ align });
+      // One `items-*` on the shared box governs both, rather than the words being aligned
+      // and the player running to the column edge on its own.
+      expect(words.contains(player)).toBe(true);
+      expect(player.className).toContain("w-full");
+    },
+  );
+
+  test("the player still keeps its own separation from the words", () => {
+    // Grouping them must not weld them together: the rule and its margin are what say
+    // "same element, different part".
+    const { player } = parts({});
+    expect(player.className).toContain("mt-8");
+    expect(player.className).toContain("border-t");
+  });
+
+  test("a block with no tracks renders the words and nothing else", () => {
+    const { words, player, column } = parts({ tracks: [] });
+    expect(player).toBeNull();
+    expect(words).not.toBeNull();
+    expect(column.children).toHaveLength(1);
+  });
+});
+
 describe("the clip player", () => {
   const TRACKS = [
     { title: "One", url: "/a.mp3" },

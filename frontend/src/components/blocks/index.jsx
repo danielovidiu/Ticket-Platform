@@ -1045,7 +1045,7 @@ function rowLength(track, measured) {
  * scrubber cannot be dragged past that cap either — a control that let you seek to 1:20 of
  * a clip that stops at 1:30 would be lying about what it will play.
  */
-export function AudioPlaylist({ tracks }) {
+export function AudioPlaylist({ tracks, className = "" }) {
   const list = (Array.isArray(tracks) ? tracks : []).filter((t) => t && t.url);
   const [current, setCurrent] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -1144,7 +1144,7 @@ export function AudioPlaylist({ tracks }) {
   const button = "shrink-0 w-8 h-8 border border-ink/20 hover:border-ink transition-colors flex items-center justify-center disabled:opacity-30 disabled:hover:border-ink/20";
 
   return (
-    <div className="mt-8 border-t border-ink/10" data-testid="audio-playlist">
+    <div className={`mt-8 border-t border-ink/10 ${className}`} data-testid="audio-playlist">
       <audio ref={audioRef} preload="none" onEnded={advance} onTimeUpdate={onTimeUpdate}
              onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
              onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)}
@@ -1412,6 +1412,20 @@ function SplitAudio({ props }) {
           <div className={`h-full flex flex-col ${gap.padClass}`}
                style={{ "--column-pad": `${gap.pad}px` }}
                data-testid="split-audio-column-inner">
+            {/* THE WORDS AND THE PLAYER ARE ONE THING.
+                The player used to be a sibling of this box rather than part of it, with
+                the words taking `flex-1` above it — so the words were placed by
+                `content_y` and the player was pinned to the bottom of the column, which
+                is the height of the photograph beside it. Measured on a 1440px page: a
+                top-aligned block left 159px of dead space between the last line and the
+                transport, a middle-aligned one 108px, and only a bottom-aligned block
+                looked deliberate. Three settings, three different relationships between
+                two things that are supposed to read as one.
+
+                Inside, `content_y` moves the pair together and the 32px the player's own
+                `mt-8` sets is the whole distance between them at every setting. It also
+                puts the player under the same `items-*` as the words, which is what makes
+                a centred or right-aligned block line up — see `w-full` on it below. */}
             <div className={`flex-1 flex flex-col ${contentY(props, "justify-center")} ${textAlign(props)} ${topGutter}`}
                  data-testid="split-audio-text">
               {props.eyebrow && <div className={`font-mono-x text-xs ${upper} tracking-[0.3em] text-ink-4`}>{props.eyebrow}</div>}
@@ -1435,8 +1449,13 @@ function SplitAudio({ props }) {
                   )}
                 </div>
               )}
+              {/* `w-full` because the alignment above sizes children to their content:
+                  without it the rule and the transport would shrink to the width of the
+                  controls and sit as a stub under the heading. Full width of the text
+                  column is the same box the words occupy, which is what "aligned to the
+                  text block" means here — the player is a strip, not a paragraph. */}
+              <AudioPlaylist tracks={props.tracks} className="w-full" />
             </div>
-            <AudioPlaylist tracks={props.tracks} />
           </div>
         </EdgeInset>
         </div>
