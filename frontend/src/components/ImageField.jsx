@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { http } from "../api";
-import { mediaUrl } from "../lib/media";
+import { mediaUrl, mediaUrlProblem } from "../lib/media";
 import { useSingleUpload } from "../lib/useUpload";
 
 const ACCEPT = { prefix: "image/", message: "Choose an image — videos belong in the album below" };
@@ -34,6 +34,10 @@ export default function ImageField({ value, onChange, label = "Image", testId = 
   }, [onChange]);
 
   const upload = useSingleUpload({ send, onDone, accept: ACCEPT });
+
+  // Recomputed per render rather than held in state: it is a pure function of `value`,
+  // and a second copy in state is a second thing that can disagree with the field.
+  const policyProblem = mediaUrlProblem(value);
 
   return (
     <div data-testid={testId}>
@@ -77,13 +81,28 @@ export default function ImageField({ value, onChange, label = "Image", testId = 
         </div>
       )}
 
-      {value && !broken && (
+      {/* Said BEFORE saving, and said specifically.
+          A pasted URL from somewhere the site's img-src does not allow loads fine here in
+          the editor's own browser cache sometimes, and never on the deployed page — so
+          waiting for the <img> to fail reports it late, on the wrong machine, and with
+          the wrong reason ("didn't load", when the URL is fine and the policy is not).
+          This is not a control: the browser's Content-Security-Policy is. It is the
+          explanation the control does not give. */}
+      {policyProblem && (
+        <div className="mt-2 border border-brand px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-brand"
+             data-testid={`${testId}-policy`}>
+          {policyProblem}
+        </div>
+      )}
+
+      {value && !broken && !policyProblem && (
         <img src={mediaUrl(value)} alt="" onError={() => setBroken(true)}
              className="mt-2 h-28 w-auto max-w-full object-cover border border-ink/10" data-testid={`${testId}-preview`} />
       )}
-      {value && broken && (
-        // A pasted URL that doesn't load is worth saying out loud — otherwise it only
-        // shows up as an empty box on the live event page.
+      {value && broken && !policyProblem && (
+        // A URL the policy allows and the server still would not give us — a typo in the
+        // path, a deleted object. Otherwise it only shows up as an empty box on the live
+        // event page.
         <div className="mt-2 border border-brand px-3 py-2 font-mono-x text-[10px] uppercase tracking-[0.2em] text-brand">
           This URL didn't load
         </div>
