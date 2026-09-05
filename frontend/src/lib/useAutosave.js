@@ -58,7 +58,19 @@ export function useAutosave({ getPending, save, intervalMs = AUTOSAVE_INTERVAL_M
 
   const flush = useCallback(async () => {
     const value = getPendingRef.current();
-    if (value === undefined || value === savedRef.current) return;
+    // `== null`, deliberately loose, so BOTH undefined and null mean "nothing pending".
+    //
+    // It tested only for `undefined`, and "Save now" flushes every registered surface
+    // rather than only the dirty ones — so a pane nobody had touched was flushed too and
+    // answered with whatever its ref was initialised to. CMSEditor's page-metadata ref is
+    // `useRef(null)`, so editing a BLOCK and pressing Save now PATCHed the page with a
+    // body of `null`; axios sends no body at all for that, and FastAPI answers 422
+    // `loc: ["body"], msg: "Field required"` — which reached the editor as
+    // "Save failed — body: Field required", a sentence about nothing the person touched.
+    //
+    // Only null and undefined. `0`, `""` and `false` are real values here — the nav size
+    // can be 0 and a nav label can be cleared — so this cannot be a truthiness test.
+    if (value == null || value === savedRef.current) return;
     if (inFlightRef.current) { queuedRef.current = true; return; }
 
     inFlightRef.current = true;
