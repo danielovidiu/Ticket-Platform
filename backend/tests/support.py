@@ -90,6 +90,47 @@ def server_is_up() -> tuple:
     return True, ""
 
 
+def run_against_db(srv, make_coro):
+    """Await one coroutine with `srv.db` bound to an event loop that is alive.
+
+    THE TRAP THIS EXISTS FOR. `server.db` is a Motor client, and Motor binds a client to
+    whichever event loop first uses it. `asyncio.run` creates a loop and CLOSES it on the
+    way out. So the first test in a process to do
+
+        asyncio.run(server.get_vat_rate())
+
+    works, and every later one raises `RuntimeError: Event loop is closed` — from inside
+    the driver, with a traceback that points at asyncio rather than at anything the test
+    touched. Run that file on its own and it passes, because then it is the first.
+
+    That is what made this look like a parallel-ordering flake for as long as it did:
+    the failure depends only on whether some other test in the same worker process got
+    to the shared client first, which changes with how xdist happens to distribute files.
+
+    So the client is created here, inside the loop that will use it, and closed after.
+    `srv.db` is pointed at it for the duration and restored in `finally`, including when
+    the coroutine raises — otherwise one failing test would leave the module pointing at
+    a closed client and take every later test in the process down with it.
+
+        rate = support.run_against_db(server, lambda: server.get_vat_rate())
+    """
+    import asyncio
+
+    from motor.motor_asyncio import AsyncIOMotorClient
+
+    async def scenario():
+        client = AsyncIOMotorClient(srv.MONGO_URL, serverSelectionTimeoutMS=5000)
+        original = srv.db
+        srv.db = client[srv.DB_NAME]
+        try:
+            return await make_coro()
+        finally:
+            srv.db = original
+            client.close()
+
+    return asyncio.run(scenario())
+
+
 def hash_token(token: str) -> str:
     """Mirror of server._hash_token. Duplicated rather than imported so the tests keep
     working if they're ever pointed at a remote server (TICKET_PLATFORM_URL) whose module
@@ -143,6 +184,35 @@ def mint_user(role: str = "user") -> tuple:
 
     _created_user_ids.append(user_id)
     return bearer(token), user_id, email
+
+
+def past_rate_limit(send, attempts=2):
+    """Call `send()` until it is not refused for rate, waiting out a window in between.
+
+    For buckets whose window is SHORT enough to sit through — a minute — where skipping
+    would report "didn't run" for a test that only needed to wait. `skip_if_rate_limited`
+    below is the counterpart for the five-minute auth buckets, which are too long.
+
+    Both exist because every xdist worker is the same IP as far as the server is
+    concerned, so a per-IP limiter is one budget shared by the whole suite, whatever
+    `--dist loadgroup` does about which worker runs what. Grouping stops two tests being
+    in flight at the same moment; it cannot reserve a bucket. That distinction is what
+    made the newsletter limiter look flaky: a real limiter, doing its job, counted from
+    nine because another file had spent a slot in the same sixty seconds.
+
+    `send` is a callable rather than a response so it can be issued again.
+    """
+    import time as _time
+
+    for attempt in range(attempts):
+        r = send()
+        if r.status_code != 429:
+            return r
+        if attempt < attempts - 1:
+            # Retry-After is the server's own answer; the ceiling is so a misconfigured
+            # or missing header cannot park the suite for an hour.
+            _time.sleep(min(int(r.headers.get("Retry-After", 60) or 60), 70) + 1)
+    return r
 
 
 def skip_if_rate_limited(r, what):

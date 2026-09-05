@@ -16,6 +16,7 @@ import uuid
 import pytest
 import requests
 
+import support
 from support import API, db, mint_user, patient, TIMEOUT
 
 # Runs on one worker, in order: the module's own xdist group. This is what
@@ -256,12 +257,23 @@ class TestVatIsOneEditableSetting:
 
     def test_the_same_rate_reaches_ticket_invoices(self, admin_headers, restore_rate):
         """One field, not one per product line: the box office must not keep invoicing at
-        a rate the shop has moved off."""
+        a rate the shop has moved off.
+
+        Reads through `get_vat_rate` on purpose rather than off the document: the claim is
+        that the function the TICKET invoicing path calls (server.py, "the one sitewide
+        rate, shared with the shop") answers with what the shop settings endpoint just
+        wrote. Asserting the stored value instead would pass even if the box office read
+        somewhere else entirely.
+
+        Via support.run_against_db because a bare `asyncio.run(server.get_vat_rate())`
+        closes the loop Motor bound `server.db` to — see the note on that helper. This
+        line spent a while looking like a parallel-ordering flake for exactly that reason.
+        """
         requests.patch(f"{API}/admin/shop/settings", headers=admin_headers,
                        json={"vat_rate": 0.07}, timeout=TIMEOUT)
         import server
-        import asyncio
-        assert asyncio.run(server.get_vat_rate()) == pytest.approx(0.07)
+        rate = support.run_against_db(server, lambda: server.get_vat_rate())
+        assert rate == pytest.approx(0.07)
 
     def test_an_absurd_rate_is_refused(self, admin_headers, restore_rate):
         for bad in (1.5, -0.1):

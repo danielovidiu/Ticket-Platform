@@ -5,6 +5,8 @@ import { http } from "../api";
 import BackLink from "../components/BackLink";
 import { mediaUrl } from "../lib/media";
 import { Lightbox } from "../components/ui/lightbox";
+import ExpandableText from "../components/ExpandableText";
+import { ALBUM_INTRO_LIMIT } from "../lib/albums";
 
 /** An album's own page at /gallery/<slug>. This address used to belong to the single
  * sitewide gallery, which redirected anything that wasn't its configured slug; albums
@@ -57,9 +59,20 @@ export default function AlbumPage() {
         </Link>
       )}
 
-      {album.description && (
-        <p className="mt-4 max-w-2xl text-ink-3 text-sm leading-relaxed" data-testid="album-intro">{album.description}</p>
-      )}
+      {/* 400 characters, then the rest on request. An album description is now a real
+          text field rather than the single-line "Intro" it started as, so it can run to
+          several paragraphs — and several paragraphs sitting between the title and the
+          photographs pushes the photographs, which are the point of the page, off the
+          first screen. Plain text rather than markdown: this field has always rendered
+          literally, and quietly reinterpreting what editors already wrote would change
+          existing albums. `whitespace-pre-wrap` keeps the paragraph breaks they type. */}
+      <ExpandableText
+        text={album.description}
+        limit={ALBUM_INTRO_LIMIT}
+        className="mt-4 max-w-2xl"
+        paraClassName="text-ink-3 text-sm leading-relaxed"
+        testId="album-intro"
+      />
 
       <div className="mt-10 columns-2 sm:columns-3 lg:columns-4 gap-2">
         {album.items.map((g, i) => (

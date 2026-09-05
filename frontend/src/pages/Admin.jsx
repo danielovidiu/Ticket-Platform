@@ -14,6 +14,7 @@ import PosterField from "../components/PosterField";
 import { ShopProducts, ShopOrders, ShopSettings } from "../components/ShopAdmin";
 import { eventStatus, STATUS_CLASS, TICKET_FILTERS, TICKET_STATUS_CLASS } from "../lib/ticketStatus";
 import { dateTime } from "../lib/dates";
+import { ALBUM_INTRO_LIMIT } from "../lib/albums";
 
 const TABS = ["stats", "events", "orders", "transactions", "shop", "shop orders", "shop settings",
               "artists", "discounts", "invites", "users", "gallery", "newsletter"];
@@ -1711,6 +1712,13 @@ function AlbumDetails({ album, events, onSaved, onDeleted }) {
 
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
 
+  // What the editor has typed against what the page shows before collapsing. Counted on
+  // the raw text, which is what they are looking at — the page itself measures the
+  // MARKS-STRIPPED length via `excerpt`, so this is a guide rather than a promise, and it
+  // errs towards telling them there is more hidden than there turns out to be.
+  const used = (draft.description || "").trim().length;
+  const over = used > ALBUM_INTRO_LIMIT;
+
   /** Linking an event offers its date, but only into an empty field — an album whose
    * date has been set by hand keeps it, because the two are allowed to differ: photos
    * from a three-day festival get filed under one day of it, not the day it opened. */
@@ -1784,9 +1792,27 @@ function AlbumDetails({ album, events, onSaved, onDeleted }) {
           />
         </Field>
       </div>
-      <Field label="Intro (optional)" className="mt-3">
-        <input value={draft.description || ""} onChange={(e) => set("description", e.target.value)}
-               className="input-x w-full" data-testid="album-description" />
+      {/* A textarea, not an input. This was labelled "Intro" and was one line high, which
+          told an editor the field was for a sentence — so that is what it got. The album
+          page has room for the note that goes with a body of work, and the field now
+          looks like somewhere to write one. */}
+      <Field label="Description (optional)" className="mt-3">
+        <textarea
+          value={draft.description || ""}
+          onChange={(e) => set("description", e.target.value)}
+          rows={4}
+          placeholder="What this album documents — the night, the room, who played."
+          className="input-x w-full"
+          data-testid="album-description"
+        />
+        <div className="text-[10px] text-ink-4 mt-1" data-testid="album-description-hint">
+          The album page shows the first {ALBUM_INTRO_LIMIT} characters, with a “see more”
+          for the rest.{" "}
+          <span className={over ? "text-brand" : "text-ink-4"}>
+            {used} character{used === 1 ? "" : "s"}
+            {over ? ` · ${used - ALBUM_INTRO_LIMIT} behind “see more”` : ""}
+          </span>
+        </div>
       </Field>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
         {/* An album needs no event. Linking one makes it show on that event's page as
@@ -1888,10 +1914,31 @@ function GalleryAdmin() {
 
   return (
     <div>
+      {/* CREATE FIRST, THEN PICK. Arriving here you are doing one of two things: starting
+          a new album, or working on one that exists. The panel used to open with the
+          picker and tuck "create" underneath it as a footnote — which reads as "choose an
+          album, and by the way you can also make one", when the two are alternatives of
+          equal standing. Naming both, in the order the decision is actually made, is the
+          whole change; nothing about what either one does has moved. */}
       <div className="border border-ink/10 bg-surface p-4 mb-4">
-        <Field label="Album">
-          <select value={albumId} onChange={(e) => setAlbumId(e.target.value)} className="input-x w-full" data-testid="gallery-album-select">
-            {albums.length === 0 && <option value="">No albums yet</option>}
+        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mb-2">
+          Create a new album
+        </div>
+        <NewAlbum onCreated={(a) => { loadAlbums(); setAlbumId(a.album_id); }} label="New album title" />
+
+        {/* A rule with the word in it, rather than a bare hairline: the two halves are
+            alternatives, and "or" is the shortest way to say so. */}
+        <div className="flex items-center gap-3 my-4" aria-hidden="true">
+          <span className="h-px flex-1 bg-ink/10" />
+          <span className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-5">or</span>
+          <span className="h-px flex-1 bg-ink/10" />
+        </div>
+
+        <Field label={albums.length === 0 ? "Edit an existing album" : `Edit an existing album (${albums.length})`}>
+          <select value={albumId} onChange={(e) => setAlbumId(e.target.value)}
+                  disabled={albums.length === 0}
+                  className="input-x w-full disabled:opacity-50" data-testid="gallery-album-select">
+            {albums.length === 0 && <option value="">Nothing to edit yet — create one above</option>}
             {albums.map((a) => (
               <option key={a.album_id} value={a.album_id}>
                 {a.title}{a.event_id ? ` · ${eventTitle(a.event_id) || "linked event"}` : ""} ({a.count})
@@ -1899,14 +1946,13 @@ function GalleryAdmin() {
             ))}
           </select>
         </Field>
-        <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-2">
-          {current?.event_id
-            ? "Shown on its linked event's page, and as a tile on the Gallery page."
-            : "Shown as a tile on the Gallery page. Link it to an event whenever you want to."}
-        </div>
-        <div className="mt-3 pt-3 hairline-t">
-          <NewAlbum onCreated={(a) => { loadAlbums(); setAlbumId(a.album_id); }} label="New album title" />
-        </div>
+        {current && (
+          <div className="font-mono-x text-[10px] uppercase tracking-[0.2em] text-ink-4 mt-2">
+            {current.event_id
+              ? "Shown on its linked event's page, and as a tile on the Gallery page."
+              : "Shown as a tile on the Gallery page. Link it to an event whenever you want to."}
+          </div>
+        )}
       </div>
 
       {/* Both this and the manager below remount when the album changes, so neither
