@@ -1,32 +1,48 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { http } from "../api";
+import { readScanQueue, writeScanQueue } from "../lib/scanQueue";
 
 /**
- * Offline scan queue. Stores QR codes in localStorage while offline and
- * replays them to the backend when the browser is back online.
- *
- * SECURITY NOTE: The queued strings are ticket QR codes, not auth tokens or
- * PII. They are only meaningful when combined with an authenticated staff
- * session (the /api/scan endpoint enforces role=admin|door via httpOnly
- * cookie). Storing them in localStorage on a staff device is intentional
- * and required for the "works even with bad venue signal" requirement.
+ * Replaying the door's queued scans. The storage itself is lib/scanQueue.js — kept apart
+ * because auth.jsx has to clear it on sign-out and must not pull this module, and jsQR
+ * behind it, into the entry chunk.
  */
-const OFFLINE_KEY = "supersanity_scan_queue";
+
+/** HTTP statuses where re-sending the same body can only fail the same way.
+ *
+ * Deliberately NOT every 4xx. A 401 or 403 means the session lapsed — the code is fine and
+ * goes through once someone signs in again — and a 429 is explicitly "try later". What
+ * cannot be retried is the server refusing to read the body at all.
+ *
+ * A ticket being invalid, used or outside its window never arrives here: /api/scan answers
+ * those with 200 and `valid: false`, so they leave the queue as successes, which is right.
+ * This list is only about transport.
+ */
+const PERMANENT_FAILURES = new Set([400, 404, 413, 422]);
 
 export function useOfflineScanQueue() {
   useEffect(() => {
     const flush = async () => {
-      const q = JSON.parse(localStorage.getItem(OFFLINE_KEY) || "[]");
-      if (q.length === 0) return;
+      // Reading applies the TTL, so an expired queue is pruned even on a device that never
+      // scans again — arriving online is enough.
+      const queued = readScanQueue();
+      if (queued.length === 0) { writeScanQueue([]); return; }
       const remaining = [];
-      for (const code of q) {
-        try { await http.post("/scan", { qr_code: code }); }
-        catch (err) {
-          console.warn("Offline flush failed for", code, err?.message || err);
-          remaining.push(code);
+      for (const entry of queued) {
+        try {
+          await http.post("/scan", { qr_code: entry.code });
+        } catch (err) {
+          const status = err?.response?.status;
+          if (PERMANENT_FAILURES.has(status)) {
+            // Re-sending cannot change the answer, so keeping it only means retrying it
+            // on every reconnection for as long as the device lives.
+            console.warn("Dropping unsendable scan", entry.code, status);
+            continue;
+          }
+          remaining.push(entry);
         }
       }
-      localStorage.setItem(OFFLINE_KEY, JSON.stringify(remaining));
+      writeScanQueue(remaining);
     };
     window.addEventListener("online", flush);
     if (navigator.onLine) flush();
@@ -34,9 +50,7 @@ export function useOfflineScanQueue() {
   }, []);
 
   const enqueue = (code) => {
-    const q = JSON.parse(localStorage.getItem(OFFLINE_KEY) || "[]");
-    q.push(code);
-    localStorage.setItem(OFFLINE_KEY, JSON.stringify(q));
+    writeScanQueue([...readScanQueue(), { code, at: Date.now() }]);
   };
 
   return { enqueue };
